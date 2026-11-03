@@ -46,3 +46,39 @@ booking rules; AI only for understanding free text and drafting replies.
   no production switch without explicit owner approval.
 - Schema changes go in `db/schema.sql`; it is written to be re-runnable
   (`IF NOT EXISTS`, and constraints dropped-then-added).
+
+## Running the tests
+```bash
+python -m pytest          # 124 tests; needs the sagarpg-pg container running
+```
+Tests create and drop a throwaway `sagarpg_test` database, so the `sagarpg`
+admin database must exist. The admin DSN is `TEST_ADMIN_DSN`
+(default `postgresql://sagar:devpass@localhost:5432/sagarpg`).
+
+## Architecture
+- The WhatsApp provider is a config value (`CHANNEL_PROVIDER`). Business logic
+  imports `core.channel.adapter.ChannelAdapter`, never a concrete provider.
+  `core/channel/registry.py` selects it. See `docs/ADR-001-whatsapp-channel.md`.
+- The AI provider will follow the same shape: an adapter chosen by config, with
+  prompts stored separately from business logic.
+- Availability, prices, dates and booking rules are deterministic code and SQL.
+  No AI model decides whether a bed is free or what something costs.
+
+## Core module notes
+- `core/db.py` — `Database.transaction()` commits on success and rolls back on
+  error, translating constraint violations into domain errors. `query_one` and
+  `query_all` do NOT commit; never use them for an INSERT or UPDATE.
+- `core/availability.py` — availability is derived from bookings and holds, not
+  from `beds.status`. `beds.status` is an operational label kept in sync by
+  `sync_bed_status`; a stale label can never cause a double-booking.
+- `core/booking.py` — a request is never auto-confirmed. `approve` re-checks the
+  bed inside a `FOR UPDATE` transaction. The `override` flag only bypasses an
+  operational block such as CLEANING or MAINTENANCE; it can never defeat the
+  `bookings_no_overlap` constraint.
+- `core/payments.py` — a screenshot is not proof. Money is unverified until
+  `verify_payment` is called by an authorised person or a trusted gateway, and
+  only verified money counts towards balances and revenue.
+- `core/inbox.py` — dedupe on `messages.wa_message_id` UNIQUE. A duplicate
+  webhook delivery returns None and must skip all further processing.
+- Intervals are half-open, `[start, end)`, so same-day checkout and arrival do
+  not conflict. Money is `Decimal`, never float.
