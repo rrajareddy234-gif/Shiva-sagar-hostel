@@ -58,7 +58,8 @@ def test_daily_report_counts_pending_requests(client, db):
         hour=10, minute=0, second=0, microsecond=0)
     booking.create_request(db, phone="+919000003000", full_name="Report Guest",
                            gender="MALE", bed_id="1NA-B1", check_in_at=start,
-                           check_out_at=start + timedelta(days=2))
+                           check_out_at=start + timedelta(days=2),
+                           food_included=True)
     body = client.get("/jobs/daily-report", headers=AUTH).json()
     assert body["pending_requests"] == 1
 
@@ -114,7 +115,8 @@ def test_upcoming_reports_an_overdue_checkout(client, db):
     request = booking.create_request(db, phone="+919000003222", full_name="Late Guest",
                                      gender="MALE", bed_id="1NA-B1",
                                      check_in_at=start,
-                                     check_out_at=start + timedelta(days=1))
+                                     check_out_at=start + timedelta(days=1),
+                                     food_included=True)
     booking.approve(db, request.booking_id, actor=owner)
     booking.check_in(db, request.booking_id, actor=owner)
     body = client.get("/jobs/upcoming", headers=AUTH).json()
@@ -167,7 +169,8 @@ def test_pending_requests_job(client, db):
     request = booking.create_request(db, phone="+919000003444", full_name="Pending Guest",
                                      gender="MALE", bed_id="1NA-B1",
                                      check_in_at=start,
-                                     check_out_at=start + timedelta(days=1))
+                                     check_out_at=start + timedelta(days=1),
+                                     food_included=True)
     body = client.get("/jobs/pending-requests", headers=AUTH).json()
     assert body["count"] == 1
     assert body["requests"][0]["reference"] == request.reference

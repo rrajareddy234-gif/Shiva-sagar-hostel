@@ -23,6 +23,7 @@ OWNER = "+919999999999"
 def _request(db, bed_id="1NA-B1", phone="+919000000100", **kwargs):
     start = kwargs.pop("start", None) or booking_start()
     end = kwargs.pop("end", None) or (start + timedelta(days=2))
+    kwargs.setdefault("food_included", True)
     return booking.create_request(
         db, phone=phone, full_name="Dummy Guest", gender="MALE",
         bed_id=bed_id, check_in_at=start, check_out_at=end, **kwargs,
@@ -43,22 +44,22 @@ def test_request_creates_requested_booking_and_hold(db):
     assert request.status == "REQUESTED"
     assert request.reference.startswith("SPG-")
     assert request.hold_id is not None
-    # Two nights in a non-AC room at the owner's 200 a night.
-    assert request.charges_total == Decimal("400.00")
+    # Two nights in a non-AC room with food at the owner's 250 a night.
+    assert request.charges_total == Decimal("500.00")
     hold = db.query_one("SELECT status FROM bed_holds WHERE hold_id = %s", (request.hold_id,))
     assert hold["status"] == "ACTIVE"
 
 
-def test_request_without_food_uses_the_dormitory_rate(db):
-    """Non-AC rooms include food, so the no-food rate is the dormitory's."""
+def test_request_without_food_uses_the_no_food_rate(db):
+    """Every room type offers both; a no-food request is priced on its own rate."""
     request = _request(db, bed_id="DORM-M1", food_included=False)
-    assert request.charges_total == Decimal("200.00")
+    assert request.charges_total == Decimal("300.00")
 
 
-def test_asking_for_no_food_in_a_food_room_is_refused(db):
-    """Quoting a guest less than the owner charges would be wrong."""
-    with pytest.raises(NotFound, match="only offered with food"):
-        _request(db, food_included=False)
+def test_omitting_the_food_choice_is_refused(db):
+    """Every room type offers both food options, so the choice cannot be guessed."""
+    with pytest.raises(ValidationError, match="both food options"):
+        _request(db, food_included=None)
 
 
 def test_request_is_never_auto_confirmed(db):
@@ -190,7 +191,8 @@ def test_two_guests_requesting_the_same_bed_at_once(db):
         try:
             request = booking.create_request(
                 db, phone=phone, full_name="Dummy", gender="MALE",
-                bed_id="1NA-B1", check_in_at=start, check_out_at=end)
+                bed_id="1NA-B1", check_in_at=start, check_out_at=end,
+                food_included=True)
             outcome = f"ok:{request.booking_id}"
         except BedUnavailable:
             outcome = "refused"
@@ -315,7 +317,8 @@ def test_in_house_and_overdue(db):
     start = booking_start()
     request = booking.create_request(
         db, phone="+919000000401", full_name="Dummy", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1))
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     booking.check_in(db, request.booking_id, actor=OWNER)
     assert len(booking.in_house(db)) == 1

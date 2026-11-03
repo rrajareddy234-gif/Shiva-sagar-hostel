@@ -129,12 +129,11 @@ answered, because the AI must never invent a price or a bed.
 2. ~~The rates.~~ **Done.** You confirmed these on 2026-11-03 and they are now
    live in the database and quoted to customers:
 
-   | Room | A night | A day |
+   | Room | With food (night / day) | Without food (night / day) |
    |---|---:|---:|
-   | Non-AC, with food | Rs 200 | Rs 250 |
-   | AC, with food | Rs 300 | Rs 350 |
-   | Dormitory mat, no food | Rs 100 | Rs 150 |
-   | Dormitory, with food | Rs 300 | (awaiting the owner) |
+   | AC | Rs 350 / Rs 450 | Rs 300 / Rs 350 |
+   | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
+   | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
 
    Extras: new bedsheet Rs 50, new towel Rs 100, new pillow Rs 50, locker Rs 30
    a month.

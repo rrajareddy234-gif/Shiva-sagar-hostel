@@ -146,7 +146,7 @@ def test_a_guest_cannot_approve_their_own_booking(client, channel, db):
     ctx = tools.ToolContext(db=db, phone="+919000007777", role="CUSTOMER")
     reference = tools.execute(ctx, "create_booking_request", {
         "full_name": "Dummy Guest", "check_in": "2026-12-01",
-        "check_out": "2026-12-02"})["reference"]
+        "check_out": "2026-12-02", "food_included": True})["reference"]
 
     send(client, f"approve booking {reference}", sender=GUEST_SENDS)
     send(client, "YES", sender=GUEST_SENDS)

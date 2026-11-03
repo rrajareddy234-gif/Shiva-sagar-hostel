@@ -116,7 +116,10 @@ The dev database contains leftover rows from earlier manual runs
   owner must send "bed X is ready" before it is bookable again.
 - Router patterns must accept plurals. `_PRICE` originally matched only
   "price", so "what are your prices?" fell through to the AI.
-- The dormitory offers **both** food options (with food Rs 300 a night, and the
-  mat-only Rs 100/150), so an unspecified food choice for `DORM` is refused
-  rather than defaulted. AC and Non-AC offer food only. A test that quotes a
-  dormitory must pass `food_included` explicitly.
+- Every room type offers **both** food options, with a night and a day rate
+  for each (twelve figures). So `food_included` can never be defaulted: any
+  quote or booking request that omits it is refused with "offers both food
+  options". Tests and callers must pass it explicitly.
+- `db/seed.sql` upserts rate plans on the slot (room type, food option, stay
+  mode) rather than skipping existing names, so re-running it applies a rate
+  change instead of leaving a stale price behind.

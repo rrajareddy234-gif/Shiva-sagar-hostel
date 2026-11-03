@@ -17,22 +17,22 @@ def test_daily_rate_for_three_nights(db, tomorrow):
     quote = pricing.quote(db, room_type="NON_AC", food_included=True,
                           start=tomorrow, end=tomorrow + timedelta(days=3))
     assert quote.units == 3
-    assert quote.unit_rate == Decimal("200.00")
-    assert quote.charges_total == Decimal("600.00")
+    assert quote.unit_rate == Decimal("250.00")
+    assert quote.charges_total == Decimal("750.00")
 
 
 def test_partial_day_rounds_up(db, tomorrow):
     quote = pricing.quote(db, room_type="NON_AC", food_included=True,
                           start=tomorrow, end=tomorrow + timedelta(days=1, hours=2))
     assert quote.units == 2
-    assert quote.charges_total == Decimal("400.00")
+    assert quote.charges_total == Decimal("500.00")
 
 
 def test_less_than_a_day_is_charged_one_day(db, tomorrow):
     quote = pricing.quote(db, room_type="NON_AC", food_included=True,
                           start=tomorrow, end=tomorrow + timedelta(hours=3))
     assert quote.units == 1
-    assert quote.charges_total == Decimal("200.00")
+    assert quote.charges_total == Decimal("250.00")
 
 
 def test_ac_rate_differs_from_non_ac(db, tomorrow):
@@ -40,8 +40,8 @@ def test_ac_rate_differs_from_non_ac(db, tomorrow):
                        start=tomorrow, end=tomorrow + timedelta(days=1))
     non_ac = pricing.quote(db, room_type="NON_AC", food_included=True,
                            start=tomorrow, end=tomorrow + timedelta(days=1))
-    assert ac.unit_rate == Decimal("300.00")
-    assert non_ac.unit_rate == Decimal("200.00")
+    assert ac.unit_rate == Decimal("350.00")
+    assert non_ac.unit_rate == Decimal("250.00")
     assert ac.charges_total > non_ac.charges_total
 
 
@@ -51,34 +51,34 @@ def test_a_day_rate_costs_more_than_a_night_rate(db, tomorrow):
                           start=tomorrow, end=tomorrow + timedelta(days=1))
     day = pricing.quote(db, room_type="NON_AC", food_included=True, stay_mode="DAY",
                         start=tomorrow, end=tomorrow + timedelta(days=1))
-    assert night.unit_rate == Decimal("200.00")
-    assert day.unit_rate == Decimal("250.00")
+    assert night.unit_rate == Decimal("250.00")
+    assert day.unit_rate == Decimal("350.00")
 
 
 def test_day_rate_for_ac(db, tomorrow):
     quote = pricing.quote(db, room_type="AC", food_included=True, stay_mode="DAY",
                           start=tomorrow, end=tomorrow + timedelta(days=1))
-    assert quote.unit_rate == Decimal("350.00")
+    assert quote.unit_rate == Decimal("450.00")
 
 
 def test_night_rate_is_the_default(db, tomorrow):
     """A guest asking for 'a room' means overnight unless they say otherwise."""
     default = pricing.quote(db, room_type="AC", food_included=True,
                             start=tomorrow, end=tomorrow + timedelta(days=1))
-    assert default.unit_rate == Decimal("300.00")
+    assert default.unit_rate == Decimal("350.00")
     assert default.breakdown["stay_mode"] == "NIGHT"
 
 
 def test_dormitory_mat_rate(db, tomorrow):
     quote = pricing.quote(db, room_type="DORM", food_included=False,
                           start=tomorrow, end=tomorrow + timedelta(days=2))
-    assert quote.charges_total == Decimal("200.00")
+    assert quote.charges_total == Decimal("300.00")
 
 
 def test_dormitory_day_rate(db, tomorrow):
     quote = pricing.quote(db, room_type="DORM", food_included=False, stay_mode="DAY",
                           start=tomorrow, end=tomorrow + timedelta(days=1))
-    assert quote.unit_rate == Decimal("150.00")
+    assert quote.unit_rate == Decimal("200.00")
 
 
 def test_hourly_billing(db, tomorrow):
@@ -101,7 +101,7 @@ def test_extras_added(db, tomorrow):
     quote = pricing.quote(db, room_type="NON_AC", food_included=True,
                           start=tomorrow, end=tomorrow + timedelta(days=1),
                           extras=100)
-    assert quote.charges_total == Decimal("300.00")
+    assert quote.charges_total == Decimal("350.00")
     assert quote.extras == Decimal("100.00")
 
 
@@ -109,7 +109,7 @@ def test_discount_applied(db, tomorrow):
     quote = pricing.quote(db, room_type="NON_AC", food_included=True,
                           start=tomorrow, end=tomorrow + timedelta(days=1),
                           discount=50)
-    assert quote.charges_total == Decimal("150.00")
+    assert quote.charges_total == Decimal("200.00")
     assert quote.discount == Decimal("50.00")
 
 
@@ -163,7 +163,7 @@ def test_setting_a_night_rate_leaves_the_day_rate_alone(db, tomorrow):
     day = pricing.quote(db, room_type="NON_AC", food_included=True, stay_mode="DAY",
                         start=tomorrow, end=tomorrow + timedelta(days=1))
     assert night.unit_rate == Decimal("225.00")
-    assert day.unit_rate == Decimal("250.00")
+    assert day.unit_rate == Decimal("350.00")
 
 
 def test_no_day_rate_refuses_to_quote_that_mode(db, tomorrow):

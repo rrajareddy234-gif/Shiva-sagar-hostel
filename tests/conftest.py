@@ -85,13 +85,18 @@ def seeded(db: Database) -> Database:
         )
         cur.execute(
             "INSERT INTO rate_plans (name, room_type, food_included, stay_mode, daily_rate, hourly_rate, min_hours) VALUES "
-            "('Non-AC with food per night','NON_AC',true,'NIGHT',200,20,1), "
-            "('Non-AC with food per day','NON_AC',true,'DAY',250,20,1), "
-            "('AC with food per night','AC',true,'NIGHT',300,30,1), "
-            "('AC with food per day','AC',true,'DAY',350,30,1), "
-            "('Dormitory mat per night','DORM',false,'NIGHT',100,10,1), "
-            "('Dormitory mat per day','DORM',false,'DAY',150,10,1), "
-            "('Dormitory with food per night','DORM',true,'NIGHT',300,30,1)"
+            "('Non-AC with food per night','NON_AC',true,'NIGHT',250,20,1), "
+            "('Non-AC with food per day','NON_AC',true,'DAY',350,20,1), "
+            "('Non-AC without food per night','NON_AC',false,'NIGHT',200,20,1), "
+            "('Non-AC without food per day','NON_AC',false,'DAY',250,20,1), "
+            "('AC with food per night','AC',true,'NIGHT',350,30,1), "
+            "('AC with food per day','AC',true,'DAY',450,30,1), "
+            "('AC without food per night','AC',false,'NIGHT',300,30,1), "
+            "('AC without food per day','AC',false,'DAY',350,30,1), "
+            "('Dormitory with food per night','DORM',true,'NIGHT',200,10,1), "
+            "('Dormitory with food per day','DORM',true,'DAY',300,10,1), "
+            "('Dormitory mat per night','DORM',false,'NIGHT',150,10,1), "
+            "('Dormitory mat per day','DORM',false,'DAY',200,10,1)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "

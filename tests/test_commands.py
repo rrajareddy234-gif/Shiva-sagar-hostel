@@ -30,7 +30,8 @@ def _request(db, phone=CUSTOMER, bed="1NA-B1"):
     start = _start()
     return booking.create_request(
         db, phone=phone, full_name="Dummy Guest", gender="MALE", bed_id=bed,
-        check_in_at=start, check_out_at=start + timedelta(days=2))
+        check_in_at=start, check_out_at=start + timedelta(days=2),
+        food_included=True)
 
 
 # --- parsing ---------------------------------------------------------------

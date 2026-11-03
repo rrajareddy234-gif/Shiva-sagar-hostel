@@ -142,11 +142,17 @@ Do these in order. Do not skip the test in step 5.
 1. **Confirm the room list.** Read `db/seed.sql`. Are the rooms and bed counts
    right? Is there really no room 5? Are there really 20 mat spaces? Edit the file
    before applying it if not.
-2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner on 2026-11-03 and
-   live in `db/seed.sql`: non-AC with food Rs 200 a night / Rs 250 a day, AC with
-   food Rs 300 / Rs 350, dormitory mat Rs 100 / Rs 150, dormitory with food
-   Rs 300 a night, plus extras (bedsheet
-   Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month).
+2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner and live in
+   `db/seed.sql`. Every room type is offered with and without food, and each has
+   a night and a day rate:
+
+   | Room | With food (night / day) | Without food (night / day) |
+   |---|---:|---:|
+   | AC | Rs 350 / Rs 450 | Rs 300 / Rs 350 |
+   | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
+   | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
+
+   Plus extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month.
 3. **Set the owner number.** `OWNER_PHONE` in `.env`, in full international form,
    for example `+919876543210`. Owner commands only work from this number.
 4. **Set the spending limits.** In your AI provider's console, set a monthly

@@ -127,9 +127,10 @@ I will not claim these passed, because they did not run:
   spoken to your WhatsApp number.
 - **Your room list is still unconfirmed.** The rooms in `db/seed.sql` are the
   historic list, flagged unconfirmed; they must be checked before a bed is
-  promised. The **rates are confirmed** (2026-11-03) and live: non-AC with food
-  Rs 200 a night / Rs 250 a day, AC with food Rs 300 / Rs 350, dormitory mat
-  Rs 100 / Rs 150, dormitory with food Rs 300 a night, plus extras.
+  promised. The **rates are confirmed** and live. Every room type is offered
+  with and without food, each with a night and a day rate: AC Rs 350/450 with
+  food and Rs 300/350 without; Non-AC Rs 250/350 and Rs 200/250; dormitory
+  Rs 200/300 and Rs 150/200. Plus extras.
 - **Automatic follow-up is switched off**, deliberately. Following up more than
   24 hours after a guest writes needs a Meta-approved message template, and none
   exists. Until one does, follow-up is manual.

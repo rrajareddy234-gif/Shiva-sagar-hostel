@@ -113,7 +113,8 @@ def test_approval_requires_an_actor(db):
     start = booking_start()
     request = booking.create_request(
         db, phone=CUSTOMER, full_name="Dummy", gender="MALE", bed_id="1NA-B1",
-        check_in_at=start, check_out_at=start + timedelta(days=1))
+        check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     row = booking.get_booking(db, request.booking_id)
     assert row["approved_by"] == OWNER
@@ -238,7 +239,8 @@ def test_audit_log_captures_who_did_what(db):
     start = booking_start()
     request = booking.create_request(
         db, phone=CUSTOMER, full_name="Dummy", gender="MALE", bed_id="1NA-B1",
-        check_in_at=start, check_out_at=start + timedelta(days=1))
+        check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     booking.reject(db, request.booking_id, actor=OWNER, reason="not suitable")
     entries = db.query_all(
         "SELECT actor, action FROM audit_log WHERE entity_id = %s ORDER BY id",

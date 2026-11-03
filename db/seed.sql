@@ -41,25 +41,36 @@ FROM generate_series(1, 20) AS g(n)
 ON CONFLICT (bed_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Rates confirmed by the owner on 2026-11-03.
+-- Rates confirmed by the owner. Every room type is offered both with and
+-- without food, and the owner quotes a night rate and a day rate for each, so
+-- there are twelve figures in all.
 --
--- The owner quotes a night rate and a day rate for the same room. Both are
--- stored and both are shown to the customer. Non-AC and AC rooms include food;
--- the dormitory does not, which the owner stated explicitly.
+-- This is an upsert keyed on the slot (room type, food option, stay mode):
+-- re-running updates the price for a slot rather than leaving a stale rate
+-- behind, which is what a rate change needs.
 -- ---------------------------------------------------------------------------
 INSERT INTO rate_plans (name, room_type, food_included, stay_mode, daily_rate, hourly_rate, notes)
 SELECT v.name, v.room_type, v.food_included, v.stay_mode, v.daily_rate, v.hourly_rate,
-       'confirmed by the owner 2026-11-03'
+       'confirmed by the owner'
 FROM (VALUES
-    ('Non-AC with food per night', 'NON_AC', true,  'NIGHT', 200.00, NULL::numeric),
-    ('Non-AC with food per day',   'NON_AC', true,  'DAY',   250.00, NULL::numeric),
-    ('AC with food per night',     'AC',     true,  'NIGHT', 300.00, NULL::numeric),
-    ('AC with food per day',       'AC',     true,  'DAY',   350.00, NULL::numeric),
-    ('Dormitory mat per night',    'DORM',   false, 'NIGHT', 100.00, NULL::numeric),
-    ('Dormitory mat per day',      'DORM',   false, 'DAY',   150.00, NULL::numeric),
-    ('Dormitory with food per night', 'DORM', true, 'NIGHT', 300.00, NULL::numeric)
+    ('AC with food per night',       'AC',     true,  'NIGHT', 350.00, NULL::numeric),
+    ('AC with food per day',         'AC',     true,  'DAY',   450.00, NULL::numeric),
+    ('AC without food per night',    'AC',     false, 'NIGHT', 300.00, NULL::numeric),
+    ('AC without food per day',      'AC',     false, 'DAY',   350.00, NULL::numeric),
+    ('Non-AC with food per night',   'NON_AC', true,  'NIGHT', 250.00, NULL::numeric),
+    ('Non-AC with food per day',     'NON_AC', true,  'DAY',   350.00, NULL::numeric),
+    ('Non-AC without food per night','NON_AC', false, 'NIGHT', 200.00, NULL::numeric),
+    ('Non-AC without food per day',  'NON_AC', false, 'DAY',   250.00, NULL::numeric),
+    ('Dormitory with food per night','DORM',   true,  'NIGHT', 200.00, NULL::numeric),
+    ('Dormitory with food per day',  'DORM',   true,  'DAY',   300.00, NULL::numeric),
+    ('Dormitory mat per night',      'DORM',   false, 'NIGHT', 150.00, NULL::numeric),
+    ('Dormitory mat per day',        'DORM',   false, 'DAY',   200.00, NULL::numeric)
 ) AS v(name, room_type, food_included, stay_mode, daily_rate, hourly_rate)
-WHERE NOT EXISTS (SELECT 1 FROM rate_plans rp WHERE rp.name = v.name);
+ON CONFLICT (room_type, food_included, stay_mode) WHERE active
+DO UPDATE SET name = EXCLUDED.name,
+              daily_rate = EXCLUDED.daily_rate,
+              hourly_rate = EXCLUDED.hourly_rate,
+              notes = EXCLUDED.notes;
 
 -- ---------------------------------------------------------------------------
 -- Extras the owner sells or rents. Confirmed 2026-11-03.
@@ -79,7 +90,7 @@ INSERT INTO settings (key, value) VALUES
     ('rates_confirmed', 'true'::jsonb),
     ('rates_confirmed_on', '"2026-11-03"'::jsonb),
     ('rooms_confirmed', 'false'::jsonb),
-    ('configuration_source', '"rates confirmed by the owner 2026-11-03; rooms still historic"'::jsonb)
-ON CONFLICT (key) DO NOTHING;
+    ('configuration_source', '"rates confirmed by the owner; rooms still historic"'::jsonb)
+ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 COMMIT;

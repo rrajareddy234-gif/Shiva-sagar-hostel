@@ -179,7 +179,8 @@ def test_owner_pending_requests(db):
     start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
     booking.create_request(
         db, phone="+919000000801", full_name="Waiting Guest", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1))
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     reply = router.owner_answer(db, "show pending booking requests")
     assert "Waiting Guest" in reply.text
     assert "awaiting your approval" in reply.text
@@ -222,7 +223,7 @@ def test_owner_overdue_checkouts(db):
     request = booking.create_request(
         db, phone="+919000000802", full_name="Overdue Guest", gender="MALE",
         bed_id="1NA-B1", check_in_at=start,
-        check_out_at=start + timedelta(days=1))
+        check_out_at=start + timedelta(days=1), food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     booking.check_in(db, request.booking_id, actor=OWNER)
     reply = router.owner_answer(db, "any overdue checkouts?")
@@ -233,7 +234,8 @@ def test_owner_in_house_list(db):
     start = _now() - timedelta(hours=2)
     request = booking.create_request(
         db, phone="+919000000803", full_name="Staying Guest", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3))
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3),
+        food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     booking.check_in(db, request.booking_id, actor=OWNER)
     reply = router.owner_answer(db, "show all occupied beds")
