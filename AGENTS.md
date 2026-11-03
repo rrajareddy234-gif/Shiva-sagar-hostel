@@ -26,12 +26,13 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## GitHub
 - Authenticated as `rrajareddy234-gif`.
-- The available token is READ-ONLY: pushes return
-  `403 Permission ... denied` and the contents API returns
+- The available token is READ-ONLY. Re-verified 2026-11-03: creating a ref
+  returns `403`. Pushes fail and the contents API returns
   `403 Resource not accessible by integration`. Commits must stay local until
   write access is granted or the owner supplies a `repo`-scoped PAT.
-- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (was empty; now the local
-  repo has commits but they are not yet pushed).
+- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (exists, public, still
+  empty — `git/trees/HEAD` returns 409 "Git Repository is empty"). The local
+  repo has commits; they are not pushed.
 
 ## Not accessible
 - No n8n instance, no workflow exports, no n8n credentials anywhere.
@@ -49,11 +50,27 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## Running the tests
 ```bash
-python -m pytest          # 124 tests; needs the sagarpg-pg container running
+python -m pytest          # 345 tests; needs the sagarpg-pg container running
 ```
 Tests create and drop a throwaway `sagarpg_test` database, so the `sagarpg`
 admin database must exist. The admin DSN is `TEST_ADMIN_DSN`
 (default `postgresql://sagar:devpass@localhost:5432/sagarpg`).
+
+If a test fails with a missing column, the dev database was built from an older
+schema. `db/schema.sql` is idempotent, so re-apply it:
+```bash
+sudo docker exec -i sagarpg-pg psql -U sagar -d sagarpg -q < db/schema.sql
+```
+This happened once already (`bookings.charges_total` was missing, so
+`/jobs/daily-report` returned 500).
+
+To exercise the real server rather than TestClient:
+```bash
+DATABASE_URL=postgresql://sagar:devpass@localhost:5432/sagarpg \
+  python -m uvicorn api.main:app --port 8077
+```
+The dev database contains leftover rows from earlier manual runs
+(`SPG-T-0001`..`SPG-T-0005`). They are dummy records, not real data.
 
 ## Architecture
 - The WhatsApp provider is a config value (`CHANNEL_PROVIDER`). Business logic
@@ -80,5 +97,22 @@ admin database must exist. The admin DSN is `TEST_ADMIN_DSN`
   only verified money counts towards balances and revenue.
 - `core/inbox.py` — dedupe on `messages.wa_message_id` UNIQUE. A duplicate
   webhook delivery returns None and must skip all further processing.
+- `core/tools.py` — the tools the AI may call. Read tools answer from SQL; the
+  one write tool creates a booking *request* and cannot confirm anything. Owner
+  tools are filtered out of `specs_for(role)` and refused again in `execute`.
+- `core/handler.py` — order is owner command, then deterministic router, then
+  the AI with tools. The AI loop is capped at `MAX_TOOL_ROUNDS`; a model that
+  keeps calling tools falls back instead of spinning.
 - Intervals are half-open, `[start, end)`, so same-day checkout and arrival do
   not conflict. Money is `Decimal`, never float.
+
+## Test-writing notes
+- Webhook tests must give each message a **unique** id. Reusing one is correctly
+  treated as a duplicate delivery and silently dropped, which looks like a bug
+  and is not.
+- The app normalises phone numbers to a leading `+`. Meta delivers them without
+  one, so a test that sends `919...` must assert on `+919...`.
+- After checkout a bed is `CLEANING`, not `AVAILABLE`. That is deliberate; the
+  owner must send "bed X is ready" before it is bookable again.
+- Router patterns must accept plurals. `_PRICE` originally matched only
+  "price", so "what are your prices?" fell through to the AI.

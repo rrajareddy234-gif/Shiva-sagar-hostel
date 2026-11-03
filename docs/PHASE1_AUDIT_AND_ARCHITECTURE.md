@@ -52,6 +52,8 @@ I will keep every change as a local commit in the meantime, so nothing is lost.
 
 `https://macherla-stay.preview.emergentagent.com` responds, but it is **not a usable running application**. It serves a fixed 2.3 KB "Loading..." HTML shell that embeds an iframe pointing at `https://app.emergent.sh/loading-preview?host=...`. Every path — `/`, `/docs`, `/openapi.json`, `/api/rooms` — returns that same shell or 404. There is no reachable API, no database, and no source code behind it. The Emergent preview is effectively dead; only the shell remains.
 
+Re-checked 2026-11-03: unchanged. `/` returns the loading shell, `/api/health` returns 404. **Nothing to reuse.**
+
 ### 1.4 n8n (NOT accessible)
 
 There is no n8n instance reachable from this environment:
@@ -161,25 +163,39 @@ WhatsApp (Meta Cloud API)
 
 ## 4. Estimated monthly operating cost (INR)
 
-Rates checked 2026-11-03. WhatsApp India per-message: utility/auth ≈ ₹0.115–0.145, marketing ≈ ₹0.86–1.09, inbound free, service replies inside the 24-hour window free. Gemini 2.5 Flash ≈ $0.30/M input, $2.50/M output; Flash-Lite ≈ $0.10/$0.40. n8n Cloud Starter €20/mo. VPS ≈ €3.79/mo (₹350). USD→INR ≈ ₹92, EUR→INR ≈ ₹100 (assumed).
+> **Updated 2026-11-03.** The figures below were revised once the WhatsApp
+> pricing change was confirmed: from 1 October 2026 free-form **service replies
+> are billable** at ₹0.115 after the first 1,000 per number per month. The
+> earlier version of this table assumed those replies were free, which
+> understated the total. `docs/COST_REPORT.md` is the detailed version and is
+> now the authoritative one.
 
-| Item | Low (≈100 enquiries/mo) | Medium (≈500/mo) | High (≈2,000/mo) |
+Rates checked 2026-11-03. WhatsApp India per-message: service/utility/auth ≈ ₹0.115 (first 1,000/month free), marketing ≈ ₹0.8631, inbound free. Gemini 2.5 Flash ≈ $0.30/M input, $2.50/M output; Flash-Lite ≈ $0.10/$0.40. n8n Cloud Starter €20/mo. VPS ≈ €4.5/mo. USD→INR ≈ ₹88.
+
+| Item | Low (≈300 msgs/mo) | Medium (≈1,500/mo) | High (≈5,000/mo) |
 |---|---:|---:|---:|
-| VPS (4 GB) | ₹350 | ₹350 | ₹600 (larger box) |
-| Offsite backup (Supabase free / object storage) | ₹0 | ₹0 | ₹100 |
-| AI (Gemini Flash, ~60% of msgs need a model) | ₹15 | ₹60 | ₹250 |
+| VPS (4 GB) + domain | ₹470 | ₹520 | ₹620 |
+| Offsite backup | ₹0 | ₹0 | ₹0–100 |
+| AI (Gemini Flash; ~30% of messages reach a model) | ₹6 | ₹29 | ₹98 |
 | WhatsApp inbound | ₹0 | ₹0 | ₹0 |
-| WhatsApp service replies (in 24h window) | ₹0 | ₹0 | ₹0–120 |
-| WhatsApp utility templates (owner alerts, confirmations) | ₹25 | ₹60 | ₹200 |
-| Domain (amortised, optional) | ₹40 | ₹40 | ₹40 |
+| WhatsApp service replies (billable after 1,000) | ₹0 | ₹115 | ₹633 |
+| Domain (amortised) | included above | included above | included above |
 | n8n (self-hosted Community Edition) | ₹0 | ₹0 | ₹0 |
-| **Total** | **≈ ₹430** | **≈ ₹510** | **≈ ₹1,310** |
+| **Total** | **≈ ₹476** | **≈ ₹664** | **≈ ₹1,351** |
 
-**Free:** inbound WhatsApp, replies inside the service window, n8n Community Edition, the Postgres software, Gemini free tier for light use, GitHub.
+All three scenarios are inside the ₹500–₹2,000 target, though the low case sits
+just under it. WhatsApp message volume, not AI, is the cost to watch: it grows in
+a straight line with the number of messages exchanged.
 
-**Could grow:** marketing/broadcast templates (₹0.86–1.09 each — avoid unsolicited sends), and from **1 October 2026** service replies are charged ₹0.115 after the first 1,000 per number per month. Both are comfortably inside budget at your volume.
+**Free:** inbound WhatsApp, the first 1,000 service messages each month, n8n
+Community Edition, the Postgres software, the Gemini free tier for light use
+(subject to the training-data caveat in `docs/COST_REPORT.md`), GitHub.
 
-**One-time:** ₹0 for software. Optional domain ≈ ₹800/year. A VPS may need a card on file.
+**Could grow:** marketing templates at ₹0.8631 each — seven times the service
+rate. The system sends none. Service replies grow with conversation length; a
+clear first reply is the cheapest control.
+
+**One-time:** ₹0 for software. Domain ≈ ₹800/year. A VPS may need a card on file.
 
 These are **estimates**, not charges. No purchase will be made without your explicit approval.
 
@@ -201,9 +217,12 @@ These are **estimates**, not charges. No purchase will be made without your expl
 
 ---
 
-## 6. First actual development task (starting now, pending your go-ahead)
+## 6. First actual development task — DONE
 
 **Build and test the deterministic core: database schema + availability + booking + pricing engines, with a full pytest suite running against real PostgreSQL.**
+
+This is complete. The rest of this section is kept as the record of what was
+planned; the results are in `docs/TEST_PLAN.md` and the final report.
 
 Why this first: it is the highest-risk, highest-value part (a double-booking or a wrong price destroys trust), it needs no external accounts, and everything else — WhatsApp, n8n, AI — is just a caller of this core. When it is green, integration becomes assembly rather than guesswork.
 

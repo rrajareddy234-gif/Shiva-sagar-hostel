@@ -14,16 +14,20 @@ replies, so booking accuracy never depends on a model.
 
 ## Status
 
-Phases 1 to 4 are built and tested. Phase 5 (deployment preparation) is next.
-Nothing is live: no real customer messages are sent, no production data is used,
-and no paid service has been subscribed to.
+Phases 1 to 5 are built and tested. Nothing is live: no real customer messages
+are sent, no production data is used, and no paid service has been subscribed to.
+
+**Start with `docs/HANDOVER.md`** — it summarises what was built, what was
+reused, what was tested, what is still missing, and what is needed from the owner.
 
 - **Phase 1 audit** — `docs/PHASE1_AUDIT_AND_ARCHITECTURE.md`
 - **Phase 2 architecture and costs** — same document, plus
   `docs/ADR-001-whatsapp-channel.md` for the WhatsApp channel decision
-- **Phases 3 and 4 build and test** — 303 tests pass against a real PostgreSQL.
-  See `docs/TEST_PLAN.md` for what is covered.
-- **Phase 5** — `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/COST_REPORT.md`
+- **Phases 3 and 4 build and test** — 345 tests pass against a real PostgreSQL.
+  See `docs/TEST_PLAN.md` for what is covered and what is not.
+- **Phase 5 deployment preparation** — `docs/DEPLOYMENT.md`,
+  `docs/OPERATIONS.md`, `docs/COST_REPORT.md`, `deploy/`
+- **Handover** — `docs/HANDOVER.md`
 
 ## Quick start
 
