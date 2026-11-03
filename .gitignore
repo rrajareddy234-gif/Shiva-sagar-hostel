@@ -28,3 +28,6 @@ deploy/.env
 .vscode/
 .idea/
 .DS_Store
+
+# Local push token; never commit
+.github-push-token
