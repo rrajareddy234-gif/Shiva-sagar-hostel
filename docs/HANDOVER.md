@@ -12,7 +12,7 @@ It does five things:
 1. **Answers guests on WhatsApp.** Common questions — prices, availability,
    facilities, greeting — are answered by plain code and SQL, with no AI call at
    all. Only free text the code does not recognise reaches an AI model.
-2. **Keeps track of every bed.** All 63 beds (43 cots in six rooms plus 20
+2. **Keeps track of every bed.** All 68 beds (48 cots in seven rooms plus 20
    dormitory mat spaces) are individual records with their own status. A bed is
    never promised twice: the database itself refuses overlapping bookings.
 3. **Takes booking requests, never confirmations.** The system can create a

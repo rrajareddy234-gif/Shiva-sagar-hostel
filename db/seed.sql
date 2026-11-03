@@ -18,6 +18,7 @@ INSERT INTO rooms (room_id, room_type, total_beds, notes) VALUES
     ('2AC',  'AC',      7, 'historic configuration, unconfirmed'),
     ('3AC',  'AC',     10, 'historic configuration, unconfirmed'),
     ('4NA',  'NON_AC',  5, 'historic configuration, unconfirmed'),
+    ('5NA',  'NON_AC',  5, 'confirmed by the owner'),
     ('6NA',  'NON_AC', 12, 'historic configuration, unconfirmed'),
     ('7NA',  'NON_AC',  4, 'historic configuration, unconfirmed'),
     ('DORM', 'DORM',   20, 'dormitory mat spaces, no cots; unconfirmed')

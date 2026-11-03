@@ -140,8 +140,9 @@ docker compose -f deploy/docker-compose.yml exec postgres \
 Do these in order. Do not skip the test in step 5.
 
 1. **Confirm the room list.** Read `db/seed.sql`. Are the rooms and bed counts
-   right? Is there really no room 5? Are there really 20 mat spaces? Edit the file
-   before applying it if not.
+   right? Room 5NA (Non-AC, 5 beds) was added at the owner's word; the rest are
+   still the historic list. Are there really 20 mat spaces? Edit the file before
+   applying it if not.
 2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner and live in
    `db/seed.sql`. Every room type is offered with and without food, and each has
    a night and a day rate:
