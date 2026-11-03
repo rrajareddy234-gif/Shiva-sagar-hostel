@@ -1,0 +1,246 @@
+"""Deterministic router tests.
+
+The router must answer common questions from the database, with no AI call, and
+hand genuinely free text to the AI layer.
+"""
+
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from decimal import Decimal
+
+import pytest
+
+from core import booking, payments, router
+from tests.conftest import IST
+
+pytestmark = pytest.mark.usefixtures("seeded")
+
+OWNER = "+919999999999"
+
+
+def _now():
+    return datetime.now(IST)
+
+
+def _confirmed(db, bed_id="1NA-B1", phone="+919000000800", food=True):
+    start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    request = booking.create_request(
+        db, phone=phone, full_name="Dummy Guest", gender="MALE", bed_id=bed_id,
+        check_in_at=start, check_out_at=start + timedelta(days=2), food_included=food)
+    booking.approve(db, request.booking_id, actor=OWNER)
+    return request
+
+
+# --- classification --------------------------------------------------------
+
+@pytest.mark.parametrize("text,intent", [
+    ("hi", "greeting"),
+    ("Hello", "greeting"),
+    ("what is the price?", "price"),
+    ("how much for one night", "price"),
+    ("do you have any rooms available?", "availability"),
+    ("any beds free?", "availability"),
+    ("is the hostel full?", "availability"),
+    ("do you provide food?", "facilities"),
+    ("is wifi available", "facilities"),
+    ("thanks", "thanks"),
+    ("", "empty"),
+    ("my dog's name is Bruno", "unknown"),
+])
+def test_classify(text, intent):
+    assert router.classify(text) == intent
+
+
+# --- customer answers ------------------------------------------------------
+
+def test_greeting_returns_help(db):
+    reply = router.route(db, "hi")
+    assert reply.handled is True
+    assert "availability" in reply.text.lower() or "Sagar PG" in reply.text
+
+
+def test_price_quotes_the_owners_rates(db):
+    reply = router.route(db, "what is the price?")
+    assert reply.handled is True
+    assert "350" in reply.text          # non-AC with food
+    assert "450" in reply.text          # AC with food
+    assert "200" in reply.text          # dormitory
+
+
+def test_price_does_not_invent_a_figure_when_no_plan_exists(db):
+    db.execute("UPDATE rate_plans SET active = false")
+    reply = router.route(db, "what is the price?")
+    assert reply.handled is True
+    assert "ask the owner" in reply.text.lower()
+    assert "Rs" not in reply.text
+
+
+def test_availability_reports_real_counts(db):
+    reply = router.route(db, "do you have rooms available?")
+    assert reply.handled is True
+    assert "10 bed" in reply.text or "10 beds" in reply.text
+
+
+def test_availability_after_a_booking_shows_one_fewer(db):
+    _confirmed(db)
+    reply = router.route(db, "any beds free for 2 nights?", now=_now())
+    assert "9" in reply.text
+
+
+def test_availability_when_full(db):
+    start = _now().replace(hour=12, minute=0, second=0, microsecond=0)
+    end = start + timedelta(days=1)
+    for i, bed in enumerate(["1NA-B1", "1NA-B2", "2AC-B1", "2AC-B2",
+                             "6NA-B1", "6NA-B2", "6NA-B3",
+                             "DORM-M1", "DORM-M2", "DORM-M3"]):
+        guest = booking.get_or_create_guest(db, phone=f"+9190000090{i:02d}")
+        db.execute(
+            "INSERT INTO bookings (guest_id, bed_id, check_in_at, check_out_at, "
+            "status, charges_total) VALUES (%s,%s,%s,%s,'CONFIRMED',0)",
+            (guest, bed, start, end))
+    reply = router.route(db, "any beds free?", now=_now())
+    assert "fully booked" in reply.text.lower()
+
+
+def test_facilities_lists_only_existing_room_types(db):
+    db.execute("DELETE FROM beds WHERE room_id = 'DORM'")
+    db.execute("UPDATE rooms SET active = false WHERE room_id = 'DORM'")
+    reply = router.route(db, "do you have food?")
+    assert "AC" in reply.text
+    assert "Non-AC" in reply.text
+    assert "dormitory" not in reply.text.lower()
+
+
+def test_free_text_goes_to_the_ai(db):
+    reply = router.route(db, "my dog is called Bruno and he likes biscuits")
+    assert reply.handled is False
+    assert reply.needs_ai is True
+
+
+def test_empty_message_goes_to_the_ai(db):
+    assert router.route(db, "").needs_ai is True
+
+
+def test_router_makes_no_ai_call_for_simple_questions(db):
+    """There is no AI client in this test at all, and the answer still works."""
+    for text in ("hi", "what is the price?", "any beds free?", "do you have food?"):
+        reply = router.route(db, text)
+        assert reply.handled is True
+        assert reply.needs_ai is False
+
+
+# --- owner answers ---------------------------------------------------------
+
+def test_owner_vacancy_count(db):
+    reply = router.owner_answer(db, "how many vacancies today?")
+    assert reply.handled is True
+    assert "10 of 10 beds are free" in reply.text
+
+
+def test_owner_vacancy_reflects_a_booking(db):
+    _confirmed(db)
+    reply = router.owner_answer(db, "how many beds are vacant?")
+    assert "9 of 10" in reply.text
+
+
+def test_owner_outstanding_dues(db):
+    request = _confirmed(db)
+    reply = router.owner_answer(db, "who has not paid?")
+    assert reply.handled is True
+    assert "Dummy Guest" in reply.text
+    assert request.reference in reply.text
+
+
+def test_owner_no_dues(db):
+    reply = router.owner_answer(db, "who has outstanding payments?")
+    assert "No outstanding balances" in reply.text
+
+
+def test_owner_pending_requests(db):
+    start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    booking.create_request(
+        db, phone="+919000000801", full_name="Waiting Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1))
+    reply = router.owner_answer(db, "show pending booking requests")
+    assert "Waiting Guest" in reply.text
+    assert "awaiting your approval" in reply.text
+
+
+def test_owner_no_pending_requests(db):
+    assert "No booking requests" in router.owner_answer(db, "pending requests?").text
+
+
+def test_owner_revenue_this_month(db):
+    request = _confirmed(db)
+    payment_id = payments.record_payment(db, booking_id=request.booking_id, guest_id=None,
+                                         amount=700, method="CASH", actor=OWNER)
+    payments.verify_payment(db, payment_id, actor=OWNER)
+    reply = router.owner_answer(db, "how much did we collect this month?")
+    assert "700" in reply.text
+
+
+def test_owner_revenue_excludes_unverified_money(db):
+    request = _confirmed(db)
+    payments.record_payment(db, booking_id=request.booking_id, guest_id=None,
+                            amount=700, method="UPI", actor="+919000000800",
+                            txn_ref="UPI-ROUTER-1")
+    reply = router.owner_answer(db, "show this month's revenue")
+    assert "Rs 0" in reply.text
+
+
+def test_owner_unverified_payments(db):
+    request = _confirmed(db)
+    payments.record_payment(db, booking_id=request.booking_id, guest_id=None,
+                            amount=250, method="UPI", actor="+919000000800",
+                            txn_ref="UPI-ROUTER-2")
+    reply = router.owner_answer(db, "show payments awaiting verification")
+    assert "250" in reply.text
+    assert "UPI" in reply.text
+
+
+def test_owner_overdue_checkouts(db):
+    start = _now() - timedelta(days=5)
+    request = booking.create_request(
+        db, phone="+919000000802", full_name="Overdue Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start,
+        check_out_at=start + timedelta(days=1))
+    booking.approve(db, request.booking_id, actor=OWNER)
+    booking.check_in(db, request.booking_id, actor=OWNER)
+    reply = router.owner_answer(db, "any overdue checkouts?")
+    assert "Overdue Guest" in reply.text
+
+
+def test_owner_in_house_list(db):
+    start = _now() - timedelta(hours=2)
+    request = booking.create_request(
+        db, phone="+919000000803", full_name="Staying Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3))
+    booking.approve(db, request.booking_id, actor=OWNER)
+    booking.check_in(db, request.booking_id, actor=OWNER)
+    reply = router.owner_answer(db, "show all occupied beds")
+    assert "Staying Guest" in reply.text
+
+
+def test_owner_unanswered_enquiries(db):
+    from core.channel.adapter import InboundMessage
+    from core import inbox
+    inbox.store_inbound(db, InboundMessage(
+        provider_message_id="wamid.ROUTER", from_phone="+919000000804",
+        text="is a room free?", message_type="text"))
+    db.execute("UPDATE enquiries SET last_message_at = now() - interval '2 hours'")
+    reply = router.owner_answer(db, "which enquiries have not received a reply?")
+    assert "+919000000804" in reply.text
+
+
+def test_owner_free_text_goes_to_the_ai(db):
+    reply = router.owner_answer(db, "what do you think of my new signboard?")
+    assert reply.handled is False
+    assert reply.needs_ai is True
+
+
+def test_owner_answers_need_no_ai(db):
+    for text in ("how many vacancies today?", "show pending booking requests",
+                 "who has not paid?", "show this month's revenue"):
+        reply = router.owner_answer(db, text)
+        assert reply.handled is True, text

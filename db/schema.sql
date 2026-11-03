@@ -246,3 +246,20 @@ CREATE TABLE IF NOT EXISTS audit_log (
     at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_audit_entity ON audit_log(entity, entity_id);
+
+-- ---------------------------------------------------------------------------
+-- AI usage and estimated cost, so spend is visible and auditable
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS ai_usage (
+    usage_id     bigserial PRIMARY KEY,
+    provider     text NOT NULL,
+    model        text NOT NULL,
+    purpose      text NOT NULL,        -- customer_reply | owner_command | summary | other
+    input_tokens  integer NOT NULL DEFAULT 0,
+    output_tokens integer NOT NULL DEFAULT 0,
+    cost_estimate numeric(10,6) NOT NULL DEFAULT 0,
+    currency     text NOT NULL DEFAULT 'USD',
+    conversation_id uuid REFERENCES conversations(conversation_id) ON DELETE SET NULL,
+    at           timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage(at);
