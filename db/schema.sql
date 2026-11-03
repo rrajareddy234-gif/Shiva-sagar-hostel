@@ -121,6 +121,16 @@ ALTER TABLE bookings ADD CONSTRAINT bookings_no_overlap
 CREATE INDEX IF NOT EXISTS idx_bookings_bed_time ON bookings(bed_id, check_in_at, check_out_at);
 CREATE INDEX IF NOT EXISTS idx_bookings_status ON bookings(status);
 
+-- Human-readable booking references, generated in the database so they are
+-- unique under concurrency. Format: SPG-YYYY-000123
+CREATE SEQUENCE IF NOT EXISTS booking_ref_seq;
+ALTER TABLE bookings
+    ADD COLUMN IF NOT EXISTS charges_total numeric(12,2);
+ALTER TABLE bookings
+    ALTER COLUMN reference SET DEFAULT
+    ('SPG-' || to_char(now(), 'YYYY') || '-' || lpad(nextval('booking_ref_seq')::text, 6, '0'));
+
+
 -- ---------------------------------------------------------------------------
 -- Temporary bed holds (expire automatically so beds are never blocked forever)
 -- ---------------------------------------------------------------------------
@@ -135,7 +145,9 @@ CREATE TABLE IF NOT EXISTS bed_holds (
     status      text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','RELEASED','EXPIRED','CONVERTED')),
     created_at  timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT holds_dates_ordered CHECK (end_at > start_at),
-    CONSTRAINT holds_expiry_after_start CHECK (expires_at > start_at)
+    -- A hold for a future stay legitimately expires before that stay begins,
+    -- so expiry is checked against creation time, not against the stay start.
+    CONSTRAINT holds_expiry_after_creation CHECK (expires_at > created_at)
 );
 -- Two live holds may not overlap on the same bed.
 ALTER TABLE bed_holds DROP CONSTRAINT IF EXISTS holds_no_overlap;
