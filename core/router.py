@@ -151,9 +151,25 @@ def _price(db: Database, text: str, room_type: str | None,
     if monthly:
         lines.append("")
         lines.append("For a monthly (PG) stay:")
+        grouped_m: dict[tuple, dict] = {}
         for plan in monthly:
-            kind = "student concession" if plan["plan_kind"] == "CONCESSION" else "standard"
-            lines.append(f"- {_rupees(plan['monthly_rate'])} a month ({kind}, food included)")
+            if plan["plan_kind"] != "STANDARD" or plan["room_type"] == "ANY":
+                continue
+            key = (plan["room_type"], plan["food_included"])
+            grouped_m.setdefault(key, {})[plan["stay_mode"]] = plan["monthly_rate"]
+        for (rt, food), modes in grouped_m.items():
+            label = label_of.get(rt, rt)
+            suffix = " with food" if food else ""
+            parts = []
+            if "NIGHT" in modes:
+                parts.append(f"{_rupees(modes['NIGHT'])} night")
+            if "DAY" in modes and modes.get("DAY") != modes.get("NIGHT"):
+                parts.append(f"{_rupees(modes['DAY'])} full day")
+            lines.append(f"- {label}{suffix}: " + " / ".join(parts) + " a month")
+        concession = [p for p in monthly if p["plan_kind"] == "CONCESSION"]
+        if concession:
+            lines.append(f"- Student concession: {_rupees(concession[0]['monthly_rate'])} "
+                         "a month, any room, with food")
 
     extras = pricing.list_extras(db)
     if extras:

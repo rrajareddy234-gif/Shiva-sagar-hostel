@@ -138,9 +138,18 @@ answered, because the AI must never invent a price or a bed.
    Extras: new bedsheet Rs 50, new towel Rs 100, new pillow Rs 50, locker Rs 30
    a month.
 
-   Monthly (PG) stays: Rs 5,500 a month standard, Rs 5,000 concession for a
-   student with a valid institution certificate or a negotiated rate. The system
-   never applies the concession by itself.
+   Monthly (PG) stays:
+
+   | Room | With food (night / full day) | Without food (night / full day) |
+   |---|---:|---:|
+   | AC | Rs 8,000 / Rs 11,000 | Rs 5,000 / Rs 7,000 |
+   | Non-AC | Rs 5,500 / Rs 5,500 | Rs 4,000 / Rs 4,000 |
+   | Dormitory | Rs 4,500 / Rs 4,500 | Rs 3,500 / Rs 3,500 |
+
+   A student concession of Rs 5,000 a month applies to any room, but only for a
+   student with a valid institution certificate or a rate you have agreed.
+
+   The system never applies the concession by itself.
 
 ## The order I suggest
 

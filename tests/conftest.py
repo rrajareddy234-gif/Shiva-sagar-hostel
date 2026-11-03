@@ -99,9 +99,21 @@ def seeded(db: Database) -> Database:
             "('Dormitory mat per day','DORM',false,'DAY',200,10,1)"
         )
         cur.execute(
-            "INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate) VALUES "
-            "('Monthly standard','ANY',true,'STANDARD',5500), "
-            "('Monthly concession','ANY',true,'CONCESSION',5000)"
+            "INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode, monthly_rate) VALUES "
+            "('Monthly AC with food, night','AC',true,'STANDARD','NIGHT',8000), "
+            "('Monthly AC with food, full day','AC',true,'STANDARD','DAY',11000), "
+            "('Monthly AC no food, night','AC',false,'STANDARD','NIGHT',5000), "
+            "('Monthly AC no food, full day','AC',false,'STANDARD','DAY',7000), "
+            "('Monthly Non-AC with food','NON_AC',true,'STANDARD','NIGHT',5500), "
+            "('Monthly Non-AC with food, full day','NON_AC',true,'STANDARD','DAY',5500), "
+            "('Monthly Non-AC no food','NON_AC',false,'STANDARD','NIGHT',4000), "
+            "('Monthly Non-AC no food, full day','NON_AC',false,'STANDARD','DAY',4000), "
+            "('Monthly dormitory with food','DORM',true,'STANDARD','NIGHT',4500), "
+            "('Monthly dormitory with food, full day','DORM',true,'STANDARD','DAY',4500), "
+            "('Monthly dormitory no food','DORM',false,'STANDARD','NIGHT',3500), "
+            "('Monthly dormitory no food, full day','DORM',false,'STANDARD','DAY',3500), "
+            "('Monthly concession','ANY',true,'CONCESSION','NIGHT',5000), "
+            "('Monthly concession, full day','ANY',true,'CONCESSION','DAY',5000)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "

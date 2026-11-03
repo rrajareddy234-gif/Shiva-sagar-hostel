@@ -109,6 +109,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS rate_plans_one_active
 --
 -- room_type 'ANY' means the plan applies to every room type; a row for a
 -- specific room type takes precedence over it.
+--
+-- stay_mode mirrors rate_plans: NIGHT is a night-only arrangement, DAY is a
+-- full-day one. Most rooms charge the same for both; AC charges more for a
+-- full day.
 -- ---------------------------------------------------------------------------
 CREATE TABLE IF NOT EXISTS monthly_plans (
     monthly_plan_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -118,14 +122,22 @@ CREATE TABLE IF NOT EXISTS monthly_plans (
     food_included   boolean NOT NULL DEFAULT true,
     plan_kind       text NOT NULL DEFAULT 'STANDARD'
                     CHECK (plan_kind IN ('STANDARD', 'CONCESSION')),
+    stay_mode       text NOT NULL DEFAULT 'NIGHT' CHECK (stay_mode IN ('NIGHT', 'DAY')),
     monthly_rate    numeric(10,2) NOT NULL CHECK (monthly_rate >= 0),
     effective_from  timestamptz NOT NULL DEFAULT now(),
     active          boolean NOT NULL DEFAULT true,
     notes           text
 );
--- Only one plan may be current for a given kind, room type and food option.
+-- Existing databases predate stay_mode; add it without disturbing the data.
+ALTER TABLE monthly_plans
+    ADD COLUMN IF NOT EXISTS stay_mode text NOT NULL DEFAULT 'NIGHT';
+ALTER TABLE monthly_plans DROP CONSTRAINT IF EXISTS monthly_plans_stay_mode_check;
+ALTER TABLE monthly_plans ADD CONSTRAINT monthly_plans_stay_mode_check
+    CHECK (stay_mode IN ('NIGHT', 'DAY'));
+-- Only one plan may be current for a given kind, room type, food option and stay mode.
+DROP INDEX IF EXISTS monthly_plans_one_active;
 CREATE UNIQUE INDEX IF NOT EXISTS monthly_plans_one_active
-    ON monthly_plans (plan_kind, room_type, food_included)
+    ON monthly_plans (plan_kind, room_type, food_included, stay_mode)
     WHERE active;
 
 -- ---------------------------------------------------------------------------

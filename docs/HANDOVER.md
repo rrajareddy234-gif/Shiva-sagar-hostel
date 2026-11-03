@@ -131,7 +131,9 @@ I will not claim these passed, because they did not run:
   with and without food, each with a night and a day rate: AC Rs 350/450 with
   food and Rs 300/350 without; Non-AC Rs 250/350 and Rs 200/250; dormitory
   Rs 200/300 and Rs 150/200. Plus extras. **Monthly (PG)** plans are separate:
-  Rs 5,500 standard, Rs 5,000 concession (student certificate or negotiated).
+  AC Rs 8,000/11,000 with food and Rs 5,000/7,000 without, Non-AC Rs 5,500 and
+  Rs 4,000, dormitory Rs 4,500 and Rs 3,500, plus a Rs 5,000 student concession
+  (certificate or negotiated).
 - **Automatic follow-up is switched off**, deliberately. Following up more than
   24 hours after a guest writes needs a Meta-approved message template, and none
   exists. Until one does, follow-up is manual.

@@ -73,21 +73,48 @@ DO UPDATE SET name = EXCLUDED.name,
               notes = EXCLUDED.notes;
 
 -- ---------------------------------------------------------------------------
--- Monthly (PG) plans. The standard month is Rs 5,500. A student with a valid
--- institution certificate, or anyone who negotiates, pays the concession rate
--- of Rs 5,000. Whether a guest qualifies is the owner's decision.
+-- Monthly (PG) plans. Agreed in whole months. Every room type is offered with
+-- and without food, and a night-only or full-day arrangement. Only AC charges
+-- more for a full day; the others charge the same either way.
+--
+--   AC         with food 8000 night / 11000 full day
+--              no food   5000 night /  7000 full day
+--   Non-AC     with food 5500 night /  5500 full day
+--              no food   4000 night /  4000 full day
+--   Dormitory  with food 4500 night /  4500 full day
+--              no food   3500 night /  3500 full day
+--
+-- The student concession is a flat Rs 5,000 for any room, but only for a
+-- student with a valid institution certificate or a rate the owner has agreed.
 -- ---------------------------------------------------------------------------
-INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate, notes)
-SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.monthly_rate,
+INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode, monthly_rate, notes)
+SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.stay_mode, v.monthly_rate,
        'confirmed by the owner'
 FROM (VALUES
-    ('Monthly standard',           'ANY', true, 'STANDARD',   5500.00),
-    ('Monthly concession',         'ANY', true, 'CONCESSION', 5000.00)
-) AS v(name, room_type, food_included, plan_kind, monthly_rate)
-ON CONFLICT (plan_kind, room_type, food_included) WHERE active
+    ('Monthly AC with food, night',        'AC',     true,  'STANDARD', 'NIGHT',  8000.00),
+    ('Monthly AC with food, full day',     'AC',     true,  'STANDARD', 'DAY',   11000.00),
+    ('Monthly AC no food, night',          'AC',     false, 'STANDARD', 'NIGHT',  5000.00),
+    ('Monthly AC no food, full day',       'AC',     false, 'STANDARD', 'DAY',    7000.00),
+    ('Monthly Non-AC with food',           'NON_AC', true,  'STANDARD', 'NIGHT',  5500.00),
+    ('Monthly Non-AC with food, full day', 'NON_AC', true,  'STANDARD', 'DAY',    5500.00),
+    ('Monthly Non-AC no food',             'NON_AC', false, 'STANDARD', 'NIGHT',  4000.00),
+    ('Monthly Non-AC no food, full day',   'NON_AC', false, 'STANDARD', 'DAY',    4000.00),
+    ('Monthly dormitory with food',        'DORM',   true,  'STANDARD', 'NIGHT',  4500.00),
+    ('Monthly dormitory with food, full day','DORM', true,  'STANDARD', 'DAY',    4500.00),
+    ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  3500.00),
+    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    3500.00),
+    ('Monthly concession',                 'ANY',    true,  'CONCESSION','NIGHT', 5000.00),
+    ('Monthly concession, full day',       'ANY',    true,  'CONCESSION','DAY',   5000.00)
+) AS v(name, room_type, food_included, plan_kind, stay_mode, monthly_rate)
+ON CONFLICT (plan_kind, room_type, food_included, stay_mode) WHERE active
 DO UPDATE SET name = EXCLUDED.name,
               monthly_rate = EXCLUDED.monthly_rate,
               notes = EXCLUDED.notes;
+
+-- Every room type is now priced explicitly, so a generic 'ANY' standard plan is
+-- stale. Retire it if an earlier run of this file created one.
+UPDATE monthly_plans SET active = false
+WHERE active AND plan_kind = 'STANDARD' AND room_type = 'ANY';
 
 -- ---------------------------------------------------------------------------
 -- Extras the owner sells or rents. Confirmed 2026-11-03.

@@ -124,10 +124,12 @@ The dev database contains leftover rows from earlier manual runs
   mode) rather than skipping existing names, so re-running it applies a rate
   change instead of leaving a stale price behind.
 - Monthly (PG) stays are a **separate product** with their own table,
-  `monthly_plans`, not a stay mode on `rate_plans`. The standard month is
-  Rs 5,500; the concession is Rs 5,000 for a student with a valid institution
-  certificate or a negotiated rate. `room_type = 'ANY'` covers all room types,
-  and a room-specific plan wins over it. Because both kinds exist, an unstated
-  kind is refused rather than defaulted: the concession is a human decision and
-  the system must never grant it silently. Months are whole; there is no
-  pro-rating.
+  `monthly_plans`, not a stay mode on `rate_plans`. It carries `stay_mode` like
+  `rate_plans`: NIGHT is a night-only arrangement, DAY a full day. Every room
+  type is priced explicitly (AC Rs 8,000/11,000 with food, Rs 5,000/7,000
+  without; Non-AC Rs 5,500 and Rs 4,000; dormitory Rs 4,500 and Rs 3,500). The
+  student concession is a flat Rs 5,000 for any room, `room_type = 'ANY'`, and
+  `_load_monthly_plan` prefers an exact room type over `ANY`. Because both a
+  standard and a concession plan exist, an unstated kind is refused rather than
+  defaulted: the concession is a human decision and the system must never grant
+  it silently. Months are whole; there is no pro-rating.

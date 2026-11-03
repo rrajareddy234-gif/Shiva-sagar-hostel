@@ -186,26 +186,66 @@ def test_money_rounding_half_up():
 
 # --- monthly (PG) plans ----------------------------------------------------
 
-def test_monthly_standard_rate(db):
-    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+def test_monthly_ac_with_food_night(db):
+    quote = pricing.monthly_quote(db, room_type="AC", food_included=True,
                                   months=1, plan_kind="STANDARD")
-    assert quote.monthly_rate == Decimal("5500.00")
-    assert quote.charges_total == Decimal("5500.00")
-    assert quote.plan_kind == "STANDARD"
+    assert quote.monthly_rate == Decimal("8000.00")
+    assert quote.stay_mode == "NIGHT"
 
 
-def test_monthly_concession_rate(db):
-    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
-                                  months=1, plan_kind="CONCESSION")
-    assert quote.monthly_rate == Decimal("5000.00")
-    assert quote.charges_total == Decimal("5000.00")
+def test_monthly_ac_with_food_full_day_costs_more(db):
+    night = pricing.monthly_quote(db, room_type="AC", food_included=True,
+                                  months=1, plan_kind="STANDARD", stay_mode="NIGHT")
+    day = pricing.monthly_quote(db, room_type="AC", food_included=True,
+                                months=1, plan_kind="STANDARD", stay_mode="DAY")
+    assert night.monthly_rate == Decimal("8000.00")
+    assert day.monthly_rate == Decimal("11000.00")
+
+
+def test_monthly_ac_without_food(db):
+    night = pricing.monthly_quote(db, room_type="AC", food_included=False,
+                                  months=1, plan_kind="STANDARD", stay_mode="NIGHT")
+    day = pricing.monthly_quote(db, room_type="AC", food_included=False,
+                                months=1, plan_kind="STANDARD", stay_mode="DAY")
+    assert night.monthly_rate == Decimal("5000.00")
+    assert day.monthly_rate == Decimal("7000.00")
+
+
+def test_monthly_non_ac_same_night_and_day(db):
+    night = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                  months=1, plan_kind="STANDARD", stay_mode="NIGHT")
+    day = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                months=1, plan_kind="STANDARD", stay_mode="DAY")
+    assert night.monthly_rate == Decimal("5500.00")
+    assert day.monthly_rate == Decimal("5500.00")
+
+
+def test_monthly_non_ac_without_food(db):
+    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=False,
+                                  months=1, plan_kind="STANDARD")
+    assert quote.monthly_rate == Decimal("4000.00")
+
+
+def test_monthly_dormitory_rates(db):
+    with_food = pricing.monthly_quote(db, room_type="DORM", food_included=True,
+                                      months=1, plan_kind="STANDARD")
+    no_food = pricing.monthly_quote(db, room_type="DORM", food_included=False,
+                                    months=1, plan_kind="STANDARD")
+    assert with_food.monthly_rate == Decimal("4500.00")
+    assert no_food.monthly_rate == Decimal("3500.00")
 
 
 def test_monthly_three_months_multiplies(db):
     quote = pricing.monthly_quote(db, room_type="AC", food_included=True,
                                   months=3, plan_kind="STANDARD")
     assert quote.months == 3
-    assert quote.charges_total == Decimal("16500.00")
+    assert quote.charges_total == Decimal("24000.00")
+
+
+def test_monthly_concession_is_flat_five_thousand(db):
+    quote = pricing.monthly_quote(db, room_type="DORM", food_included=True,
+                                  months=1, plan_kind="CONCESSION")
+    assert quote.monthly_rate == Decimal("5000.00")
 
 
 def test_monthly_concession_is_never_silently_granted(db):
@@ -218,6 +258,12 @@ def test_monthly_needs_at_least_one_month(db):
     with pytest.raises(ValidationError):
         pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
                               months=0, plan_kind="STANDARD")
+
+
+def test_monthly_rejects_a_bad_stay_mode(db):
+    with pytest.raises(ValidationError):
+        pricing.monthly_quote(db, room_type="AC", food_included=True, months=1,
+                              plan_kind="STANDARD", stay_mode="WEEK")
 
 
 def test_monthly_refuses_an_unknown_kind(db):
@@ -241,21 +287,15 @@ def test_monthly_extras_and_discount(db):
 
 
 def test_set_monthly_rate_replaces_the_previous(db):
-    pricing.set_monthly_rate(db, name="Monthly standard v2", room_type="ANY",
-                             plan_kind="STANDARD", monthly_rate=6000)
+    pricing.set_monthly_rate(db, name="Monthly AC night v2", room_type="AC",
+                             plan_kind="STANDARD", monthly_rate=8500, stay_mode="NIGHT")
     active = db.query_all(
         "SELECT name, monthly_rate FROM monthly_plans "
-        "WHERE plan_kind='STANDARD' AND active")
+        "WHERE plan_kind='STANDARD' AND room_type='AC' AND food_included "
+        "AND stay_mode='NIGHT' AND active")
     assert len(active) == 1
-    assert active[0]["monthly_rate"] == Decimal("6000.00")
-
-
-def test_monthly_room_specific_plan_wins_over_any(db):
-    pricing.set_monthly_rate(db, name="Monthly AC standard", room_type="AC",
-                             plan_kind="STANDARD", monthly_rate=7000)
-    ac = pricing.monthly_quote(db, room_type="AC", food_included=True,
-                               months=1, plan_kind="STANDARD")
-    non_ac = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
-                                   months=1, plan_kind="STANDARD")
-    assert ac.monthly_rate == Decimal("7000.00")
-    assert non_ac.monthly_rate == Decimal("5500.00")
+    assert active[0]["monthly_rate"] == Decimal("8500.00")
+    # The full-day AC plan is untouched.
+    day = pricing.monthly_quote(db, room_type="AC", food_included=True,
+                                months=1, plan_kind="STANDARD", stay_mode="DAY")
+    assert day.monthly_rate == Decimal("11000.00")

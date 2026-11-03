@@ -190,13 +190,20 @@ def _quote_monthly_stay(ctx: ToolContext, args: dict) -> dict:
     plan_kind = args.get("plan_kind")
     if plan_kind is not None:
         plan_kind = str(plan_kind).upper()
+    stay_mode = (args.get("stay_mode") or "NIGHT").upper()
+    if stay_mode in ("NIGHTLY", "OVERNIGHT"):
+        stay_mode = "NIGHT"
+    elif stay_mode in ("DAILY", "DAYTIME", "FULL_DAY"):
+        stay_mode = "DAY"
 
     result = pricing.monthly_quote(ctx.db, room_type=room_type, food_included=food,
-                                   months=months, plan_kind=plan_kind)
+                                   months=months, plan_kind=plan_kind,
+                                   stay_mode=stay_mode)
     return {
         "room_type": room_type,
         "food_included": result.food_included,
         "plan_kind": result.plan_kind,
+        "stay_mode": result.stay_mode,
         "months": result.months,
         "monthly_rate": str(result.monthly_rate),
         "total": str(result.charges_total),
@@ -341,6 +348,7 @@ TOOLS: list[Tool] = [
                 "food_included": {"type": "boolean"},
                 "months": {"type": "integer", "minimum": 1},
                 "plan_kind": {"type": "string", "enum": ["STANDARD", "CONCESSION"]},
+                "stay_mode": {"type": "string", "enum": ["NIGHT", "DAY"]},
             },
             "required": ["room_type", "food_included", "months"],
         },

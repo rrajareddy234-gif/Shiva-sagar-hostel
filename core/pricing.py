@@ -242,6 +242,7 @@ class MonthlyPlan:
     room_type: str
     food_included: bool
     plan_kind: str            # "STANDARD" or "CONCESSION"
+    stay_mode: str            # "NIGHT" or "DAY"
     monthly_rate: Decimal
 
 
@@ -250,6 +251,7 @@ class MonthlyQuote:
     room_type: str
     food_included: bool
     plan_kind: str
+    stay_mode: str
     months: int
     monthly_rate: Decimal
     charges_total: Decimal
@@ -261,43 +263,49 @@ MONTHLY_KINDS = ("STANDARD", "CONCESSION")
 
 
 def _load_monthly_plan(db: Database, room_type: str, food_included: bool,
-                       plan_kind: str) -> MonthlyPlan:
-    """The active monthly plan for this room type, food option and kind.
+                       plan_kind: str, stay_mode: str = "NIGHT") -> MonthlyPlan:
+    """The active monthly plan for this room type, food option, kind and mode.
 
     A plan for the exact room type wins over an 'ANY' plan.
     """
     row = db.query_one(
         """
-        SELECT monthly_plan_id, name, room_type, food_included, plan_kind, monthly_rate
+        SELECT monthly_plan_id, name, room_type, food_included, plan_kind,
+               stay_mode, monthly_rate
         FROM monthly_plans
-        WHERE food_included = %(food)s AND plan_kind = %(kind)s AND active
+        WHERE food_included = %(food)s AND plan_kind = %(kind)s
+          AND stay_mode = %(stay_mode)s AND active
           AND room_type IN (%(room_type)s, 'ANY')
         ORDER BY (room_type = %(room_type)s) DESC, effective_from DESC
         LIMIT 1
         """,
-        {"room_type": room_type, "food": food_included, "kind": plan_kind},
+        {"room_type": room_type, "food": food_included, "kind": plan_kind,
+         "stay_mode": stay_mode},
     )
     if not row:
         raise NotFound(
             f"no active monthly {plan_kind.lower()} plan for {room_type} "
-            f"{'with' if food_included else 'without'} food; ask the owner to set one"
+            f"{'with' if food_included else 'without'} food, {stay_mode.lower()}; "
+            "ask the owner to set one"
         )
     return MonthlyPlan(**row)
 
 
-def monthly_plan_kinds(db: Database, room_type: str, food_included: bool) -> list[str]:
-    """Which monthly plan kinds exist for this room type, e.g. both or just one."""
+def monthly_plan_kinds(db: Database, room_type: str, food_included: bool,
+                       stay_mode: str = "NIGHT") -> list[str]:
+    """Which monthly plan kinds exist for this room type and stay mode."""
     rows = db.query_all(
         "SELECT DISTINCT plan_kind FROM monthly_plans "
-        "WHERE food_included = %s AND active AND room_type IN (%s, 'ANY') "
-        "ORDER BY plan_kind",
-        (food_included, room_type),
+        "WHERE food_included = %s AND stay_mode = %s AND active "
+        "AND room_type IN (%s, 'ANY') ORDER BY plan_kind",
+        (food_included, stay_mode, room_type),
     )
     return [r["plan_kind"] for r in rows]
 
 
 def resolve_monthly_plan_kind(db: Database, room_type: str, food_included: bool,
-                              requested: str | None) -> str:
+                              requested: str | None,
+                              stay_mode: str = "NIGHT") -> str:
     """Settle which monthly plan applies.
 
     Most room types have a single monthly plan, so an unspecified request
@@ -307,7 +315,7 @@ def resolve_monthly_plan_kind(db: Database, room_type: str, food_included: bool,
     silently. Defaulting to the concession would undercharge; defaulting to the
     standard would overcharge a student who qualifies.
     """
-    offered = monthly_plan_kinds(db, room_type, food_included)
+    offered = monthly_plan_kinds(db, room_type, food_included, stay_mode)
     if not offered:
         raise NotFound(f"no active monthly plan for {room_type}; ask the owner to set one")
     if requested is not None:
@@ -325,13 +333,20 @@ def resolve_monthly_plan_kind(db: Database, room_type: str, food_included: bool,
 
 def monthly_quote(db: Database, *, room_type: str, food_included: bool,
                   months: int = 1, plan_kind: str | None = None,
+                  stay_mode: str = "NIGHT",
                   extras: Decimal | float | int = 0,
                   discount: Decimal | float | int = 0) -> MonthlyQuote:
-    """Price a monthly (PG) stay. Whole months only; the rate is not pro-rated."""
+    """Price a monthly (PG) stay. Whole months only; the rate is not pro-rated.
+
+    `stay_mode` picks a night-only arrangement or a full-day one. Most rooms
+    charge the same either way; AC charges more for a full day.
+    """
     if months < 1:
         raise ValidationError("a monthly stay must be at least one month")
-    kind = resolve_monthly_plan_kind(db, room_type, food_included, plan_kind)
-    plan = _load_monthly_plan(db, room_type, food_included, kind)
+    if stay_mode not in ("NIGHT", "DAY"):
+        raise ValidationError("stay_mode must be NIGHT or DAY")
+    kind = resolve_monthly_plan_kind(db, room_type, food_included, plan_kind, stay_mode)
+    plan = _load_monthly_plan(db, room_type, food_included, kind, stay_mode)
     monthly_rate = money(plan.monthly_rate)
     base = money(monthly_rate * months)
     extras_amt = money(extras)
@@ -345,6 +360,7 @@ def monthly_quote(db: Database, *, room_type: str, food_included: bool,
         room_type=room_type,
         food_included=food_included,
         plan_kind=kind,
+        stay_mode=stay_mode,
         months=months,
         monthly_rate=monthly_rate,
         charges_total=total,
@@ -356,42 +372,48 @@ def monthly_quote(db: Database, *, room_type: str, food_included: bool,
             "extras": str(extras_amt),
             "discount": str(discount_amt),
             "plan_kind": kind,
+            "stay_mode": stay_mode,
         },
     )
 
 
 def set_monthly_rate(db: Database, *, name: str, room_type: str, plan_kind: str,
                      monthly_rate: Decimal | float | int,
-                     food_included: bool = True) -> str:
+                     food_included: bool = True,
+                     stay_mode: str = "NIGHT") -> str:
     """Add a new monthly plan. Older plans for the same slot are deactivated."""
     if plan_kind not in MONTHLY_KINDS:
         raise ValidationError("plan_kind must be STANDARD or CONCESSION")
     if room_type not in ("AC", "NON_AC", "DORM", "ANY"):
         raise ValidationError("room_type must be AC, NON_AC, DORM or ANY")
+    if stay_mode not in ("NIGHT", "DAY"):
+        raise ValidationError("stay_mode must be NIGHT or DAY")
     if money(monthly_rate) < 0:
         raise ValidationError("a monthly rate cannot be negative")
     with db.transaction() as cur:
         cur.execute(
             "UPDATE monthly_plans SET active = false "
-            "WHERE plan_kind = %s AND room_type = %s AND food_included = %s AND active",
-            (plan_kind, room_type, food_included),
+            "WHERE plan_kind = %s AND room_type = %s AND food_included = %s "
+            "AND stay_mode = %s AND active",
+            (plan_kind, room_type, food_included, stay_mode),
         )
         cur.execute(
             """
-            INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO monthly_plans (name, room_type, food_included, plan_kind,
+                                       stay_mode, monthly_rate)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING monthly_plan_id
             """,
-            (name, room_type, food_included, plan_kind, monthly_rate),
+            (name, room_type, food_included, plan_kind, stay_mode, monthly_rate),
         )
         return str(cur.fetchone()["monthly_plan_id"])
 
 
 def list_monthly_plans(db: Database) -> list[dict]:
-    """Every active monthly plan, cheapest last so the standard shows first."""
+    """Every active monthly plan, dearest first."""
     return db.query_all(
-        "SELECT name, room_type, food_included, plan_kind, monthly_rate "
-        "FROM monthly_plans WHERE active ORDER BY monthly_rate DESC"
+        "SELECT name, room_type, food_included, plan_kind, stay_mode, monthly_rate "
+        "FROM monthly_plans WHERE active ORDER BY room_type, plan_kind, stay_mode"
     )
 
 
