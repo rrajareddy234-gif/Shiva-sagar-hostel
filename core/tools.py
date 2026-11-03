@@ -176,6 +176,37 @@ def _quote_stay(ctx: ToolContext, args: dict) -> dict:
     return out
 
 
+def _quote_monthly_stay(ctx: ToolContext, args: dict) -> dict:
+    """A monthly (PG) price. Whole months; never pro-rated by the model."""
+    room_type = (args.get("room_type") or "NON_AC").upper()
+    if room_type == "NONAC":
+        room_type = "NON_AC"
+    food = args.get("food_included")
+    if food is not None:
+        food = bool(food)
+    if food is None:
+        raise DomainError("say whether the monthly rate includes food")
+    months = int(args.get("months") or 1)
+    plan_kind = args.get("plan_kind")
+    if plan_kind is not None:
+        plan_kind = str(plan_kind).upper()
+
+    result = pricing.monthly_quote(ctx.db, room_type=room_type, food_included=food,
+                                   months=months, plan_kind=plan_kind)
+    return {
+        "room_type": room_type,
+        "food_included": result.food_included,
+        "plan_kind": result.plan_kind,
+        "months": result.months,
+        "monthly_rate": str(result.monthly_rate),
+        "total": str(result.charges_total),
+        "currency": "INR",
+        "note": ("This total is final for that many whole months. It is not "
+                 "pro-rated, and the concession rate applies only to a student "
+                 "with a valid institution certificate or a negotiated rate."),
+    }
+
+
 def _create_booking_request(ctx: ToolContext, args: dict) -> dict:
     """Create a request. The owner still has to approve it."""
     from core import booking
@@ -297,6 +328,23 @@ TOOLS: list[Tool] = [
             "required": ["check_in", "check_out", "room_type"],
         },
         _quote_stay,
+    ),
+    Tool(
+        "quote_monthly_stay",
+        "Compute the exact total for a monthly (PG) stay, in whole months. The "
+        "concession rate applies only to a student with a valid institution "
+        "certificate, or a rate the owner has agreed. Ask before assuming it.",
+        {
+            "type": "object",
+            "properties": {
+                "room_type": {"type": "string", "enum": ["AC", "NON_AC", "DORM"]},
+                "food_included": {"type": "boolean"},
+                "months": {"type": "integer", "minimum": 1},
+                "plan_kind": {"type": "string", "enum": ["STANDARD", "CONCESSION"]},
+            },
+            "required": ["room_type", "food_included", "months"],
+        },
+        _quote_monthly_stay,
     ),
     Tool(
         "my_bookings",

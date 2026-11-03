@@ -73,6 +73,23 @@ DO UPDATE SET name = EXCLUDED.name,
               notes = EXCLUDED.notes;
 
 -- ---------------------------------------------------------------------------
+-- Monthly (PG) plans. The standard month is Rs 5,500. A student with a valid
+-- institution certificate, or anyone who negotiates, pays the concession rate
+-- of Rs 5,000. Whether a guest qualifies is the owner's decision.
+-- ---------------------------------------------------------------------------
+INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate, notes)
+SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.monthly_rate,
+       'confirmed by the owner'
+FROM (VALUES
+    ('Monthly standard',           'ANY', true, 'STANDARD',   5500.00),
+    ('Monthly concession',         'ANY', true, 'CONCESSION', 5000.00)
+) AS v(name, room_type, food_included, plan_kind, monthly_rate)
+ON CONFLICT (plan_kind, room_type, food_included) WHERE active
+DO UPDATE SET name = EXCLUDED.name,
+              monthly_rate = EXCLUDED.monthly_rate,
+              notes = EXCLUDED.notes;
+
+-- ---------------------------------------------------------------------------
 -- Extras the owner sells or rents. Confirmed 2026-11-03.
 -- ---------------------------------------------------------------------------
 INSERT INTO extras (name, price, unit, notes) VALUES

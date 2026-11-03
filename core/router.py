@@ -147,6 +147,14 @@ def _price(db: Database, text: str, room_type: str | None,
             parts.append(f"{_rupees(modes['DAY'])} a day")
         lines.append(f"- {label}{suffix}: " + " / ".join(parts))
 
+    monthly = pricing.list_monthly_plans(db)
+    if monthly:
+        lines.append("")
+        lines.append("For a monthly (PG) stay:")
+        for plan in monthly:
+            kind = "student concession" if plan["plan_kind"] == "CONCESSION" else "standard"
+            lines.append(f"- {_rupees(plan['monthly_rate'])} a month ({kind}, food included)")
+
     extras = pricing.list_extras(db)
     if extras:
         lines.append("")

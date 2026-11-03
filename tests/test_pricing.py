@@ -182,3 +182,80 @@ def test_set_rate_requires_at_least_one_rate(db):
 def test_money_rounding_half_up():
     assert pricing.money("10.005") == Decimal("10.01")
     assert pricing.money("10.004") == Decimal("10.00")
+
+
+# --- monthly (PG) plans ----------------------------------------------------
+
+def test_monthly_standard_rate(db):
+    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                  months=1, plan_kind="STANDARD")
+    assert quote.monthly_rate == Decimal("5500.00")
+    assert quote.charges_total == Decimal("5500.00")
+    assert quote.plan_kind == "STANDARD"
+
+
+def test_monthly_concession_rate(db):
+    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                  months=1, plan_kind="CONCESSION")
+    assert quote.monthly_rate == Decimal("5000.00")
+    assert quote.charges_total == Decimal("5000.00")
+
+
+def test_monthly_three_months_multiplies(db):
+    quote = pricing.monthly_quote(db, room_type="AC", food_included=True,
+                                  months=3, plan_kind="STANDARD")
+    assert quote.months == 3
+    assert quote.charges_total == Decimal("16500.00")
+
+
+def test_monthly_concession_is_never_silently_granted(db):
+    """Both plans exist, so an unstated kind must be refused, not guessed."""
+    with pytest.raises(ValidationError, match="standard and a concession"):
+        pricing.monthly_quote(db, room_type="NON_AC", food_included=True, months=1)
+
+
+def test_monthly_needs_at_least_one_month(db):
+    with pytest.raises(ValidationError):
+        pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                              months=0, plan_kind="STANDARD")
+
+
+def test_monthly_refuses_an_unknown_kind(db):
+    with pytest.raises(NotFound):
+        pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                              months=1, plan_kind="FREE")
+
+
+def test_monthly_refuses_when_no_plan_exists(db):
+    db.execute("UPDATE monthly_plans SET active = false")
+    with pytest.raises(NotFound):
+        pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                              months=1, plan_kind="STANDARD")
+
+
+def test_monthly_extras_and_discount(db):
+    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                  months=1, plan_kind="STANDARD",
+                                  extras=30, discount=500)
+    assert quote.charges_total == Decimal("5030.00")
+
+
+def test_set_monthly_rate_replaces_the_previous(db):
+    pricing.set_monthly_rate(db, name="Monthly standard v2", room_type="ANY",
+                             plan_kind="STANDARD", monthly_rate=6000)
+    active = db.query_all(
+        "SELECT name, monthly_rate FROM monthly_plans "
+        "WHERE plan_kind='STANDARD' AND active")
+    assert len(active) == 1
+    assert active[0]["monthly_rate"] == Decimal("6000.00")
+
+
+def test_monthly_room_specific_plan_wins_over_any(db):
+    pricing.set_monthly_rate(db, name="Monthly AC standard", room_type="AC",
+                             plan_kind="STANDARD", monthly_rate=7000)
+    ac = pricing.monthly_quote(db, room_type="AC", food_included=True,
+                               months=1, plan_kind="STANDARD")
+    non_ac = pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                                   months=1, plan_kind="STANDARD")
+    assert ac.monthly_rate == Decimal("7000.00")
+    assert non_ac.monthly_rate == Decimal("5500.00")

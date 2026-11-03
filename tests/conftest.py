@@ -29,8 +29,8 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 TABLES = (
     "audit_log", "referrals", "partners", "messages", "conversations",
-    "payments", "bed_holds", "bookings", "rate_plans", "extras", "enquiries",
-    "guests", "beds", "rooms", "settings",
+    "payments", "bed_holds", "bookings", "rate_plans", "monthly_plans", "extras",
+    "enquiries", "guests", "beds", "rooms", "settings",
 )
 
 
@@ -97,6 +97,11 @@ def seeded(db: Database) -> Database:
             "('Dormitory with food per day','DORM',true,'DAY',300,10,1), "
             "('Dormitory mat per night','DORM',false,'NIGHT',150,10,1), "
             "('Dormitory mat per day','DORM',false,'DAY',200,10,1)"
+        )
+        cur.execute(
+            "INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate) VALUES "
+            "('Monthly standard','ANY',true,'STANDARD',5500), "
+            "('Monthly concession','ANY',true,'CONCESSION',5000)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "

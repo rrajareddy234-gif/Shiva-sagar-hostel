@@ -99,6 +99,36 @@ CREATE UNIQUE INDEX IF NOT EXISTS rate_plans_one_active
     WHERE active;
 
 -- ---------------------------------------------------------------------------
+-- Monthly (PG) plans — a separate product from nightly and daily stays.
+--
+-- A monthly stay is agreed in whole months. The owner charges a standard
+-- monthly rate, and a lower concession rate for students with a valid
+-- institution certificate and for anyone who negotiates. Whether a guest
+-- qualifies is a human decision, so the plan kind is chosen explicitly and is
+-- never inferred by the system.
+--
+-- room_type 'ANY' means the plan applies to every room type; a row for a
+-- specific room type takes precedence over it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS monthly_plans (
+    monthly_plan_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name            text NOT NULL,
+    room_type       text NOT NULL DEFAULT 'ANY'
+                    CHECK (room_type IN ('AC', 'NON_AC', 'DORM', 'ANY')),
+    food_included   boolean NOT NULL DEFAULT true,
+    plan_kind       text NOT NULL DEFAULT 'STANDARD'
+                    CHECK (plan_kind IN ('STANDARD', 'CONCESSION')),
+    monthly_rate    numeric(10,2) NOT NULL CHECK (monthly_rate >= 0),
+    effective_from  timestamptz NOT NULL DEFAULT now(),
+    active          boolean NOT NULL DEFAULT true,
+    notes           text
+);
+-- Only one plan may be current for a given kind, room type and food option.
+CREATE UNIQUE INDEX IF NOT EXISTS monthly_plans_one_active
+    ON monthly_plans (plan_kind, room_type, food_included)
+    WHERE active;
+
+-- ---------------------------------------------------------------------------
 -- Chargeable extras: items the owner sells or rents alongside a bed.
 -- Prices are the owner's; nothing here is invented by the system.
 -- ---------------------------------------------------------------------------

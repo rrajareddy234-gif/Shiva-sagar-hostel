@@ -235,6 +235,166 @@ def set_rate(db: Database, *, name: str, room_type: str, food_included: bool,
         return str(cur.fetchone()["rate_plan_id"])
 
 
+@dataclass(frozen=True)
+class MonthlyPlan:
+    monthly_plan_id: str
+    name: str
+    room_type: str
+    food_included: bool
+    plan_kind: str            # "STANDARD" or "CONCESSION"
+    monthly_rate: Decimal
+
+
+@dataclass(frozen=True)
+class MonthlyQuote:
+    room_type: str
+    food_included: bool
+    plan_kind: str
+    months: int
+    monthly_rate: Decimal
+    charges_total: Decimal
+    rate_plan_id: str
+    breakdown: dict = field(default_factory=dict)
+
+
+MONTHLY_KINDS = ("STANDARD", "CONCESSION")
+
+
+def _load_monthly_plan(db: Database, room_type: str, food_included: bool,
+                       plan_kind: str) -> MonthlyPlan:
+    """The active monthly plan for this room type, food option and kind.
+
+    A plan for the exact room type wins over an 'ANY' plan.
+    """
+    row = db.query_one(
+        """
+        SELECT monthly_plan_id, name, room_type, food_included, plan_kind, monthly_rate
+        FROM monthly_plans
+        WHERE food_included = %(food)s AND plan_kind = %(kind)s AND active
+          AND room_type IN (%(room_type)s, 'ANY')
+        ORDER BY (room_type = %(room_type)s) DESC, effective_from DESC
+        LIMIT 1
+        """,
+        {"room_type": room_type, "food": food_included, "kind": plan_kind},
+    )
+    if not row:
+        raise NotFound(
+            f"no active monthly {plan_kind.lower()} plan for {room_type} "
+            f"{'with' if food_included else 'without'} food; ask the owner to set one"
+        )
+    return MonthlyPlan(**row)
+
+
+def monthly_plan_kinds(db: Database, room_type: str, food_included: bool) -> list[str]:
+    """Which monthly plan kinds exist for this room type, e.g. both or just one."""
+    rows = db.query_all(
+        "SELECT DISTINCT plan_kind FROM monthly_plans "
+        "WHERE food_included = %s AND active AND room_type IN (%s, 'ANY') "
+        "ORDER BY plan_kind",
+        (food_included, room_type),
+    )
+    return [r["plan_kind"] for r in rows]
+
+
+def resolve_monthly_plan_kind(db: Database, room_type: str, food_included: bool,
+                              requested: str | None) -> str:
+    """Settle which monthly plan applies.
+
+    Most room types have a single monthly plan, so an unspecified request
+    resolves to it. Where both a standard and a concession plan exist, the
+    caller must say which: the concession is a human decision (a valid student
+    certificate, or a negotiated rate), and the system must not grant it
+    silently. Defaulting to the concession would undercharge; defaulting to the
+    standard would overcharge a student who qualifies.
+    """
+    offered = monthly_plan_kinds(db, room_type, food_included)
+    if not offered:
+        raise NotFound(f"no active monthly plan for {room_type}; ask the owner to set one")
+    if requested is not None:
+        requested = requested.upper()
+        if requested not in offered:
+            raise NotFound(f"{room_type} has no monthly {requested.lower()} plan")
+        return requested
+    if len(offered) == 1:
+        return offered[0]
+    raise ValidationError(
+        f"{room_type} offers both a standard and a concession monthly rate; "
+        "say which applies"
+    )
+
+
+def monthly_quote(db: Database, *, room_type: str, food_included: bool,
+                  months: int = 1, plan_kind: str | None = None,
+                  extras: Decimal | float | int = 0,
+                  discount: Decimal | float | int = 0) -> MonthlyQuote:
+    """Price a monthly (PG) stay. Whole months only; the rate is not pro-rated."""
+    if months < 1:
+        raise ValidationError("a monthly stay must be at least one month")
+    kind = resolve_monthly_plan_kind(db, room_type, food_included, plan_kind)
+    plan = _load_monthly_plan(db, room_type, food_included, kind)
+    monthly_rate = money(plan.monthly_rate)
+    base = money(monthly_rate * months)
+    extras_amt = money(extras)
+    discount_amt = money(discount)
+    if discount_amt < 0:
+        raise ValidationError("a discount cannot be negative")
+    total = money(base + extras_amt - discount_amt)
+    if total < 0:
+        raise ValidationError("the discount cannot exceed the total charge")
+    return MonthlyQuote(
+        room_type=room_type,
+        food_included=food_included,
+        plan_kind=kind,
+        months=months,
+        monthly_rate=monthly_rate,
+        charges_total=total,
+        rate_plan_id=plan.monthly_plan_id,
+        breakdown={
+            "monthly_rate": str(monthly_rate),
+            "months": months,
+            "base": str(base),
+            "extras": str(extras_amt),
+            "discount": str(discount_amt),
+            "plan_kind": kind,
+        },
+    )
+
+
+def set_monthly_rate(db: Database, *, name: str, room_type: str, plan_kind: str,
+                     monthly_rate: Decimal | float | int,
+                     food_included: bool = True) -> str:
+    """Add a new monthly plan. Older plans for the same slot are deactivated."""
+    if plan_kind not in MONTHLY_KINDS:
+        raise ValidationError("plan_kind must be STANDARD or CONCESSION")
+    if room_type not in ("AC", "NON_AC", "DORM", "ANY"):
+        raise ValidationError("room_type must be AC, NON_AC, DORM or ANY")
+    if money(monthly_rate) < 0:
+        raise ValidationError("a monthly rate cannot be negative")
+    with db.transaction() as cur:
+        cur.execute(
+            "UPDATE monthly_plans SET active = false "
+            "WHERE plan_kind = %s AND room_type = %s AND food_included = %s AND active",
+            (plan_kind, room_type, food_included),
+        )
+        cur.execute(
+            """
+            INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, monthly_rate)
+            VALUES (%s, %s, %s, %s, %s)
+            RETURNING monthly_plan_id
+            """,
+            (name, room_type, food_included, plan_kind, monthly_rate),
+        )
+        return str(cur.fetchone()["monthly_plan_id"])
+
+
+def list_monthly_plans(db: Database) -> list[dict]:
+    """Every active monthly plan, cheapest last so the standard shows first."""
+    return db.query_all(
+        "SELECT name, room_type, food_included, plan_kind, monthly_rate "
+        "FROM monthly_plans WHERE active ORDER BY monthly_rate DESC"
+    )
+
+
 def list_extras(db: Database) -> list[dict]:
     """Every active chargeable extra, with its price."""
     return db.query_all(

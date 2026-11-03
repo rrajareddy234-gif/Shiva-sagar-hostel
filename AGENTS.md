@@ -123,3 +123,11 @@ The dev database contains leftover rows from earlier manual runs
 - `db/seed.sql` upserts rate plans on the slot (room type, food option, stay
   mode) rather than skipping existing names, so re-running it applies a rate
   change instead of leaving a stale price behind.
+- Monthly (PG) stays are a **separate product** with their own table,
+  `monthly_plans`, not a stay mode on `rate_plans`. The standard month is
+  Rs 5,500; the concession is Rs 5,000 for a student with a valid institution
+  certificate or a negotiated rate. `room_type = 'ANY'` covers all room types,
+  and a room-specific plan wins over it. Because both kinds exist, an unstated
+  kind is refused rather than defaulted: the concession is a human decision and
+  the system must never grant it silently. Months are whole; there is no
+  pro-rating.

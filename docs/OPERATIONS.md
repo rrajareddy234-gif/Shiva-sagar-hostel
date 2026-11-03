@@ -153,6 +153,12 @@ Do these in order. Do not skip the test in step 5.
    | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
 
    Plus extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month.
+
+   **Monthly (PG) stays** are held separately in `db/seed.sql` as
+   `monthly_plans`: Rs 5,500 for a standard month, Rs 5,000 for a student with a
+   valid institution certificate or anyone who negotiates. Whether a guest
+   qualifies is your decision, so the system never applies the concession on its
+   own. Months are whole; there is no pro-rating.
 3. **Set the owner number.** `OWNER_PHONE` in `.env`, in full international form,
    for example `+919876543210`. Owner commands only work from this number.
 4. **Set the spending limits.** In your AI provider's console, set a monthly
