@@ -19,7 +19,7 @@ pytestmark = pytest.mark.usefixtures("seeded")
 OWNER = "+919999999999"
 
 
-def _confirmed_booking(db, phone="+919000000500", charges=None, bed_id="1NA-B1"):
+def _confirmed_booking(db, phone="+919000000500", charges=700, bed_id="1NA-B1"):
     from tests.conftest import IST
     start = (datetime.now(IST) + timedelta(days=1)).replace(
         hour=10, minute=0, second=0, microsecond=0)
@@ -28,6 +28,8 @@ def _confirmed_booking(db, phone="+919000000500", charges=None, bed_id="1NA-B1")
         bed_id=bed_id, check_in_at=start, check_out_at=start + timedelta(days=2),
         food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
+    # Pin the amount so these tests exercise payment arithmetic rather than
+    # whichever rate the owner happens to have set today.
     if charges is not None:
         db.execute("UPDATE bookings SET charges_total = %s WHERE booking_id = %s",
                    (charges, request.booking_id))

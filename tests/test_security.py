@@ -7,6 +7,7 @@ misleading customer instructions, and secret leakage.
 
 from __future__ import annotations
 
+import re
 from datetime import timedelta
 from pathlib import Path
 
@@ -131,6 +132,19 @@ def booking_start():
 
 # --- secrets ---------------------------------------------------------------
 
+# Match the shape of a real credential, not the bare prefix. A naive substring
+# check flags documentation placeholders such as "ghp_YOUR_TOKEN" and so reports
+# a leak that does not exist, which trains everyone to ignore the test.
+SECRET_PATTERNS = (
+    ("github token", re.compile(r"ghp_[A-Za-z0-9]{30,}")),
+    ("github fine-grained token", re.compile(r"github_pat_[A-Za-z0-9_]{20,}")),
+    ("openai key", re.compile(r"sk-[A-Za-z0-9]{20,}")),
+    ("google api key", re.compile(r"AIza[A-Za-z0-9_\-]{30,}")),
+    ("slack token", re.compile(r"xox[baprs]-[A-Za-z0-9\-]{20,}")),
+    ("meta token", re.compile(r"EAA[A-Za-z0-9]{60,}")),
+)
+
+
 def test_no_secrets_in_tracked_files():
     """No real credential value may be committed.
 
@@ -142,7 +156,6 @@ def test_no_secrets_in_tracked_files():
     if tracked is None:
         pytest.skip("git is not available to list tracked files")
 
-    forbidden = ("sk-", "AIza", "EAA", "ghp_", "xoxb-")
     allow_suffixes = {".py", ".sql", ".md", ".json", ".yml", ".yaml", ".ini", ".example"}
     offenders = []
     for rel in tracked:
@@ -152,12 +165,10 @@ def test_no_secrets_in_tracked_files():
             continue
         if path.suffix not in allow_suffixes or not path.is_file():
             continue
-        if "test" in path.name or "security" in path.name:
-            continue
         text = path.read_text(errors="ignore")
-        for marker in forbidden:
-            if marker in text:
-                offenders.append(f"{rel}: contains {marker!r}")
+        for label, pattern in SECRET_PATTERNS:
+            if pattern.search(text):
+                offenders.append(f"{rel}: looks like a real {label}")
     assert not offenders, f"possible secrets committed: {offenders}"
 
 
@@ -235,3 +246,14 @@ def test_audit_log_captures_who_did_what(db):
     assert entries[0]["action"] == "booking_requested"
     assert entries[-1]["action"] == "booking_rejected"
     assert entries[-1]["actor"] == OWNER
+
+
+def test_the_secret_scanner_catches_a_real_looking_token():
+    """Guard against the scanner silently becoming useless."""
+    fake = "ghp_" + "A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q7r8"
+    assert any(p.search(fake) for _, p in SECRET_PATTERNS)
+
+
+def test_the_secret_scanner_ignores_a_documentation_placeholder():
+    """A placeholder in a guide is not a leak, and must not fail the build."""
+    assert not any(p.search("ghp_YOUR_TOKEN") for _, p in SECRET_PATTERNS)

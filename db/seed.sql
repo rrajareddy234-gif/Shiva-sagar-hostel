@@ -41,26 +41,44 @@ FROM generate_series(1, 20) AS g(n)
 ON CONFLICT (bed_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
--- Indicative rates. The owner must confirm these before any quote is sent.
+-- Rates confirmed by the owner on 2026-11-03.
+--
+-- The owner quotes a night rate and a day rate for the same room. Both are
+-- stored and both are shown to the customer. Non-AC and AC rooms include food;
+-- the dormitory does not, which the owner stated explicitly.
 -- ---------------------------------------------------------------------------
-INSERT INTO rate_plans (name, room_type, food_included, daily_rate, hourly_rate, notes)
-SELECT v.name, v.room_type, v.food_included, v.daily_rate, v.hourly_rate,
-       'indicative rate, awaiting owner confirmation'
+INSERT INTO rate_plans (name, room_type, food_included, stay_mode, daily_rate, hourly_rate, notes)
+SELECT v.name, v.room_type, v.food_included, v.stay_mode, v.daily_rate, v.hourly_rate,
+       'confirmed by the owner 2026-11-03'
 FROM (VALUES
-    ('Non-AC with food',    'NON_AC', true,  350.00,  50.00),
-    ('Non-AC without food', 'NON_AC', false, 300.00,  45.00),
-    ('AC with food',        'AC',     true,  450.00,  60.00),
-    ('AC without food',     'AC',     false, 400.00,  55.00),
-    ('Dormitory mat',       'DORM',   false, 200.00,  30.00)
-) AS v(name, room_type, food_included, daily_rate, hourly_rate)
+    ('Non-AC with food per night', 'NON_AC', true,  'NIGHT', 200.00, NULL::numeric),
+    ('Non-AC with food per day',   'NON_AC', true,  'DAY',   250.00, NULL::numeric),
+    ('AC with food per night',     'AC',     true,  'NIGHT', 300.00, NULL::numeric),
+    ('AC with food per day',       'AC',     true,  'DAY',   350.00, NULL::numeric),
+    ('Dormitory mat per night',    'DORM',   false, 'NIGHT', 100.00, NULL::numeric),
+    ('Dormitory mat per day',      'DORM',   false, 'DAY',   150.00, NULL::numeric)
+) AS v(name, room_type, food_included, stay_mode, daily_rate, hourly_rate)
 WHERE NOT EXISTS (SELECT 1 FROM rate_plans rp WHERE rp.name = v.name);
 
 -- ---------------------------------------------------------------------------
+-- Extras the owner sells or rents. Confirmed 2026-11-03.
+-- ---------------------------------------------------------------------------
+INSERT INTO extras (name, price, unit, notes) VALUES
+    ('New bedsheet', 50.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
+    ('New towel',   100.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
+    ('New pillow',   50.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
+    ('Locker',       30.00, 'PER_MONTH','confirmed by the owner 2026-11-03')
+ON CONFLICT (name) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
 -- A flag the owner can read back, so nothing here is silently treated as live.
+-- The rates above are confirmed. The room list still needs the owner's word.
 -- ---------------------------------------------------------------------------
 INSERT INTO settings (key, value) VALUES
-    ('configuration_confirmed', 'false'::jsonb),
-    ('configuration_source', '"historic records supplied by the owner"'::jsonb)
+    ('rates_confirmed', 'true'::jsonb),
+    ('rates_confirmed_on', '"2026-11-03"'::jsonb),
+    ('rooms_confirmed', 'false'::jsonb),
+    ('configuration_source', '"rates confirmed by the owner 2026-11-03; rooms still historic"'::jsonb)
 ON CONFLICT (key) DO NOTHING;
 
 COMMIT;

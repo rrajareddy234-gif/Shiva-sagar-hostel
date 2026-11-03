@@ -125,9 +125,11 @@ I will not claim these passed, because they did not run:
 
 - **Nothing is live.** No real customer has been messaged. The system has never
   spoken to your WhatsApp number.
-- **Your room list and prices are unconfirmed.** The rooms and the ₹350 / ₹450 /
-  ₹200 rates in `db/seed.sql` are what you told me, and each row is flagged
-  unconfirmed. They must be checked before any customer is quoted.
+- **Your room list is still unconfirmed.** The rooms in `db/seed.sql` are the
+  historic list, flagged unconfirmed; they must be checked before a bed is
+  promised. The **rates are confirmed** (2026-11-03) and live: non-AC with food
+  Rs 200 a night / Rs 250 a day, AC with food Rs 300 / Rs 350, dormitory Rs 100 /
+  Rs 150, plus extras.
 - **Automatic follow-up is switched off**, deliberately. Following up more than
   24 hours after a guest writes needs a Meta-approved message template, and none
   exists. Until one does, follow-up is manual.

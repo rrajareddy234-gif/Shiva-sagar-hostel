@@ -76,12 +76,41 @@ CREATE TABLE IF NOT EXISTS rate_plans (
     name          text NOT NULL,
     room_type     text NOT NULL CHECK (room_type IN ('AC', 'NON_AC', 'DORM')),
     food_included boolean NOT NULL DEFAULT false,
+    -- A stay can be priced per night or per day; the owner quotes both.
+    stay_mode     text NOT NULL DEFAULT 'NIGHT' CHECK (stay_mode IN ('NIGHT', 'DAY')),
     daily_rate    numeric(10,2) CHECK (daily_rate >= 0),
     hourly_rate   numeric(10,2) CHECK (hourly_rate >= 0),
     min_hours     integer NOT NULL DEFAULT 1,
     effective_from timestamptz NOT NULL DEFAULT now(),
     active        boolean NOT NULL DEFAULT true,
     notes         text
+);
+
+-- Existing databases predate stay_mode; add it without disturbing the data.
+ALTER TABLE rate_plans
+    ADD COLUMN IF NOT EXISTS stay_mode text NOT NULL DEFAULT 'NIGHT';
+ALTER TABLE rate_plans DROP CONSTRAINT IF EXISTS rate_plans_stay_mode_check;
+ALTER TABLE rate_plans ADD CONSTRAINT rate_plans_stay_mode_check
+    CHECK (stay_mode IN ('NIGHT', 'DAY'));
+
+-- Only one plan may be current for a given room type, food option and stay mode.
+CREATE UNIQUE INDEX IF NOT EXISTS rate_plans_one_active
+    ON rate_plans (room_type, food_included, stay_mode)
+    WHERE active;
+
+-- ---------------------------------------------------------------------------
+-- Chargeable extras: items the owner sells or rents alongside a bed.
+-- Prices are the owner's; nothing here is invented by the system.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS extras (
+    extra_id   uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    name       text NOT NULL UNIQUE,
+    price      numeric(10,2) NOT NULL CHECK (price >= 0),
+    -- What one charge covers: a single item, the whole stay, or a month.
+    unit       text NOT NULL DEFAULT 'PER_ITEM'
+               CHECK (unit IN ('PER_ITEM', 'PER_STAY', 'PER_MONTH', 'PER_NIGHT')),
+    active     boolean NOT NULL DEFAULT true,
+    notes      text
 );
 
 -- ---------------------------------------------------------------------------

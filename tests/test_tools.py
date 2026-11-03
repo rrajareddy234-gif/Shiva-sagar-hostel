@@ -98,10 +98,22 @@ def test_availability_rejects_a_bad_date(seeded):
 
 def test_prices_come_from_the_rate_plans(seeded):
     result = run(seeded, "get_prices")
-    rates = {r["name"]: r for r in result["rates"]}
-    assert rates["Non-AC with food"]["per_day"] == "350.00"
-    assert rates["AC with food"]["per_day"] == "450.00"
-    assert rates["Dormitory mat"]["per_day"] == "200.00"
+    rates = {(r["room_type"], r["stay_mode"]): r for r in result["rates"]}
+    assert rates[("NON_AC", "NIGHT")]["per_day"] == "200.00"
+    assert rates[("NON_AC", "DAY")]["per_day"] == "250.00"
+    assert rates[("AC", "NIGHT")]["per_day"] == "300.00"
+    assert rates[("AC", "DAY")]["per_day"] == "350.00"
+    assert rates[("DORM", "NIGHT")]["per_day"] == "100.00"
+    assert rates[("DORM", "DAY")]["per_day"] == "150.00"
+
+
+def test_prices_include_the_extras(seeded):
+    result = run(seeded, "get_prices")
+    extras = {e["name"]: e["price"] for e in result["extras"]}
+    assert extras["New bedsheet"] == "50.00"
+    assert extras["New towel"] == "100.00"
+    assert extras["New pillow"] == "50.00"
+    assert extras["Locker"] == "30.00"
 
 
 def test_prices_are_empty_when_no_plans_exist(db):
@@ -121,16 +133,43 @@ def test_facilities_lists_only_real_room_types(seeded):
 def test_quote_computes_the_total(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-03",
-                  "room_type": "NON_AC", "food_included": True})
+                  "room_type": "NON_AC"})
     assert result["units"] == 2
-    assert result["total"] == "700.00"
+    assert result["stay_mode"] == "NIGHT"
+    assert result["total"] == "400.00"
 
 
 def test_quote_for_ac_with_food(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "AC", "food_included": True})
-    assert result["total"] == "450.00"
+                  "room_type": "AC"})
+    assert result["total"] == "300.00"
+    assert result["food_included"] is True
+
+
+def test_quote_uses_the_day_rate_when_asked(seeded):
+    result = run(seeded, "quote_stay",
+                 {"check_in": "2026-12-01", "check_out": "2026-12-02",
+                  "room_type": "AC", "stay_mode": "DAY"})
+    assert result["stay_mode"] == "DAY"
+    assert result["total"] == "350.00"
+
+
+def test_quote_adds_extras_to_the_total(seeded):
+    result = run(seeded, "quote_stay",
+                 {"check_in": "2026-12-01", "check_out": "2026-12-02",
+                  "room_type": "NON_AC",
+                  "extras": {"New towel": 1, "Locker": 1}})
+    # 200 for the night, plus a 100 towel and a 30 locker.
+    assert result["total"] == "330.00"
+    assert result["accommodation_total"] == "200.00"
+
+
+def test_quote_refuses_an_unknown_extra(seeded):
+    result = run(seeded, "quote_stay",
+                 {"check_in": "2026-12-01", "check_out": "2026-12-02",
+                  "room_type": "NON_AC", "extras": {"Helicopter": 1}})
+    assert "error" in result
 
 
 def test_quote_fails_clearly_when_no_rate_exists(seeded):

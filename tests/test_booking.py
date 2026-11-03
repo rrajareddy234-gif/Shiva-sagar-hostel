@@ -43,14 +43,22 @@ def test_request_creates_requested_booking_and_hold(db):
     assert request.status == "REQUESTED"
     assert request.reference.startswith("SPG-")
     assert request.hold_id is not None
-    assert request.charges_total == Decimal("700.00")
+    # Two nights in a non-AC room at the owner's 200 a night.
+    assert request.charges_total == Decimal("400.00")
     hold = db.query_one("SELECT status FROM bed_holds WHERE hold_id = %s", (request.hold_id,))
     assert hold["status"] == "ACTIVE"
 
 
-def test_request_without_food_uses_the_no_food_rate(db):
-    request = _request(db, food_included=False)
-    assert request.charges_total == Decimal("600.00")
+def test_request_without_food_uses_the_dormitory_rate(db):
+    """Non-AC rooms include food, so the no-food rate is the dormitory's."""
+    request = _request(db, bed_id="DORM-M1", food_included=False)
+    assert request.charges_total == Decimal("200.00")
+
+
+def test_asking_for_no_food_in_a_food_room_is_refused(db):
+    """Quoting a guest less than the owner charges would be wrong."""
+    with pytest.raises(NotFound, match="only offered with food"):
+        _request(db, food_included=False)
 
 
 def test_request_is_never_auto_confirmed(db):

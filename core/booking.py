@@ -103,8 +103,9 @@ def _require_transition(current: str, target: str) -> None:
 
 def create_request(db: Database, *, phone: str, full_name: str | None,
                    gender: str | None, bed_id: str, check_in_at: datetime,
-                   check_out_at: datetime, food_included: bool = False,
+                   check_out_at: datetime, food_included: bool | None = None,
                    mode: str = "daily", extras=0, discount=0,
+                   stay_mode: str = "NIGHT",
                    hold_minutes: int = DEFAULT_HOLD_MINUTES,
                    source: str = "WHATSAPP") -> BookingRequest:
     """Create a booking request and a temporary hold. Does not confirm anything."""
@@ -124,7 +125,8 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
     guest_id = get_or_create_guest(db, phone=phone, full_name=full_name, gender=gender)
     quote = pricing.quote(db, room_type=bed["room_type"], food_included=food_included,
                           start=check_in_at, end=check_out_at, mode=mode,
-                          extras=extras, discount=discount)
+                          stay_mode=stay_mode, extras=extras, discount=discount)
+    food_included = quote.food_included
 
     with db.transaction() as cur:
         # Refuse if the bed is already held by someone else for this window.

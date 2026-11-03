@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, booking, inbox, payments
+from core import availability, booking, inbox, payments, pricing
 from core.db import Database
 
 HELP = (
@@ -119,29 +119,49 @@ def _price(db: Database, text: str, room_type: str | None,
     """Quote from the owner's active rate plans. Never invents a figure."""
     rows = db.query_all(
         """
-        SELECT room_type, food_included, daily_rate, hourly_rate
+        SELECT room_type, food_included, stay_mode, daily_rate
         FROM rate_plans
-        WHERE active
-        ORDER BY room_type, food_included DESC
+        WHERE active AND daily_rate IS NOT NULL
+        ORDER BY room_type, food_included DESC, stay_mode
         """
     )
     if not rows:
         return ("I don't have current prices to hand. I'll ask the owner and get "
                 "back to you.")
 
-    lines = ["Our current rates are:"]
+    # Group night and day rates for the same room and food option onto one line.
+    grouped: dict[tuple, dict] = {}
     for row in rows:
-        label = {
-            "AC": "AC",
-            "NON_AC": "Non-AC",
-            "DORM": "Dormitory mat",
-        }.get(row["room_type"], row["room_type"])
-        with_food = "with food" if row["food_included"] else "without food"
-        if row["daily_rate"] is not None:
-            lines.append(f"- {label}, {with_food}: {_rupees(row['daily_rate'])} per day")
-        if row["hourly_rate"] is not None:
-            lines.append(f"  ({_rupees(row['hourly_rate'])} per hour)")
-    lines.append("Prices are per bed. Tell me your dates and I can check availability.")
+        key = (row["room_type"], row["food_included"])
+        grouped.setdefault(key, {})[row["stay_mode"]] = row["daily_rate"]
+
+    label_of = {"AC": "AC", "NON_AC": "Non-AC", "DORM": "Dormitory mat (no cot)"}
+    lines = ["Our current rates per bed are:"]
+    for (rt, food), modes in grouped.items():
+        label = label_of.get(rt, rt)
+        suffix = " with food" if food else ""
+        parts = []
+        if "NIGHT" in modes:
+            parts.append(f"{_rupees(modes['NIGHT'])} a night")
+        if "DAY" in modes:
+            parts.append(f"{_rupees(modes['DAY'])} a day")
+        lines.append(f"- {label}{suffix}: " + " / ".join(parts))
+
+    extras = pricing.list_extras(db)
+    if extras:
+        lines.append("")
+        lines.append("Other items:")
+        for extra in extras:
+            per = {
+                "PER_ITEM": "each",
+                "PER_STAY": "per stay",
+                "PER_MONTH": "per month",
+                "PER_NIGHT": "per night",
+            }.get(extra["unit"], "")
+            lines.append(f"- {extra['name']}: {_rupees(extra['price'])} {per}".rstrip())
+
+    lines.append("")
+    lines.append("Tell me your dates and I can check availability.")
     return "\n".join(lines)
 
 

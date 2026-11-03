@@ -97,19 +97,28 @@ def _check_availability(ctx: ToolContext, args: dict) -> dict:
 
 def _get_prices(ctx: ToolContext, args: dict) -> dict:
     rows = ctx.db.query_all(
-        "SELECT name, room_type, food_included, daily_rate, hourly_rate, min_hours "
-        "FROM rate_plans WHERE active = true ORDER BY room_type, food_included")
+        "SELECT name, room_type, food_included, stay_mode, daily_rate, hourly_rate, min_hours "
+        "FROM rate_plans WHERE active = true ORDER BY room_type, food_included, stay_mode")
+    extras = ctx.db.query_all(
+        "SELECT name, price, unit FROM extras WHERE active ORDER BY name")
     return {
         "rates": [
             {"name": r["name"], "room_type": r["room_type"],
              "food_included": r["food_included"],
+             "stay_mode": r["stay_mode"],
              "per_day": str(r["daily_rate"]) if r["daily_rate"] is not None else None,
              "per_hour": str(r["hourly_rate"]) if r["hourly_rate"] is not None else None,
              "minimum_hours": r["min_hours"]}
             for r in rows
         ],
+        "extras": [
+            {"name": e["name"], "price": str(e["price"]), "unit": e["unit"]}
+            for e in extras
+        ],
         "currency": "INR",
-        "note": "These are the owner's current rates. Quote them exactly.",
+        "note": ("These are the owner's current rates. Quote them exactly. "
+                 "A NIGHT rate applies to an overnight stay, a DAY rate to a "
+                 "daytime stay. Never combine or average them."),
     }
 
 
@@ -132,18 +141,39 @@ def _quote_stay(ctx: ToolContext, args: dict) -> dict:
     room_type = (args.get("room_type") or "NON_AC").upper()
     if room_type == "NONAC":
         room_type = "NON_AC"
-    food = bool(args.get("food_included"))
+    food = args.get("food_included")
+    if food is not None:
+        food = bool(food)
+    stay_mode = (args.get("stay_mode") or "NIGHT").upper()
+    if stay_mode in ("NIGHTLY", "OVERNIGHT"):
+        stay_mode = "NIGHT"
+    elif stay_mode in ("DAILY", "DAYTIME"):
+        stay_mode = "DAY"
+
+    # Price any extras the customer asked about, e.g. {"New towel": 2}.
+    extras_amount = 0
+    extra_lines: list[dict] = []
+    requested_extras = args.get("extras") or {}
+    if isinstance(requested_extras, dict) and requested_extras:
+        extras_amount, extra_lines = pricing.extras_total(ctx.db, requested_extras)
+
     result = pricing.quote(ctx.db, room_type=room_type, food_included=food,
-                           start=start, end=end, mode=args.get("mode") or "daily")
-    return {
+                           start=start, end=end, mode=args.get("mode") or "daily",
+                           stay_mode=stay_mode, extras=extras_amount)
+    out = {
         "room_type": room_type,
-        "food_included": food,
+        "food_included": result.food_included,
+        "stay_mode": stay_mode,
         "units": result.units,
         "unit_rate": str(result.unit_rate),
         "total": str(result.charges_total),
         "currency": "INR",
         "note": "This total is final for these dates. Do not adjust it.",
     }
+    if extra_lines:
+        out["extras"] = extra_lines
+        out["accommodation_total"] = str(result.base_amount)
+    return out
 
 
 def _create_booking_request(ctx: ToolContext, args: dict) -> dict:
@@ -171,7 +201,8 @@ def _create_booking_request(ctx: ToolContext, args: dict) -> dict:
         ctx.db, phone=ctx.phone, full_name=full_name,
         gender=(args.get("gender") or "UNKNOWN").upper(),
         bed_id=free[0].bed_id, check_in_at=start, check_out_at=end,
-        food_included=bool(args.get("food_included")),
+        food_included=args.get("food_included"),
+        stay_mode=(args.get("stay_mode") or "NIGHT").upper(),
         hold_minutes=HOLD_MINUTES,
     )
     return {

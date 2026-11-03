@@ -29,7 +29,7 @@ IST = timezone(timedelta(hours=5, minutes=30))
 
 TABLES = (
     "audit_log", "referrals", "partners", "messages", "conversations",
-    "payments", "bed_holds", "bookings", "rate_plans", "enquiries",
+    "payments", "bed_holds", "bookings", "rate_plans", "extras", "enquiries",
     "guests", "beds", "rooms", "settings",
 )
 
@@ -84,12 +84,20 @@ def seeded(db: Database) -> Database:
             "('DORM-M1','DORM','MAT'), ('DORM-M2','DORM','MAT'), ('DORM-M3','DORM','MAT')"
         )
         cur.execute(
-            "INSERT INTO rate_plans (name, room_type, food_included, daily_rate, hourly_rate, min_hours) VALUES "
-            "('Non-AC with food','NON_AC',true,350,50,1), "
-            "('Non-AC without food','NON_AC',false,300,45,1), "
-            "('AC with food','AC',true,450,60,1), "
-            "('AC without food','AC',false,400,55,1), "
-            "('Dormitory mat','DORM',false,200,30,1)"
+            "INSERT INTO rate_plans (name, room_type, food_included, stay_mode, daily_rate, hourly_rate, min_hours) VALUES "
+            "('Non-AC with food per night','NON_AC',true,'NIGHT',200,20,1), "
+            "('Non-AC with food per day','NON_AC',true,'DAY',250,20,1), "
+            "('AC with food per night','AC',true,'NIGHT',300,30,1), "
+            "('AC with food per day','AC',true,'DAY',350,30,1), "
+            "('Dormitory mat per night','DORM',false,'NIGHT',100,10,1), "
+            "('Dormitory mat per day','DORM',false,'DAY',150,10,1)"
+        )
+        cur.execute(
+            "INSERT INTO extras (name, price, unit) VALUES "
+            "('New bedsheet',50,'PER_ITEM'), "
+            "('New towel',100,'PER_ITEM'), "
+            "('New pillow',50,'PER_ITEM'), "
+            "('Locker',30,'PER_MONTH')"
         )
     return db
 

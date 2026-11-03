@@ -44,7 +44,7 @@ Be clear about this. The system is *proven*, not *live*.
 | Meta access token | `local-dev-token` | your real token |
 | AI | no key, falls back to plain replies | an AI key, or run without one |
 | Rooms and beds | historic seed data, marked unconfirmed | your confirmation |
-| Prices | indicative, marked unconfirmed | your confirmation |
+| Prices | **confirmed and live** | — |
 | Server | this dev machine, temporary | a small rented server |
 | Domain | a temporary dev URL | your own domain |
 
@@ -126,9 +126,17 @@ answered, because the AI must never invent a price or a bed.
    1NA (5 beds), 2AC (7), 3AC (10), 4NA (5), 6NA (12), 7NA (4), plus a 20-mat
    non-AC dormitory. Every row is marked unconfirmed. Is this still correct?
 
-2. **The rates.** Currently seeded as indicative: non-AC with food Rs 350 a day,
-   AC with food Rs 450 a day, dormitory without food Rs 200 a day. These are
-   marked unconfirmed and are not quoted to customers. What are the real rates?
+2. ~~The rates.~~ **Done.** You confirmed these on 2026-11-03 and they are now
+   live in the database and quoted to customers:
+
+   | Room | A night | A day |
+   |---|---:|---:|
+   | Non-AC, with food | Rs 200 | Rs 250 |
+   | AC, with food | Rs 300 | Rs 350 |
+   | Dormitory mat, no food | Rs 100 | Rs 150 |
+
+   Extras: new bedsheet Rs 50, new towel Rs 100, new pillow Rs 50, locker Rs 30
+   a month.
 
 ## The order I suggest
 

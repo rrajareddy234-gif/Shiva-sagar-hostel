@@ -63,9 +63,27 @@ def test_greeting_returns_help(db):
 def test_price_quotes_the_owners_rates(db):
     reply = router.route(db, "what is the price?")
     assert reply.handled is True
-    assert "350" in reply.text          # non-AC with food
-    assert "450" in reply.text          # AC with food
-    assert "200" in reply.text          # dormitory
+    assert "200" in reply.text          # non-AC with food, per night
+    assert "250" in reply.text          # non-AC with food, per day
+    assert "300" in reply.text          # AC with food, per night
+    assert "350" in reply.text          # AC with food, per day
+    assert "100" in reply.text          # dormitory, per night
+    assert "150" in reply.text          # dormitory, per day
+
+
+def test_price_reply_lists_the_extras(db):
+    reply = router.route(db, "what are your rates?")
+    assert "New bedsheet" in reply.text
+    assert "New towel" in reply.text
+    assert "New pillow" in reply.text
+    assert "Locker" in reply.text
+
+
+def test_price_reply_names_the_night_and_day_rates(db):
+    """A guest must be able to tell which figure is which."""
+    reply = router.route(db, "how much do you charge?")
+    assert "a night" in reply.text
+    assert "a day" in reply.text
 
 
 def test_price_does_not_invent_a_figure_when_no_plan_exists(db):
