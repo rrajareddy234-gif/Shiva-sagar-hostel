@@ -15,10 +15,14 @@ from dataclasses import dataclass
 
 from ai.adapter import AIClient, AIUnavailable
 from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM
-from core import commands, router, security
+from core import commands, router, security, tools
 from core.db import Database
 
 log = logging.getLogger(__name__)
+
+# The model may call tools, read the results and answer. Two rounds is enough
+# for a booking conversation; a third would mean the model is looping.
+MAX_TOOL_ROUNDS = 3
 
 
 @dataclass(frozen=True)
@@ -27,6 +31,7 @@ class Outcome:
     handled_by: str            # owner_command | router | ai | fallback
     intent: str = "unknown"
     escalate: bool = False
+    tool_calls: tuple[str, ...] = ()
 
 
 def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | None,
@@ -57,17 +62,65 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
     if ai is None:
         return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
 
-    system = OWNER_SYSTEM if role == security.OWNER else CUSTOMER_SYSTEM
-    messages = list(history or []) + [{"role": "user", "content": text or ""}]
-    try:
-        response = ai.complete(system=system, messages=messages)
-    except AIUnavailable as exc:
-        log.error("AI unavailable: %s", exc)
-        return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
+    return _ask_ai(db, ai=ai, role=role, phone=phone, text=text, history=history)
 
-    if not response.text:
-        return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
-    return Outcome(reply=response.text, handled_by="ai")
+
+def _ask_ai(db: Database, *, ai: AIClient, role: str, phone: str, text: str,
+            history: list[dict] | None) -> Outcome:
+    """Ask the model, letting it call tools, then return its answer."""
+    system = OWNER_SYSTEM if role == security.OWNER else CUSTOMER_SYSTEM
+    ctx = tools.ToolContext(db=db, phone=phone, role=role)
+    specs = tools.specs_for(role)
+    messages = list(history or []) + [{"role": "user", "content": text or ""}]
+    used: list[str] = []
+
+    for _ in range(MAX_TOOL_ROUNDS):
+        try:
+            response = ai.complete(system=system, messages=messages, tools=specs)
+        except AIUnavailable as exc:
+            log.error("AI unavailable: %s", exc)
+            return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
+        except Exception as exc:
+            log.exception("the AI call failed: %s", exc)
+            return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
+
+        _record(db, response, role=role, phone=phone, purpose="reply")
+
+        if not response.tool_calls:
+            if not response.text:
+                return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
+            return Outcome(reply=response.text, handled_by="ai", tool_calls=tuple(used))
+
+        # Record the model's request, run each tool, and feed the results back.
+        messages.append({"role": "assistant", "content": response.text or "",
+                         "tool_calls": [{"id": f"call_{i}", "name": call.name,
+                                         "arguments": call.arguments}
+                                        for i, call in enumerate(response.tool_calls)]})
+        for i, call in enumerate(response.tool_calls):
+            used.append(call.name)
+            result = tools.execute(ctx, call.name, call.arguments)
+            messages.append({"role": "tool", "tool_call_id": f"call_{i}",
+                             "name": call.name, "content": _json(result)})
+
+    log.warning("the model kept calling tools without answering for %s", phone)
+    return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True,
+                   tool_calls=tuple(used))
+
+
+def _json(value) -> str:
+    import json
+    return json.dumps(value, default=str)
+
+
+def _record(db: Database, response, *, role: str, phone: str, purpose: str) -> None:
+    """Store the token count and estimated cost, so the owner can see the spend."""
+    if not (response.input_tokens or response.output_tokens):
+        return
+    try:
+        from ai.usage import record_usage
+        record_usage(db, response, purpose=f"{purpose}:{role}")
+    except Exception as exc:  # never let bookkeeping break a reply
+        log.warning("could not record AI usage: %s", exc)
 
 
 def _fallback(role: str) -> str:
