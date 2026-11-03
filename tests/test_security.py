@@ -166,7 +166,9 @@ def test_env_example_has_no_real_values():
         if "=" in line and not line.strip().startswith("#"):
             key, _, value = line.partition("=")
             if key.strip() in ("CHANNEL_PROVIDER", "AI_PROVIDER", "AI_MODEL",
-                               "HOSTEL_TIMEZONE", "DATABASE_URL"):
+                               "HOSTEL_TIMEZONE", "DATABASE_URL",
+                               # Non-secret defaults, safe to show.
+                               "POSTGRES_USER", "POSTGRES_DB", "N8N_USER"):
                 continue
             assert value.strip() == "", f"{key.strip()} must be blank in .env.example"
 
