@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import pathlib
 from datetime import timedelta
 from decimal import Decimal
 
@@ -307,3 +308,31 @@ def test_set_monthly_rate_replaces_the_previous(db):
     day = pricing.monthly_quote(db, room_type="AC", food_included=True,
                                 months=1, plan_kind="STANDARD", stay_mode="DAY")
     assert day.monthly_rate == Decimal("11000.00")
+
+
+# --- the rate card document must match the database -------------------------
+
+def _card_rupees(path):
+    """Every 'Rs N,NNN' figure in the rate card, as a set of ints."""
+    import re
+    text = pathlib.Path(path).read_text()
+    return {int(m.replace(",", "")) for m in re.findall(r"Rs ([\d,]+)", text)}
+
+
+def test_rate_card_document_matches_the_database(db):
+    """docs/RATE_CARD.md is shown to guests, so it must not drift from the data.
+
+    Only the financial figures are compared: the test fixture deliberately uses
+    a smaller room list than the real seed, so bed counts would not match.
+    """
+    card = _card_rupees("docs/RATE_CARD.md")
+
+    nightly = {int(p["daily_rate"]) for p in db.query_all(
+        "SELECT daily_rate FROM rate_plans WHERE active")}
+    monthly = {int(p["monthly_rate"]) for p in db.query_all(
+        "SELECT monthly_rate FROM monthly_plans WHERE active")}
+    extras = {int(e["price"]) for e in db.query_all(
+        "SELECT price FROM extras WHERE active")}
+
+    missing = (nightly | monthly | extras) - card
+    assert not missing, f"rate card is missing figures: {sorted(missing)}"
