@@ -26,9 +26,11 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## GitHub
 - Authenticated as `rrajareddy234-gif`.
-- Write access is now available. Re-verified 2026-11-03: the repo reports
-  `permissions.push = true` and `admin = true`, so branches and pull requests
-  can be pushed. Never push to `main` directly; use a feature branch and a PR.
+- The available token is READ-ONLY. Re-verified 2026-11-03: creating a ref
+  returns `403 Resource not accessible by integration`, and `git push` is
+  refused with `403`. The repo API may report `permissions.push = true` for the
+  user, but that is the owner's permission, not the token's. Commits stay local
+  until a write-capable credential is supplied.
 - Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (public). `main` is at
   commit `8b831b8` and matches the local checkout.
 
