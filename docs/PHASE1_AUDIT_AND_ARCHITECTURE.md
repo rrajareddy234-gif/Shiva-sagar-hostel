@@ -33,7 +33,20 @@ Authenticated as **`rrajareddy234-gif`**. Token has repo scope.
 | `rrajareddy234-gif/Print-bot` | public | A 2-file Node/Express webhook stub: `Index.js` (a `/webhook` route that logs the body and returns 200) and `package.json`. Not a hostel system; unrelated. |
 | `rrajareddy234-gif/Webwhatsup` | public | Empty (0 KB, no commits). |
 
-I can create branches, push, and open pull requests on these repositories.
+**Access limitation found during this audit:** the GitHub token available to me can
+**read** repositories but cannot **write**. Pushing to `Shiva-sagar-hostel` returns
+`403 Permission to rrajareddy234-gif/Shiva-sagar-hostel.git denied`, and the contents
+API returns `403 Resource not accessible by integration`. The token reports
+`push: true` in repo permissions but the integration is not granted write. So I cannot
+push commits or open pull requests on your behalf yet.
+
+The work is committed locally and is safe. To get it into GitHub, either:
+
+- grant the GitHub integration **Contents: read and write** permission, or
+- paste the commit yourself, or
+- tell me to use a personal access token that has `repo` scope.
+
+I will keep every change as a local commit in the meantime, so nothing is lost.
 
 ### 1.3 The previously-built preview app (partially reachable)
 
