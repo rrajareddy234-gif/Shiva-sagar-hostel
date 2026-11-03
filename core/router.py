@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, booking, payments
+from core import availability, booking, inbox, payments
 from core.db import Database
 
 HELP = (
@@ -288,6 +288,17 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
             lines.append(f"- {row['phone']} since {row['last_message_at']:%d %b %H:%M}")
         return Reply("\n".join(lines), handled=True, intent="owner_unanswered")
 
+    if re.search(r"\b(enquir\w*|enquries|messages?|questions?|how many people)\b", lowered):
+        day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+        today = inbox.enquiries_between(db, day_start, day_start + timedelta(days=1))
+        open_now = inbox.open_enquiries(db)
+        waiting = unanswered(db)
+        return Reply(
+            f"Enquiries today: {len(today)}.\n"
+            f"Open enquiries: {len(open_now)}.\n"
+            f"Waiting for a reply: {len(waiting)}.",
+            handled=True, intent="owner_enquiries")
+
     if re.search(r"\b(occupied|in house|staying|checked in|guests? (in|staying))\b", lowered):
         rows = booking.in_house(db)
         if not rows:
@@ -299,9 +310,50 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
                          f"until {row['check_out_at']:%d %b}")
         return Reply("\n".join(lines), handled=True, intent="owner_in_house")
 
+    # "show me the full hostel status" and similar. This is the one question the
+    # owner asks most often, so it must not cost an AI call.
+    if re.search(r"\b(full|complete|overall|entire)\b.*\b(status|report|summary|"
+                 r"picture|update)\b|^status$|^report$", lowered):
+        return _full_status(db, now)
+
     return Reply("", handled=False, needs_ai=True, intent="unknown")
 
 
+def _full_status(db: Database, now: datetime) -> Reply:
+    """One screen answering "how is the hostel doing right now"."""
+    start = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    summary = availability.availability_summary(db, start, start + timedelta(days=1))
+    month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    revenue = payments.revenue_between(db, month_start, now + timedelta(days=1))
+
+    pending = booking.pending_requests(db)
+    in_house = booking.in_house(db)
+    arrivals = booking.arrivals_on(db, now + timedelta(days=1))
+    overdue = booking.overdue_checkouts(db)
+    dues = payments.outstanding_bookings(db)
+    unverified = payments.unverified_payments(db)
+    waiting_reply = unanswered(db)
+
+    lines = [
+        f"Hostel status, {now:%d %b %Y %H:%M}",
+        "",
+        f"Beds: {summary['available_beds']} free of {summary['total_beds']} "
+        f"({summary['occupied_beds']} occupied, {summary['held_beds']} held, "
+        f"{summary['blocked_beds']} blocked)",
+        f"Full rooms: {', '.join(summary['full_rooms']) or 'none'}",
+        f"Guests in house: {len(in_house)}",
+        f"Arrivals tomorrow: {len(arrivals)}",
+        f"Overdue checkouts: {len(overdue)}",
+        "",
+        f"Booking requests awaiting you: {len(pending)}",
+        f"Unanswered enquiries: {len(waiting_reply)}",
+        f"Payments awaiting verification: {len(unverified)}",
+        f"Bookings with a balance: {len(dues)}",
+        "",
+        f"Verified revenue this month: {_rupees(revenue)}",
+    ]
+    return Reply("\n".join(lines), handled=True, intent="owner_status")
+
+
 def unanswered(db: Database) -> list[dict]:
-    from core import inbox
     return inbox.unanswered_enquiries(db)

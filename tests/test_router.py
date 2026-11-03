@@ -272,3 +272,52 @@ def test_a_customer_does_not_get_ai_cost_via_owner_answer(db):
     from core import router
     reply = router.route(db, "what is the ai cost this month?", role="customer")
     assert "$" not in reply.text
+
+
+# --- full status -----------------------------------------------------------
+
+def test_owner_full_status_is_answered_without_ai(db):
+    reply = router.owner_answer(db, "show me the full hostel status")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+    assert reply.intent == "owner_status"
+
+
+def test_owner_full_status_shows_the_live_numbers(db):
+    request = _confirmed(db)
+    reply = router.owner_answer(db, "show me the full hostel status")
+    assert "9 free of 10" in reply.text
+    assert "1 occupied" in reply.text
+    assert "Booking requests awaiting you: 0" in reply.text
+    assert "Bookings with a balance: 1" in reply.text
+    assert "Verified revenue this month" in reply.text
+
+    # A confirmed booking is not yet a guest in the building. Only a check-in
+    # makes someone "in house".
+    assert "Guests in house: 0" in reply.text
+    booking.check_in(db, request.booking_id, actor=OWNER)
+    reply = router.owner_answer(db, "show me the full hostel status")
+    assert "Guests in house: 1" in reply.text
+
+
+def test_owner_status_word_alone_works(db):
+    for text in ("status", "report", "give me the overall summary",
+                 "show the complete picture"):
+        reply = router.owner_answer(db, text)
+        assert reply.intent == "owner_status", text
+
+
+def test_full_status_never_reaches_the_ai(db):
+    """Every phrase in the brief's list must be answered by SQL, not a model."""
+    from core import handler
+    for text in ("how many vacancies today?", "show all occupied beds",
+                 "who is checking in tomorrow?", "show pending booking requests",
+                 "who has outstanding payments?", "how much did we collect today?",
+                 "show this month's revenue", "which customers have not checked out?",
+                 "how many enquiries did we receive today?",
+                 "which enquiries have not received a reply?",
+                 "show me the full hostel status"):
+        outcome = handler.handle_message(db, phone=OWNER, text=text, owner_phone=OWNER,
+                                         ai=None)
+        assert outcome.handled_by in ("router", "owner_command"), \
+            f"{text!r} fell through to {outcome.handled_by}"
