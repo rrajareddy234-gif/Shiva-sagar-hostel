@@ -84,8 +84,8 @@ DO UPDATE SET name = EXCLUDED.name,
 --   Dormitory  with food 4500 night /  4500 full day
 --              no food   3500 night /  3500 full day
 --
--- The student concession is a flat Rs 5,000 for any room, but only for a
--- student with a valid institution certificate or a rate the owner has agreed.
+-- These are the same for every guest. There is no student concession; anyone
+-- who wants a lower rate must speak to the owner.
 -- ---------------------------------------------------------------------------
 INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode, monthly_rate, notes)
 SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.stay_mode, v.monthly_rate,
@@ -102,19 +102,21 @@ FROM (VALUES
     ('Monthly dormitory with food',        'DORM',   true,  'STANDARD', 'NIGHT',  4500.00),
     ('Monthly dormitory with food, full day','DORM', true,  'STANDARD', 'DAY',    4500.00),
     ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  3500.00),
-    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    3500.00),
-    ('Monthly concession',                 'ANY',    true,  'CONCESSION','NIGHT', 5000.00),
-    ('Monthly concession, full day',       'ANY',    true,  'CONCESSION','DAY',   5000.00)
+    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    3500.00)
 ) AS v(name, room_type, food_included, plan_kind, stay_mode, monthly_rate)
 ON CONFLICT (plan_kind, room_type, food_included, stay_mode) WHERE active
 DO UPDATE SET name = EXCLUDED.name,
               monthly_rate = EXCLUDED.monthly_rate,
               notes = EXCLUDED.notes;
 
--- Every room type is now priced explicitly, so a generic 'ANY' standard plan is
+-- Every room type is priced explicitly, so a generic 'ANY' standard plan is
 -- stale. Retire it if an earlier run of this file created one.
 UPDATE monthly_plans SET active = false
 WHERE active AND plan_kind = 'STANDARD' AND room_type = 'ANY';
+
+-- There is no concession for anyone. Retire any left by an earlier run.
+UPDATE monthly_plans SET active = false
+WHERE active AND plan_kind = 'CONCESSION';
 
 -- ---------------------------------------------------------------------------
 -- Extras the owner sells or rents. Confirmed 2026-11-03.

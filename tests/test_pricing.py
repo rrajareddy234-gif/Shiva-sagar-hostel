@@ -242,16 +242,24 @@ def test_monthly_three_months_multiplies(db):
     assert quote.charges_total == Decimal("24000.00")
 
 
-def test_monthly_concession_is_flat_five_thousand(db):
-    quote = pricing.monthly_quote(db, room_type="DORM", food_included=True,
-                                  months=1, plan_kind="CONCESSION")
-    assert quote.monthly_rate == Decimal("5000.00")
+def test_monthly_is_the_same_for_everyone(db):
+    """There is no concession plan, so the standard rate is the only rate."""
+    assert pricing.monthly_plan_kinds(db, "AC", True) == ["STANDARD"]
+    assert pricing.monthly_plan_kinds(db, "DORM", False) == ["STANDARD"]
 
 
-def test_monthly_concession_is_never_silently_granted(db):
-    """Both plans exist, so an unstated kind must be refused, not guessed."""
-    with pytest.raises(ValidationError, match="standard and a concession"):
-        pricing.monthly_quote(db, room_type="NON_AC", food_included=True, months=1)
+def test_monthly_unstated_kind_resolves_to_standard(db):
+    """With only one kind, the kind need not be stated."""
+    quote = pricing.monthly_quote(db, room_type="NON_AC", food_included=True, months=1)
+    assert quote.plan_kind == "STANDARD"
+    assert quote.monthly_rate == Decimal("5500.00")
+
+
+def test_monthly_concession_plan_is_refused(db):
+    """No concession exists, so asking for one is refused."""
+    with pytest.raises(NotFound):
+        pricing.monthly_quote(db, room_type="NON_AC", food_included=True,
+                              months=1, plan_kind="CONCESSION")
 
 
 def test_monthly_needs_at_least_one_month(db):

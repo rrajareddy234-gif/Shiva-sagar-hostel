@@ -111,9 +111,7 @@ def seeded(db: Database) -> Database:
             "('Monthly dormitory with food','DORM',true,'STANDARD','NIGHT',4500), "
             "('Monthly dormitory with food, full day','DORM',true,'STANDARD','DAY',4500), "
             "('Monthly dormitory no food','DORM',false,'STANDARD','NIGHT',3500), "
-            "('Monthly dormitory no food, full day','DORM',false,'STANDARD','DAY',3500), "
-            "('Monthly concession','ANY',true,'CONCESSION','NIGHT',5000), "
-            "('Monthly concession, full day','ANY',true,'CONCESSION','DAY',5000)"
+            "('Monthly dormitory no food, full day','DORM',false,'STANDARD','DAY',3500)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "

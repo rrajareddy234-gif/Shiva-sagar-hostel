@@ -127,9 +127,9 @@ The dev database contains leftover rows from earlier manual runs
   `monthly_plans`, not a stay mode on `rate_plans`. It carries `stay_mode` like
   `rate_plans`: NIGHT is a night-only arrangement, DAY a full day. Every room
   type is priced explicitly (AC Rs 8,000/11,000 with food, Rs 5,000/7,000
-  without; Non-AC Rs 5,500 and Rs 4,000; dormitory Rs 4,500 and Rs 3,500). The
-  student concession is a flat Rs 5,000 for any room, `room_type = 'ANY'`, and
-  `_load_monthly_plan` prefers an exact room type over `ANY`. Because both a
-  standard and a concession plan exist, an unstated kind is refused rather than
-  defaulted: the concession is a human decision and the system must never grant
-  it silently. Months are whole; there is no pro-rating.
+  without; Non-AC Rs 5,500 and Rs 4,000; dormitory Rs 4,500 and Rs 3,500).
+  There is **no concession**: the same rate applies to every guest, and anyone
+  wanting a lower rate is told to speak to the owner. `plan_kind` still exists
+  ('STANDARD'/'CONCESSION') so a concession could be added later, and
+  `_load_monthly_plan` prefers an exact room type over `ANY`. Months are whole;
+  there is no pro-rating.

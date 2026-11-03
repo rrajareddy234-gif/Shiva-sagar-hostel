@@ -146,10 +146,9 @@ answered, because the AI must never invent a price or a bed.
    | Non-AC | Rs 5,500 / Rs 5,500 | Rs 4,000 / Rs 4,000 |
    | Dormitory | Rs 4,500 / Rs 4,500 | Rs 3,500 / Rs 3,500 |
 
-   A student concession of Rs 5,000 a month applies to any room, but only for a
-   student with a valid institution certificate or a rate you have agreed.
+   These rates are the same for every guest. There is no concession.
 
-   The system never applies the concession by itself.
+   If a guest wants a lower rate, they must speak to you.
 
 ## The order I suggest
 

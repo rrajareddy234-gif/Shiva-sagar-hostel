@@ -209,8 +209,8 @@ def _quote_monthly_stay(ctx: ToolContext, args: dict) -> dict:
         "total": str(result.charges_total),
         "currency": "INR",
         "note": ("This total is final for that many whole months. It is not "
-                 "pro-rated, and the concession rate applies only to a student "
-                 "with a valid institution certificate or a negotiated rate."),
+                 "pro-rated. This is the same rate for every guest; for any "
+                 "other rate, the guest must speak to the owner."),
     }
 
 
@@ -338,16 +338,15 @@ TOOLS: list[Tool] = [
     ),
     Tool(
         "quote_monthly_stay",
-        "Compute the exact total for a monthly (PG) stay, in whole months. The "
-        "concession rate applies only to a student with a valid institution "
-        "certificate, or a rate the owner has agreed. Ask before assuming it.",
+        "Compute the exact total for a monthly (PG) stay, in whole months. "
+        "The rate is the same for every guest; there is no concession. If a "
+        "guest asks for a lower rate, tell them to speak to the owner.",
         {
             "type": "object",
             "properties": {
                 "room_type": {"type": "string", "enum": ["AC", "NON_AC", "DORM"]},
                 "food_included": {"type": "boolean"},
                 "months": {"type": "integer", "minimum": 1},
-                "plan_kind": {"type": "string", "enum": ["STANDARD", "CONCESSION"]},
                 "stay_mode": {"type": "string", "enum": ["NIGHT", "DAY"]},
             },
             "required": ["room_type", "food_included", "months"],
