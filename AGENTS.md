@@ -26,13 +26,11 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## GitHub
 - Authenticated as `rrajareddy234-gif`.
-- The available token is READ-ONLY. Re-verified 2026-11-03: creating a ref
-  returns `403`. Pushes fail and the contents API returns
-  `403 Resource not accessible by integration`. Commits must stay local until
-  write access is granted or the owner supplies a `repo`-scoped PAT.
-- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (exists, public, still
-  empty — `git/trees/HEAD` returns 409 "Git Repository is empty"). The local
-  repo has commits; they are not pushed.
+- Write access is now available. Re-verified 2026-11-03: the repo reports
+  `permissions.push = true` and `admin = true`, so branches and pull requests
+  can be pushed. Never push to `main` directly; use a feature branch and a PR.
+- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (public). `main` is at
+  commit `8b831b8` and matches the local checkout.
 
 ## Not accessible
 - No n8n instance, no workflow exports, no n8n credentials anywhere.

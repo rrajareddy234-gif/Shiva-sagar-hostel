@@ -10,10 +10,8 @@ This module never talks to the channel directly; it returns text to send.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 
 from core import booking, payments, security
 from core.db import Database
@@ -269,7 +267,7 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
 
         if action == "record_payment":
             row = _resolve_booking(db, command.get("reference"))
-            payment_id = payments.record_payment(
+            payments.record_payment(
                 db, booking_id=str(row["booking_id"]), guest_id=None,
                 amount=command["amount"], method=command.get("method") or "CASH",
                 actor=actor, notes="owner command")

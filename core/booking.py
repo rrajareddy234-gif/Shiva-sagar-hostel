@@ -21,7 +21,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, pricing
+from core import pricing
 from core.db import Database
 from core.errors import (BedUnavailable, InvalidTransition, NotFound,
                          ValidationError)

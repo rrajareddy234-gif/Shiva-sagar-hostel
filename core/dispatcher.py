@@ -13,7 +13,6 @@ from __future__ import annotations
 import logging
 
 from ai.adapter import AIClient
-from ai.usage import record_usage
 from core import handler, inbox
 from core.channel.adapter import ChannelAdapter, InboundMessage
 from core.config import Settings
