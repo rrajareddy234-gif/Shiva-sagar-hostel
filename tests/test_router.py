@@ -244,3 +244,31 @@ def test_owner_answers_need_no_ai(db):
                  "who has not paid?", "show this month's revenue"):
         reply = router.owner_answer(db, text)
         assert reply.handled is True, text
+
+
+# --- AI cost reporting -----------------------------------------------------
+
+def test_owner_can_ask_the_ai_cost(db):
+    from core import router
+    reply = router.owner_answer(db, "what is the ai cost this month?")
+    assert reply.handled
+    assert reply.intent == "owner_ai_cost"
+    assert "$0" in reply.text
+
+
+def test_ai_cost_reflects_recorded_calls(db):
+    from ai.adapter import AIResponse
+    from ai.usage import record_usage
+    from core import router
+    record_usage(db, AIResponse(text="hi", input_tokens=1_000_000, output_tokens=0,
+                                provider="gemini", model="gemini-2.5-flash"),
+                 purpose="reply")
+    reply = router.owner_answer(db, "show me the ai spend")
+    assert "$0.3" in reply.text
+
+
+def test_a_customer_does_not_get_ai_cost_via_owner_answer(db):
+    """The customer path must not expose the figure at all."""
+    from core import router
+    reply = router.route(db, "what is the ai cost this month?", role="customer")
+    assert "$" not in reply.text

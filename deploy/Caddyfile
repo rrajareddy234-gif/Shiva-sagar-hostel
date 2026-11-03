@@ -1,0 +1,24 @@
+# Replace sagar.example.com with your real domain before deploying.
+# Caddy obtains and renews the HTTPS certificate automatically.
+
+{$SAGAR_HOST} {
+	# WhatsApp webhook and health check, from Meta and from monitoring.
+	handle /webhook* {
+		reverse_proxy app:8000
+	}
+	handle /health {
+		reverse_proxy app:8000
+	}
+
+	# Scheduled job endpoints. n8n reaches the app over the compose network,
+	# so these are not exposed to the internet. The job token would still
+	# protect them, but not publishing them is simpler and safer.
+	handle /jobs* {
+		respond "not found" 404
+	}
+
+	# Everything else is the n8n interface.
+	handle {
+		reverse_proxy n8n:5678
+	}
+}

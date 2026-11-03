@@ -21,6 +21,9 @@ venv/
 *.dump
 backups/
 
+# Deployment
+deploy/.env
+
 # Editor / OS
 .vscode/
 .idea/

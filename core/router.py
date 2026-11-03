@@ -244,6 +244,16 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
         return Reply(f"Verified revenue this month: {_rupees(total)}.", handled=True,
                      intent="owner_revenue")
 
+    if re.search(r"\b(ai|model|token|gemini|openai)\b.*\b(cost|spend|usage|bill)\b", lowered):
+        from ai import usage as ai_usage
+        start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        summary = ai_usage.cost_between(db, start, now + timedelta(days=1))
+        return Reply(
+            f"AI usage this month: {summary['calls']} call(s), "
+            f"{summary['input_tokens']} tokens in, {summary['output_tokens']} out. "
+            f"Estimated cost ${summary['cost_usd']}.",
+            handled=True, intent="owner_ai_cost")
+
     if re.search(r"\b(arriv\w*|checking in|check[- ]?ins?)\b", lowered):
         day = now + timedelta(days=1) if "tomorrow" in lowered else now
         rows = booking.arrivals_on(db, day)
