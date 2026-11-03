@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.webhook import create_app
+from core.channel.adapter import ChannelAdapter, SendResult
 from core.config import Settings
 from core.db import Database
 from tests.conftest import TEST_DSN
@@ -23,8 +24,50 @@ APP_SECRET = "test-app-secret"
 VERIFY_TOKEN = "test-verify-token"
 
 
+class FakeChannel(ChannelAdapter):
+    """A channel that records sends instead of calling Meta."""
+
+    name = "fake"
+
+    def __init__(self, *, fail: bool = False):
+        self.sent: list[tuple[str, str]] = []
+        self.fail = fail
+
+    def verify_inbound(self, raw_body, headers):
+        from core.channel.meta_cloud import MetaCloudAdapter
+        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
+                                phone_number_id="1",
+                                verify_token=VERIFY_TOKEN).verify_inbound(raw_body, headers)
+
+    def parse_inbound(self, raw_body):
+        from core.channel.meta_cloud import MetaCloudAdapter
+        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
+                                phone_number_id="1",
+                                verify_token=VERIFY_TOKEN).parse_inbound(raw_body)
+
+    def send_text(self, to_phone, text):
+        if self.fail:
+            return SendResult(ok=False, error="simulated outage")
+        self.sent.append((to_phone, text))
+        return SendResult(ok=True, provider_message_id=f"out.{len(self.sent)}")
+
+    def send_template(self, to_phone, template_name, params=None, language="en"):
+        return SendResult(ok=True, provider_message_id="tpl.1")
+
+    def verify_challenge(self, query):
+        from core.channel.meta_cloud import MetaCloudAdapter
+        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
+                                phone_number_id="1",
+                                verify_token=VERIFY_TOKEN).verify_challenge(query)
+
+
 @pytest.fixture
-def client(db) -> TestClient:
+def channel() -> FakeChannel:
+    return FakeChannel()
+
+
+@pytest.fixture
+def client(db, channel, seeded) -> TestClient:
     settings = Settings(
         database_url=TEST_DSN,
         channel_provider="meta_cloud",
@@ -39,7 +82,7 @@ def client(db) -> TestClient:
         ai_api_key=None,
         ai_base_url=None,
     )
-    return TestClient(create_app(settings))
+    return TestClient(create_app(settings, channel=channel, ai=None))
 
 
 def _payload(message_id="wamid.HOOK1", text="hello", sender="919000001000") -> bytes:
@@ -95,7 +138,7 @@ def test_valid_message_accepted(client, db):
 def test_message_is_stored(client, db):
     body = _payload()
     client.post("/webhook", content=body, headers=_signed(body))
-    row = db.query_one("SELECT wa_message_id, direction FROM messages")
+    row = db.query_one("SELECT wa_message_id, direction FROM messages WHERE direction = 'IN'")
     assert row["wa_message_id"] == "wamid.HOOK1"
     assert row["direction"] == "IN"
 
@@ -129,14 +172,18 @@ def test_duplicate_delivery_is_stored_once(client, db):
     second = client.post("/webhook", content=body, headers=_signed(body))
     assert first.status_code == 200
     assert second.status_code == 200
-    assert db.query_one("SELECT count(*) AS n FROM messages")["n"] == 1
+    inbound = db.query_one(
+        "SELECT count(*) AS n FROM messages WHERE direction = 'IN'")
+    assert inbound["n"] == 1
 
 
 def test_several_rapid_messages_are_all_stored(client, db):
     for i in range(5):
         body = _payload(message_id=f"wamid.HOOK{i}", text=f"msg {i}")
         client.post("/webhook", content=body, headers=_signed(body))
-    assert db.query_one("SELECT count(*) AS n FROM messages")["n"] == 5
+    inbound = db.query_one(
+        "SELECT count(*) AS n FROM messages WHERE direction = 'IN'")
+    assert inbound["n"] == 5
 
 
 def test_status_callback_is_accepted_and_ignored(client, db):
@@ -166,8 +213,101 @@ def test_message_marks_processed(client, db):
 
 
 def test_unknown_customer_opens_an_enquiry(client, db):
+    """A first message opens an enquiry, then the reply marks it answered."""
     body = _payload(sender="919000001234")
     client.post("/webhook", content=body, headers=_signed(body))
     row = db.query_one("SELECT phone, status FROM enquiries")
     assert row["phone"] == "+919000001234"
-    assert row["status"] == "OPEN"
+    assert row["status"] in ("OPEN", "RESPONDED")
+
+
+def test_a_new_enquiry_is_recorded(client, db):
+    """The enquiry row exists for the new number before any reply logic."""
+    from core import inbox
+    from core.channel.adapter import InboundMessage
+    message = InboundMessage(provider_message_id="wamid.NEWENQ", from_phone="+919000007777",
+                             text="is a room free?", message_type="text")
+    inbox.store_inbound(db, message)
+    row = db.query_one("SELECT phone, responded FROM enquiries")
+    assert row["phone"] == "+919000007777"
+    assert row["responded"] is False
+
+
+# --- end to end: a message in, a reply out --------------------------------
+
+def test_a_price_question_gets_a_reply(client, db, channel):
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+    assert "350" in channel.sent[0][1]
+
+
+def test_the_reply_is_recorded_as_outbound(client, db, channel):
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    row = db.query_one("SELECT body, direction FROM messages WHERE direction = 'OUT'")
+    assert row["direction"] == "OUT"
+    assert "350" in row["body"]
+
+
+def test_a_greeting_gets_a_reply(client, channel):
+    body = _payload(text="hello")
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+
+
+def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+
+
+def test_a_verified_customer_is_marked_answered(client, db, channel):
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    row = db.query_one("SELECT responded FROM enquiries")
+    assert row["responded"] is True
+
+
+def test_the_owner_is_answered_from_the_database(client, db, channel):
+    body = _payload(text="how many vacancies today?", sender="919999999999")
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+    assert "beds are free" in channel.sent[0][1]
+
+
+def test_a_failed_send_leaves_the_message_unprocessed(client, db, channel):
+    """If the reply cannot be sent, the message must not be marked done."""
+    channel.fail = True
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert db.query_one("SELECT processed_at FROM messages")["processed_at"] is None
+
+
+def test_a_customer_cannot_reach_owner_information(client, db, channel):
+    body = _payload(text="show this month's revenue", sender="919000001555")
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+    assert "Rs" not in channel.sent[0][1]
+
+
+def test_non_text_message_gets_a_polite_reply(client, db, channel):
+    body = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "messages": [{"from": "919000001666", "id": "wamid.IMG",
+                          "type": "image",
+                          "image": {"id": "media-1", "mime_type": "image/jpeg"}}],
+        }}]}],
+    }).encode()
+    client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 1
+    assert "text" in channel.sent[0][1].lower()
+
+
+def test_several_rapid_messages_each_get_one_reply(client, db, channel):
+    for i in range(4):
+        body = _payload(message_id=f"wamid.RAPID{i}", text="what is the price?")
+        client.post("/webhook", content=body, headers=_signed(body))
+    assert len(channel.sent) == 4

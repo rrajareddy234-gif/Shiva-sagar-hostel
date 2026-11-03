@@ -21,20 +21,26 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from core.channel.registry import build_channel
 from core.config import Settings
 from core.db import Database
-from core.inbox import mark_processed, store_inbound
+from core.dispatcher import build_ai, dispatch
+from core.inbox import store_inbound
 
 log = logging.getLogger(__name__)
 
 
-def create_app(settings: Settings) -> FastAPI:
+def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
+    """Build the app. `channel` and `ai` may be injected for tests."""
     app = FastAPI(title="Sagar PG AI Manager", docs_url=None, redoc_url=None)
 
     db = Database(settings.database_url)
-    channel = build_channel(settings.channel_provider, **settings.channel_credentials())
+    if channel is None:
+        channel = build_channel(settings.channel_provider, **settings.channel_credentials())
+    if ai is None:
+        ai = build_ai(settings)
 
     app.state.settings = settings
     app.state.db = db
     app.state.channel = channel
+    app.state.ai = ai
 
     @app.get("/health")
     def health() -> dict:
@@ -73,19 +79,9 @@ def create_app(settings: Settings) -> FastAPI:
             if stored is None:
                 log.info("ignored a duplicate delivery of %s", message.provider_message_id)
                 continue
-            background.add_task(_process, db, stored.message_id, message)
+            background.add_task(dispatch, db, channel, settings, message, ai,
+                                stored.message_id)
 
         return JSONResponse({"status": "received"}, status_code=200)
 
     return app
-
-
-def _process(db: Database, message_id: str, message) -> None:
-    """Placeholder for message handling.
-
-    The deterministic router and the AI layer plug in here. Until then, the
-    message is recorded and marked processed so the inbox is honest about what
-    has and has not been handled.
-    """
-    log.info("received message %s from %s", message_id, message.from_phone)
-    mark_processed(db, message_id)
