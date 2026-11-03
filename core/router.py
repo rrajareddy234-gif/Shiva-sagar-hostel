@@ -43,7 +43,9 @@ def _rupees(amount: Decimal) -> str:
 
 # --- intent detection ------------------------------------------------------
 
-_PRICE = re.compile(r"\b(price|rate|cost|charge|rent|how much|kitna|evvala)\b", re.I)
+# Plurals matter: "what are your prices" is one of the most common messages.
+_PRICE = re.compile(r"\b(prices?|rates?|costs?|charges?|rent|how much|kitna|"
+                    r"evvala|per (day|night|hour))\b", re.I)
 _AVAIL = re.compile(r"\b(available beds?|beds? available|any beds?|free beds?|"
                     r"beds? (free|left)|vacanc\w*|vacant|"
                     r"rooms? (free|available|left)|any rooms?|khali)\b", re.I)
