@@ -34,18 +34,23 @@ reused, what was tested, what is still missing, and what is needed from the owne
 ```bash
 pip install -r requirements.txt
 
-# A database to develop against
-sudo docker run -d --name sagarpg-pg -e POSTGRES_USER=sagar \
-  -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=sagarpg -p 5432:5432 postgres:16
+# A database to develop against. Data lives in a named volume, so it survives
+# container restarts and recreations.
+docker compose -f deploy/docker-compose.dev.yml up -d
 
-# Schema and the owner's historic room list
-sudo docker exec -i sagarpg-pg psql -U sagar -d sagarpg < db/schema.sql
-sudo docker exec -i sagarpg-pg psql -U sagar -d sagarpg < db/seed.sql
+# Schema and the room list
+docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+  psql -U sagar -d sagarpg < db/schema.sql
+docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+  psql -U sagar -d sagarpg < db/seed.sql
 
-python -m pytest            # 303 tests
+python -m pytest            # 389 tests
 cp .env.example .env        # then fill in the values
 uvicorn api.main:app --reload
 ```
+
+Do not use `docker run` for the database. A container created that way has no
+volume, so its data is lost the moment the container is recreated.
 
 ## Layout
 

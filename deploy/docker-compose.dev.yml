@@ -1,0 +1,40 @@
+# Local development database.
+#
+# This is the database you develop against, not the one that serves guests.
+# Production uses deploy/docker-compose.yml.
+#
+# The data lives in a named Docker volume, sagarpg-dev-data, so it survives
+# stopping, restarting and recreating the container. Without the volume the
+# database would be empty every time the container is recreated, and bookings
+# would silently vanish.
+#
+#   docker compose -f deploy/docker-compose.dev.yml up -d
+#   docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+#     psql -U sagar -d sagarpg < db/schema.sql
+#   docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+#     psql -U sagar -d sagarpg < db/seed.sql
+#
+# To start over from nothing, remove the volume as well as the container:
+#   docker compose -f deploy/docker-compose.dev.yml down -v
+services:
+  postgres:
+    image: postgres:16
+    container_name: sagarpg-pg
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sagar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-devpass}
+      POSTGRES_DB: ${POSTGRES_DB:-sagarpg}
+    ports:
+      # Published so the app and pytest on the host can reach it.
+      - "5432:5432"
+    volumes:
+      - sagarpg-dev-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sagar} -d ${POSTGRES_DB:-sagarpg}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  sagarpg-dev-data:
