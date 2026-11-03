@@ -1,7 +1,12 @@
 # ADR-001: WhatsApp channel — direct Meta Cloud API vs Peach
 
-Status: **Decided** (recommendation made by the agent; no business decision required)
+Status: **Decided and confirmed by the owner** (2026-11-03)
 Date: 2026-11-03
+
+**Owner's decision, 2026-11-03:** *"leave peach for whatsapp business we no need it"* —
+Peach is dropped. The system uses the official Meta WhatsApp Cloud API directly.
+The `PeachAdapter` stub stays in the code as a documented, unused option; it costs
+nothing to keep and makes the provider swap a one-line change if that ever changes.
 
 ## Decision
 

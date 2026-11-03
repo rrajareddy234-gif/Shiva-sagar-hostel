@@ -87,17 +87,17 @@ I will ask for these **one at a time**, in this order, and only when the build a
 
 | # | Needed | Why | Blocks |
 |---|---|---|---|
-| 1 | **Clarify "Peach for WhatsApp Business"** — which product/URL/account is it, and does it hold the WhatsApp connection? | Determines whether we use the official Cloud API directly or route through an existing provider | All WhatsApp work |
-| 2 | **Meta WhatsApp Cloud API credentials** — App ID, App Secret, permanent System User token, WhatsApp Business Account ID, Phone Number ID | To send/receive real messages and verify webhook signatures | Live WhatsApp |
-| 3 | **A dedicated business phone number** for WhatsApp (must not be an active WhatsApp account) | Cloud API registration | Live WhatsApp |
-| 4 | **Your owner WhatsApp number** (and any staff numbers) | To authorise owner commands and send notifications | Owner assistant |
-| 5 | **n8n access** — URL + login, *or* explicit approval to stand up a fresh self-hosted n8n | Orchestration, reminders, reports | Orchestration layer |
-| 6 | **AI provider key** — a Google AI Studio (Gemini) key is recommended: free tier, cheapest paid tier, OpenAI-compatible | Live AI replies | AI layer |
-| 7 | **Hosting decision + payment authorisation** (~₹350–600/month) for a small VPS | To run the always-on webhook | Production |
-| 8 | **Business confirmations** — current room/bed configuration, current prices, dormitory arrangement, partner list | The system must not quote stale data | Pricing/availability |
-| 9 | **GitHub preference** — build in the existing empty `Shiva-sagar-hostel` repo, or a new dedicated repo | Source control layout | Repo setup |
+| ~~1~~ | ~~Clarify "Peach for WhatsApp Business"~~ | **Answered 2026-11-03: Peach is dropped. See `docs/ADR-001-whatsapp-channel.md`.** | — |
+| 1 | **Meta WhatsApp Cloud API credentials** — App ID, App Secret, permanent System User token, WhatsApp Business Account ID, Phone Number ID | To send/receive real messages and verify webhook signatures | Live WhatsApp |
+| 2 | **A phone number for WhatsApp** — a new dedicated number, or migrate the current one off Peach now that Peach is being dropped | Cloud API registration | Live WhatsApp |
+| 3 | **Your owner WhatsApp number** (and any staff numbers) | To authorise owner commands and send notifications | Owner assistant |
+| 4 | **n8n access** — URL + login, *or* explicit approval to stand up a fresh self-hosted n8n | Orchestration, reminders, reports | Orchestration layer |
+| 5 | **AI provider key** — a Google AI Studio (Gemini) key is recommended: free tier, cheapest paid tier, OpenAI-compatible | Live AI replies | AI layer |
+| 6 | **Hosting decision + payment authorisation** (~₹400–600/month) for a small VPS | To run the always-on webhook | Production |
+| 7 | **Business confirmations** — current room/bed configuration, current prices, dormitory arrangement, partner list | The system must not quote stale data | Pricing/availability |
+| 8 | **GitHub preference** — build in the existing empty `Shiva-sagar-hostel` repo, or a new dedicated repo | Source control layout | Repo setup |
 
-Nothing here requires you to write code. Items 1–4 and 8 are business/account facts only you can supply.
+Nothing here requires you to write code. Items 1–3 and 7 are business/account facts only you can supply.
 
 ---
 
@@ -238,8 +238,12 @@ Deliverables of this task:
 
 ---
 
-## 7. Open question (one, to unblock the most)
+## 7. Open question — ANSWERED
 
-**What exactly is "Peach for WhatsApp Business"?** Please give me its URL or the company name, and tell me whether it is the thing that currently holds your WhatsApp number and connection to ChatGPT.
+**What exactly is "Peach for WhatsApp Business"?**
 
-This decides whether we send messages through the official Meta Cloud API directly (recommended: cheapest, most reliable, no middleman fee) or keep an existing provider in the path. I will ask my remaining questions one at a time after that.
+**Answered by the owner on 2026-11-03: Peach is not needed and is dropped.** The
+system uses the official Meta WhatsApp Cloud API directly. See
+`docs/ADR-001-whatsapp-channel.md` for the full comparison and the reasoning.
+
+The next question is in §2: the Meta WhatsApp Cloud API credentials.

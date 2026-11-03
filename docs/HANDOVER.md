@@ -137,27 +137,52 @@ I will not claim these passed, because they did not run:
   reply rather than being understood.
 - **The AI quality is unproven** until a real model is connected and used.
 
-## 6. What I need from you
+## 6. Decisions made
 
-One question at a time, as you asked. The first one blocks the most:
+### WhatsApp channel: official Meta Cloud API. Peach is dropped.
 
-### Question 1: what is "Peach for WhatsApp Business"?
+**Decided by you on 2026-11-03.** Peach is not used. The system talks to Meta
+directly.
 
-I could not find a product by that name. I need to know:
+That is the cheapest and simplest option, and it is what the code was already
+built and tested against. Two reasons it is right:
 
-- Its website or company name, if you have it.
-- Whether it is the thing that currently holds your WhatsApp number and connects
-  it to ChatGPT.
+- **Cost.** Peach's cheapest useful plan is about ₹6,350 a month. That alone is
+  three times your entire budget, for a layer this system does not need.
+- **Duplicates.** A WhatsApp number feeds exactly one webhook. Putting Peach and
+  this system on the same number means Meta delivers every message to both, and
+  the guest gets two replies. Your brief forbids exactly that.
 
-This matters because it decides the messaging path. If Peach holds your number,
-we either keep it in the path or move the number to the official Meta Cloud API.
-My recommendation is the official API directly: no middleman fee, and it is the
-channel this system is already built and tested against.
+The Peach option is still in the code as an unused stub, so if you ever change
+your mind it is a one-line setting, not a rebuild. Nothing of yours was
+disconnected or deleted.
 
-**Everything else can wait until you answer that.** After it, I will ask about
-Meta credentials, then about n8n, then about your confirmed room list and rates.
+Full reasoning: `docs/ADR-001-whatsapp-channel.md`.
 
-## 7. Monthly cost
+## 7. What I need from you
+
+One question at a time, as you asked. Peach is settled, so the next one is:
+
+### Question 1: your Meta WhatsApp Cloud API credentials
+
+Please open `developers.facebook.com`, go to your app, and send me:
+
+- **App ID**
+- **App Secret** (WhatsApp → API Setup → or Settings → Basic)
+- **WhatsApp Business Account ID**
+- **Phone Number ID**
+- A **permanent** access token from a System User (not the 24-hour test token)
+
+If you also have a phone number you want to use for this — either a new one, or
+your current number moved off Peach — tell me which.
+
+Send them one at a time or together, whichever is easier. **Do not paste them
+into a chat message if you would rather not** — I can tell you where to put them
+in a file on the server instead.
+
+After that I will ask about n8n, then your confirmed room list and rates.
+
+## 8. Monthly cost
 
 Detailed in `docs/COST_REPORT.md`. Summary, using real November 2026 prices:
 
@@ -174,7 +199,7 @@ questions never reach a model.
 
 Nothing has been purchased. No subscription has been started.
 
-## 8. How to change the AI model
+## 9. How to change the AI model
 
 One setting in `.env`, then restart the app:
 
@@ -188,7 +213,7 @@ Supported out of the box: Gemini, OpenAI, OpenRouter, Groq, and any
 OpenAI-compatible endpoint including a local model via `AI_BASE_URL`. No code
 changes, no workflow changes. Full instructions in `docs/OPERATIONS.md`.
 
-## 9. How to back up and restore
+## 10. How to back up and restore
 
 ```bash
 ./deploy/backup.sh      # nightly via cron; keeps 14 days, checks the dump
@@ -200,12 +225,15 @@ missing the bookings table — a bad backup that looks like a good one is worse
 than none. **Neither script has been run against a live server yet.** Rehearse
 the restore before you need it.
 
-## 10. What I recommend next
+## 11. What I recommend next
 
-1. You answer question 1 above.
+1. You send the Meta credentials (question 1 above).
 2. You confirm the room list and the rates. Until then the system quotes nothing
    to a customer.
 3. You decide on a server (about ₹400–600 a month) and a domain name.
 4. I connect the real WhatsApp number and run the go-live checklist in
    `docs/OPERATIONS.md`, testing with your own phone before any customer.
 5. Only then do we turn on real customer messages.
+
+Until step 1 lands, the system stays exactly as it is: complete, tested, and
+silent. Nothing is live and nothing can message a customer by accident.
