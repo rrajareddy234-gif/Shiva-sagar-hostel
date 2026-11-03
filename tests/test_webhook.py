@@ -14,75 +14,8 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from api.webhook import create_app
-from core.channel.adapter import ChannelAdapter, SendResult
-from core.config import Settings
-from core.db import Database
-from tests.conftest import TEST_DSN
-
-APP_SECRET = "test-app-secret"
-VERIFY_TOKEN = "test-verify-token"
-
-
-class FakeChannel(ChannelAdapter):
-    """A channel that records sends instead of calling Meta."""
-
-    name = "fake"
-
-    def __init__(self, *, fail: bool = False):
-        self.sent: list[tuple[str, str]] = []
-        self.fail = fail
-
-    def verify_inbound(self, raw_body, headers):
-        from core.channel.meta_cloud import MetaCloudAdapter
-        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
-                                phone_number_id="1",
-                                verify_token=VERIFY_TOKEN).verify_inbound(raw_body, headers)
-
-    def parse_inbound(self, raw_body):
-        from core.channel.meta_cloud import MetaCloudAdapter
-        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
-                                phone_number_id="1",
-                                verify_token=VERIFY_TOKEN).parse_inbound(raw_body)
-
-    def send_text(self, to_phone, text):
-        if self.fail:
-            return SendResult(ok=False, error="simulated outage")
-        self.sent.append((to_phone, text))
-        return SendResult(ok=True, provider_message_id=f"out.{len(self.sent)}")
-
-    def send_template(self, to_phone, template_name, params=None, language="en"):
-        return SendResult(ok=True, provider_message_id="tpl.1")
-
-    def verify_challenge(self, query):
-        from core.channel.meta_cloud import MetaCloudAdapter
-        return MetaCloudAdapter(app_secret=APP_SECRET, access_token="t",
-                                phone_number_id="1",
-                                verify_token=VERIFY_TOKEN).verify_challenge(query)
-
-
-@pytest.fixture
-def channel() -> FakeChannel:
-    return FakeChannel()
-
-
-@pytest.fixture
-def client(db, channel, seeded) -> TestClient:
-    settings = Settings(
-        database_url=TEST_DSN,
-        channel_provider="meta_cloud",
-        owner_phone="+919999999999",
-        timezone="Asia/Kolkata",
-        meta_app_secret=APP_SECRET,
-        meta_access_token="test-token",
-        meta_phone_number_id="123456789",
-        meta_verify_token=VERIFY_TOKEN,
-        ai_provider="gemini",
-        ai_model="gemini-2.5-flash",
-        ai_api_key=None,
-        ai_base_url=None,
-    )
-    return TestClient(create_app(settings, channel=channel, ai=None))
+from tests.conftest import APP_SECRET, VERIFY_TOKEN  # noqa: F401
+from tests.conftest import FakeChannel, channel, client  # noqa: F401
 
 
 def _payload(message_id="wamid.HOOK1", text="hello", sender="919000001000") -> bytes:

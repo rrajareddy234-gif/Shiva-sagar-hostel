@@ -18,6 +18,7 @@ import logging
 from fastapi import BackgroundTasks, FastAPI, Request, Response
 from fastapi.responses import JSONResponse, PlainTextResponse
 
+from api import jobs
 from core.channel.registry import build_channel
 from core.config import Settings
 from core.db import Database
@@ -41,6 +42,8 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
     app.state.db = db
     app.state.channel = channel
     app.state.ai = ai
+
+    app.include_router(jobs.router)
 
     @app.get("/health")
     def health() -> dict:
