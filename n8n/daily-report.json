@@ -1,0 +1,149 @@
+{
+  "name": "Sagar PG - daily report",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 7 * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SAGAR_APP_URL }}/jobs/daily-report",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Token",
+              "value": "={{ $vars.SAGAR_JOB_TOKEN }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch",
+      "name": "Fetch from app",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nif (r.error) {\n  return [{ json: { text: 'Sagar PG: the daily report could not be built. '\n    + 'Please check the app.' } }];\n}\nconst lines = [\n  'Sagar PG, morning report',\n  `Beds free: ${r.beds.available} of ${r.beds.total}`,\n  `Occupied: ${r.beds.occupied}, blocked: ${r.beds.blocked}`,\n  `Arrivals today: ${r.arrivals_today}, departures: ${r.departures_today}`,\n  `Overdue checkouts: ${r.overdue_checkouts}`,\n  `Booking requests waiting: ${r.pending_requests}`,\n  `Payments to verify: ${r.payments_awaiting_verification}`,\n  `Outstanding balances: ${r.outstanding_balances}`,\n  `New enquiries today: ${r.enquiries_today}, unanswered: ${r.unanswered_enquiries}`,\n  `Collected today: Rs ${r.collected_today}`,\n  `Revenue this month: Rs ${r.revenue_this_month}`,\n];\nif (r.beds.full_rooms && r.beds.full_rooms.length) {\n  lines.push(`Full rooms: ${r.beds.full_rooms.join(', ')}`);\n}\nreturn [{ json: { text: lines.join('\\n') } }];\n"
+      },
+      "id": "format",
+      "name": "Format the message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SAGAR_APP_URL }}/jobs/notify-owner",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Token",
+              "value": "={{ $vars.SAGAR_JOB_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "notify",
+      "name": "WhatsApp the owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch from app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch from app": {
+      "main": [
+        [
+          {
+            "node": "Format the message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format the message": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp the owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "tags": [
+    {
+      "name": "sagar-pg"
+    }
+  ],
+  "active": false
+}

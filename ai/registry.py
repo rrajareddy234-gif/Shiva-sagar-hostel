@@ -15,15 +15,21 @@ from ai.openai_compatible import OpenAICompatibleClient
 
 # provider -> (input price, output price) per million tokens, USD.
 # Estimates for the owner's cost report, not billing records.
+#
+# These are list prices for the cheap model each provider is normally used with,
+# checked in November 2026. Verify before relying on a figure; providers change
+# prices. The model name is stored alongside every call, so a later report can be
+# recalculated with corrected prices.
 PRICES: dict[str, tuple[Decimal, Decimal]] = {
-    "gemini": (Decimal("0.10"), Decimal("0.40")),        # gemini-2.5-flash, paid tier
-    "gemini_free": (Decimal("0"), Decimal("0")),          # free tier
-    "openai": (Decimal("0.15"), Decimal("0.60")),         # gpt-4o-mini class
+    "gemini": (Decimal("0.30"), Decimal("2.50")),          # gemini-2.5-flash, paid tier
+    "gemini_flash_lite": (Decimal("0.10"), Decimal("0.40")),  # gemini-2.5-flash-lite
+    "gemini_free": (Decimal("0"), Decimal("0")),           # free tier, rate limited
+    "openai": (Decimal("0.15"), Decimal("0.60")),          # gpt-4o-mini class
     "openai_compatible": (Decimal("0.15"), Decimal("0.60")),
-    "groq": (Decimal("0.05"), Decimal("0.08")),           # llama-3.x on Groq
+    "groq": (Decimal("0.05"), Decimal("0.08")),            # llama-3.x on Groq
     "openrouter": (Decimal("0.10"), Decimal("0.40")),
-    "ollama": (Decimal("0"), Decimal("0")),               # local, electricity only
-    "anthropic": (Decimal("0.80"), Decimal("4.00")),      # claude haiku class
+    "ollama": (Decimal("0"), Decimal("0")),                # local, electricity only
+    "anthropic": (Decimal("1.00"), Decimal("5.00")),       # claude haiku class
 }
 
 # Providers reached through the OpenAI-compatible chat-completions shape.

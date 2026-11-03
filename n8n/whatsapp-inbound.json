@@ -1,0 +1,133 @@
+{
+  "name": "Sagar PG - WhatsApp inbound",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "sagar-whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook",
+      "name": "WhatsApp webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        220,
+        300
+      ],
+      "webhookId": "sagar-whatsapp"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Forward the webhook to the app, unchanged.\n// The app checks the signature, deduplicates and replies.\n// The body must not be rewritten: the signature covers the raw bytes.\nconst item = $input.first().json;\nconst body = item.body ?? item;\nconst raw = typeof body === 'string' ? body : JSON.stringify(body);\nconst headers = item.headers || {};\nreturn [{ json: { raw, signature: headers['x-hub-signature-256'] || '' } }];\n"
+      },
+      "id": "passthrough",
+      "name": "Keep the raw body",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        460,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SAGAR_APP_URL }}/webhook",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            },
+            {
+              "name": "X-Hub-Signature-256",
+              "value": "={{ $json.signature }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ $json.raw }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "forward",
+      "name": "Forward to the app",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        700,
+        300
+      ],
+      "retryOnFail": true,
+      "maxTries": 2,
+      "waitBetweenTries": 3000
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "ok",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "respond",
+      "name": "Acknowledge Meta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        940,
+        300
+      ]
+    }
+  ],
+  "connections": {
+    "WhatsApp webhook": {
+      "main": [
+        [
+          {
+            "node": "Keep the raw body",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Keep the raw body": {
+      "main": [
+        [
+          {
+            "node": "Forward to the app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Forward to the app": {
+      "main": [
+        [
+          {
+            "node": "Acknowledge Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "tags": [
+    {
+      "name": "sagar-pg"
+    }
+  ],
+  "active": false
+}

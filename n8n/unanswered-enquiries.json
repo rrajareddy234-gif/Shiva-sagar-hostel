@@ -1,0 +1,149 @@
+{
+  "name": "Sagar PG - unanswered enquiries",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "*/30 * * * *"
+            }
+          ]
+        }
+      },
+      "id": "schedule",
+      "name": "Schedule",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        220,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $vars.SAGAR_APP_URL }}/jobs/unanswered-enquiries",
+        "options": {
+          "timeout": 30000
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Token",
+              "value": "={{ $vars.SAGAR_JOB_TOKEN }}"
+            }
+          ]
+        }
+      },
+      "id": "fetch",
+      "name": "Fetch from app",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        460,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "// Report to the owner. If the fetch failed, say so plainly.\nconst item = $input.first().json;\n// Unanswered enquiries, at most every 30 minutes.\nif (item.error || item.ok === false) {\n  const detail = item.problems ? item.problems.join('; ')\n    : (item.error ? JSON.stringify(item.error) : 'unknown error');\n  return [{ json: { text: `Sagar PG alert: ${detail}` } }];\n}\nreturn [{ json: { text: item.text || item.summary || JSON.stringify(item, null, 2) } }];\n"
+      },
+      "id": "format",
+      "name": "Format the message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        700,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $vars.SAGAR_APP_URL }}/jobs/notify-owner",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-Job-Token",
+              "value": "={{ $vars.SAGAR_JOB_TOKEN }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ text: $json.text }) }}",
+        "options": {
+          "timeout": 30000
+        }
+      },
+      "id": "notify",
+      "name": "WhatsApp the owner",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        940,
+        300
+      ],
+      "onError": "continueRegularOutput",
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 10000
+    }
+  ],
+  "connections": {
+    "Schedule": {
+      "main": [
+        [
+          {
+            "node": "Fetch from app",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch from app": {
+      "main": [
+        [
+          {
+            "node": "Format the message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format the message": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp the owner",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "saveExecutionProgress": true
+  },
+  "tags": [
+    {
+      "name": "sagar-pg"
+    }
+  ],
+  "active": false
+}

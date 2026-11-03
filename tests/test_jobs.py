@@ -172,3 +172,35 @@ def test_pending_requests_job(client, db):
     assert body["count"] == 1
     assert body["requests"][0]["reference"] == request.reference
     assert body["requests"][0]["guest"] == "Pending Guest"
+
+
+# --- notify the owner ------------------------------------------------------
+
+def test_notify_owner_sends_a_message(client, channel):
+    response = client.post("/jobs/notify-owner", json={"text": "2 beds left"},
+                           headers=AUTH)
+    assert response.status_code == 200
+    assert response.json()["sent"] is True
+    assert channel.sent == [("+919999999999", "2 beds left")]
+
+
+def test_notify_owner_records_the_message(client, db):
+    client.post("/jobs/notify-owner", json={"text": "2 beds left"}, headers=AUTH)
+    row = db.query_one("SELECT body, direction FROM messages WHERE direction = 'OUT'")
+    assert row["body"] == "2 beds left"
+
+
+def test_notify_owner_requires_a_token(client):
+    response = client.post("/jobs/notify-owner", json={"text": "hi"})
+    assert response.status_code == 401
+
+
+def test_notify_owner_rejects_an_empty_message(client):
+    response = client.post("/jobs/notify-owner", json={"text": ""}, headers=AUTH)
+    assert response.status_code == 422
+
+
+def test_notify_owner_reports_a_send_failure(client, channel):
+    channel.fail = True
+    response = client.post("/jobs/notify-owner", json={"text": "hello"}, headers=AUTH)
+    assert response.status_code == 502

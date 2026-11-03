@@ -165,3 +165,32 @@ def pending_requests(request: Request, x_job_token: str | None = Header(default=
             for r in booking.pending_requests(db)
         ],
     }
+
+
+@router.post("/notify-owner")
+def notify_owner(request: Request, payload: dict,
+                 x_job_token: str | None = Header(default=None)) -> dict:
+    """Send the owner a WhatsApp message.
+
+    n8n calls this instead of talking to Meta itself, so the WhatsApp
+    credentials live in one place and every owner notification is recorded.
+    """
+    _authorise(x_job_token)
+    db: Database = request.app.state.db
+    settings: Settings = request.app.state.settings
+
+    if not settings.owner_phone:
+        raise HTTPException(status_code=503, detail="OWNER_PHONE is not configured")
+
+    text = (payload or {}).get("text")
+    if not text:
+        raise HTTPException(status_code=422, detail="text is required")
+
+    from core import inbox
+    result = request.app.state.channel.send_text(settings.owner_phone, text)
+    if not result.ok:
+        log.error("owner notification failed: %s", result.error)
+        raise HTTPException(status_code=502, detail=f"send failed: {result.error}")
+
+    inbox.record_outbound(db, settings.owner_phone, text, result.provider_message_id)
+    return {"sent": True, "to": settings.owner_phone}
