@@ -56,7 +56,8 @@ FROM (VALUES
     ('AC with food per night',     'AC',     true,  'NIGHT', 300.00, NULL::numeric),
     ('AC with food per day',       'AC',     true,  'DAY',   350.00, NULL::numeric),
     ('Dormitory mat per night',    'DORM',   false, 'NIGHT', 100.00, NULL::numeric),
-    ('Dormitory mat per day',      'DORM',   false, 'DAY',   150.00, NULL::numeric)
+    ('Dormitory mat per day',      'DORM',   false, 'DAY',   150.00, NULL::numeric),
+    ('Dormitory with food per night', 'DORM', true, 'NIGHT', 300.00, NULL::numeric)
 ) AS v(name, room_type, food_included, stay_mode, daily_rate, hourly_rate)
 WHERE NOT EXISTS (SELECT 1 FROM rate_plans rp WHERE rp.name = v.name);
 

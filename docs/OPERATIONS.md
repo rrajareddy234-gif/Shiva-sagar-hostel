@@ -144,7 +144,8 @@ Do these in order. Do not skip the test in step 5.
    before applying it if not.
 2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner on 2026-11-03 and
    live in `db/seed.sql`: non-AC with food Rs 200 a night / Rs 250 a day, AC with
-   food Rs 300 / Rs 350, dormitory mat Rs 100 / Rs 150, plus extras (bedsheet
+   food Rs 300 / Rs 350, dormitory mat Rs 100 / Rs 150, dormitory with food
+   Rs 300 a night, plus extras (bedsheet
    Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month).
 3. **Set the owner number.** `OWNER_PHONE` in `.env`, in full international form,
    for example `+919876543210`. Owner commands only work from this number.

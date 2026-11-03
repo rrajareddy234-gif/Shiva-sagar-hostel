@@ -103,12 +103,12 @@ def food_options(db: Database, room_type: str) -> list[bool]:
 def resolve_food_option(db: Database, room_type: str, requested: bool | None) -> bool:
     """Settle the food question for a room type.
 
-    The owner's rooms include food and the dormitory does not, so for most room
-    types there is only one option and nothing to decide. When exactly one
-    option exists, an unspecified request resolves to it. When the caller asked
-    for a specific option that the room type does not offer, that is an error
-    rather than something to silently change: quoting food a guest refused, or
-    omitting food they expected, would both be wrong.
+    Most room types offer only one food option, so there is nothing to decide and
+    an unspecified request resolves to it. The dormitory offers both, with and
+    without food, so there the caller must say which. When the caller asked for a
+    specific option that the room type does not offer, that is an error rather
+    than something to silently change: quoting food a guest refused, or omitting
+    food they expected, would both be wrong.
     """
     offered = food_options(db, room_type)
     if not offered:

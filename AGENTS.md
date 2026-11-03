@@ -114,3 +114,7 @@ The dev database contains leftover rows from earlier manual runs
   owner must send "bed X is ready" before it is bookable again.
 - Router patterns must accept plurals. `_PRICE` originally matched only
   "price", so "what are your prices?" fell through to the AI.
+- The dormitory offers **both** food options (with food Rs 300 a night, and the
+  mat-only Rs 100/150), so an unspecified food choice for `DORM` is refused
+  rather than defaulted. AC and Non-AC offer food only. A test that quotes a
+  dormitory must pass `food_included` explicitly.

@@ -128,8 +128,8 @@ I will not claim these passed, because they did not run:
 - **Your room list is still unconfirmed.** The rooms in `db/seed.sql` are the
   historic list, flagged unconfirmed; they must be checked before a bed is
   promised. The **rates are confirmed** (2026-11-03) and live: non-AC with food
-  Rs 200 a night / Rs 250 a day, AC with food Rs 300 / Rs 350, dormitory Rs 100 /
-  Rs 150, plus extras.
+  Rs 200 a night / Rs 250 a day, AC with food Rs 300 / Rs 350, dormitory mat
+  Rs 100 / Rs 150, dormitory with food Rs 300 a night, plus extras.
 - **Automatic follow-up is switched off**, deliberately. Following up more than
   24 hours after a guest writes needs a Meta-approved message template, and none
   exists. Until one does, follow-up is manual.

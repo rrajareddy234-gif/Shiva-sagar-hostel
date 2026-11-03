@@ -90,7 +90,8 @@ def seeded(db: Database) -> Database:
             "('AC with food per night','AC',true,'NIGHT',300,30,1), "
             "('AC with food per day','AC',true,'DAY',350,30,1), "
             "('Dormitory mat per night','DORM',false,'NIGHT',100,10,1), "
-            "('Dormitory mat per day','DORM',false,'DAY',150,10,1)"
+            "('Dormitory mat per day','DORM',false,'DAY',150,10,1), "
+            "('Dormitory with food per night','DORM',true,'NIGHT',300,30,1)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "
