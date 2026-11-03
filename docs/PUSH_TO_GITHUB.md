@@ -1,95 +1,73 @@
 # Getting the code onto your GitHub
 
-## Where the code is right now
+## Status: DONE
 
-Inside the development workspace, at `/workspace/project`. It is a proper git
-repository with **18 commits** and **72 files**. Nothing is lost.
+The code is on GitHub.
 
-It is **not on GitHub yet.** Two things block it:
-
-| Blocker | What it means |
+| | |
 |---|---|
-| The token I hold is **read-only** | It cannot create a repository, and it cannot push. Both return `403`. |
-| I have no write credential for your account | Pushing needs a token with `repo` scope, which only you can create. |
+| Repository | `rrajareddy234-gif/Shiva-sagar-hostel` |
+| Visibility | **Private** (changed from public before the push) |
+| Branch | `main` |
+| Files | 73 |
+| Commits | 19 |
 
-I have prepared everything so the push is one command once you give me a token.
+The push was verified by reading the file list back from the GitHub API, not by
+trusting the push command's own output.
 
-## Important: your repository is public
+## Action for you: rotate the token
 
-`rrajareddy234-gif/Shiva-sagar-hostel` is currently **public and empty**.
+You pasted a GitHub token into the chat to let me push. That token is now in this
+conversation's history. Treat it as **exposed**.
 
-This code contains your business logic, your prices and your booking rules. It
-will later contain customer data paths. **It should be private.** Before pushing
-anything, please make it private:
+Please revoke it:
 
-> GitHub → your repo → **Settings** → scroll to bottom → **Change visibility** →
-> **Make private**
+> https://github.com/settings/tokens -> find the token -> **Delete**
 
-## Option A: you give me a token, I do everything
+Nothing breaks. The code is already pushed and the token is not needed again
+until the next push. When you do need another push, create a fresh token the same
+way and send it the same way, or run the push yourself.
 
-1. Open **https://github.com/settings/tokens** → **Generate new token (classic)**
-2. Name it `sagar-pg-push`
-3. Expiry: 90 days is fine
-4. Tick **one** box: **`repo`** (full control of private repositories)
-5. Click **Generate**, copy the token (it starts with `ghp_`)
-6. Send it to me
+I confirmed the token was **not** written into any file, the git config, or the
+remote URL. It was used only in the one command that pushed, and it is gone from
+the machine. Rotating it is still the right move because the chat log holds it.
 
-Then I will, without further help from you:
+## How the push was done
 
-- create the private repo (or use `Shiva-sagar-hostel` if you made it private)
-- push all 18 commits
-- set up a branch, not a direct push to `main`, so you can review first
-- remove the token from the git config afterwards
+1. Verified the token: valid, `repo` scope, owned by `rrajareddy234-gif`.
+2. Changed the repository from public to private **before** pushing, so the code
+   was never briefly public.
+3. Pushed `main`.
+4. Read the tree back from the API and counted 73 files to confirm.
+5. Confirmed the token is not persisted anywhere on the machine.
 
-**If you would rather not paste a token into chat**, tell me and I will show you
-where to write it into a file on the server instead.
+## A note on secrets in the repo
 
-## Option B: you run one command yourself
-
-If you prefer to do it yourself, run these three commands on your own computer.
-You do not need to retype the code — it travels in the bundle file I created.
-
-```bash
-# 1. Download these two files from the workspace to your computer:
-#      /workspace/sagar-pg-ai-manager.bundle      (the whole project, 147 KB)
-#      (that single file is enough)
-
-# 2. Restore the project from the bundle
-git clone sagar-pg-ai-manager.bundle sagar-pg-ai-manager
-cd sagar-pg-ai-manager
-
-# 3. Push it to your repository
-git remote set-url origin https://github.com/rrajareddy234-gif/Shiva-sagar-hostel.git
-git push -u origin main
-```
-
-GitHub will ask for your username and password. **Use the token as the password**,
-not your GitHub password — GitHub stopped accepting account passwords in 2021.
-Create a token exactly as in Option A, step 1–5, and paste it at the password
-prompt.
-
-## What the bundle is
-
-A single file that contains the entire project and its full history — all 18
-commits. I verified it restores cleanly by cloning it back and checking the file
-count. It is 147 KB, so it can be emailed or copied on a USB stick.
-
-Location: `/workspace/sagar-pg-ai-manager.bundle`
-
-## Safety check already done
-
-I checked whether any secret would leak onto GitHub:
+Checked before pushing, and safe:
 
 - `.gitignore` excludes `.env`, `*.key`, `*.pem`, `secrets/`, `credentials/`,
   backups and data dumps.
 - No real secret is tracked. The only matches are dummy test values
-  (`test-app-secret`, `test-verify-token`, `test-job-token`) in test files.
-- `.env.example` is tracked on purpose — it lists which settings exist but
+  (`test-app-secret`, `test-verify-token`, `test-job-token`).
+- `.env.example` is tracked on purpose: it lists which settings exist but
   contains no values.
 
-## Which should you choose?
+Real credentials must only ever live in the server's `.env` file, which is
+git-ignored. Never commit them.
 
-**Option A**, unless you would rather keep the token to yourself. Option A takes
-you about two minutes and no typing of code.
+## For future pushes
 
-The only thing I need from you is the token. Nothing else.
+```bash
+git add -A
+git commit -m "your message"
+git push origin main
+```
+
+If git asks for a password, use a token, not your GitHub account password.
+GitHub stopped accepting account passwords in 2021.
+
+## Backup bundle (no longer the only copy)
+
+`/workspace/sagar-pg-ai-manager.bundle` was created as a fallback when the push
+was blocked. It is now a convenience, not a necessity. You can delete it, or keep
+it as an offline copy of the full history.
