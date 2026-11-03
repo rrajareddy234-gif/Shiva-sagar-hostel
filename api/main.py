@@ -10,7 +10,7 @@ import logging
 import os
 
 from api.webhook import create_app
-from core.config import Settings
+from core.config import Settings, load_dotenv
 
 logging.basicConfig(
     level=os.environ.get("LOG_LEVEL", "INFO"),
@@ -19,6 +19,8 @@ logging.basicConfig(
 
 
 def _app():
+    # Direct runs read .env; Docker already injects it, and this will not override.
+    load_dotenv()
     return create_app(Settings.from_env())
 
 

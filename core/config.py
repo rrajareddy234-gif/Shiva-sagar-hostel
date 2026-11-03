@@ -7,6 +7,27 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from pathlib import Path
+
+
+def load_dotenv(path: str | Path = ".env") -> None:
+    """Read KEY=VALUE lines into the environment, without overwriting what is set.
+
+    Docker passes `.env` in through env_file, so this only matters when the app
+    runs directly. Real environment variables always win, which keeps the
+    container's behaviour unchanged and lets a test override a single value.
+    """
+    file = Path(path)
+    if not file.is_file():
+        return
+    for raw in file.read_text().splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key, value = key.strip(), value.strip().strip("'\"")
+        if key:
+            os.environ.setdefault(key, value)
 
 
 def _env(name: str, default: str | None = None, required: bool = False) -> str | None:

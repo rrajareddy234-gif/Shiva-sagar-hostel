@@ -132,24 +132,65 @@ def booking_start():
 # --- secrets ---------------------------------------------------------------
 
 def test_no_secrets_in_tracked_files():
-    """No real credential value may appear in the source tree."""
+    """No real credential value may be committed.
+
+    This checks what git actually tracks, not every file on disk. A real `.env`
+    is expected to exist locally; what matters is that it is never committed.
+    """
     root = Path(__file__).resolve().parent.parent
+    tracked = _git_tracked_files(root)
+    if tracked is None:
+        pytest.skip("git is not available to list tracked files")
+
     forbidden = ("sk-", "AIza", "EAA", "ghp_", "xoxb-")
     allow_suffixes = {".py", ".sql", ".md", ".json", ".yml", ".yaml", ".ini", ".example"}
     offenders = []
-    for path in root.rglob("*"):
-        if not path.is_file() or ".git" in path.parts or "__pycache__" in path.parts:
-            continue
+    for rel in tracked:
+        path = root / rel
         if path.name.startswith(".env") and path.name != ".env.example":
-            offenders.append(f"{path} (a real .env file is present)")
+            offenders.append(f"{rel} (a real .env file is committed)")
             continue
-        if path.suffix not in allow_suffixes:
+        if path.suffix not in allow_suffixes or not path.is_file():
+            continue
+        if "test" in path.name or "security" in path.name:
             continue
         text = path.read_text(errors="ignore")
         for marker in forbidden:
-            if marker in text and "test" not in path.name and "security" not in path.name:
-                offenders.append(f"{path}: contains {marker!r}")
+            if marker in text:
+                offenders.append(f"{rel}: contains {marker!r}")
     assert not offenders, f"possible secrets committed: {offenders}"
+
+
+def _git_tracked_files(root: Path) -> list[str] | None:
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["git", "ls-files"], cwd=root, capture_output=True, text=True, timeout=30)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode != 0:
+        return None
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def test_a_local_env_file_is_ignored_by_git(tmp_path):
+    """The loader depends on .env existing; git must never pick it up."""
+    import subprocess
+    root = Path(__file__).resolve().parent.parent
+    env = root / ".env"
+    created = not env.exists()
+    if created:
+        env.write_text("PLACEHOLDER=1\n")
+    try:
+        result = subprocess.run(
+            ["git", "check-ignore", ".env"], cwd=root,
+            capture_output=True, text=True, timeout=30)
+        if result.returncode not in (0, 1):
+            pytest.skip("git check-ignore unavailable")
+        assert result.returncode == 0, ".env is not git-ignored"
+    finally:
+        if created:
+            env.unlink()
 
 
 def test_gitignore_excludes_env_and_backups():
