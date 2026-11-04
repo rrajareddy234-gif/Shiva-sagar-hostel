@@ -60,6 +60,66 @@ def test_greeting_returns_help(db):
     assert "availability" in reply.text.lower() or "Sagar PG" in reply.text
 
 
+# --- the greeting menu, answered by tapping --------------------------------
+
+def test_greeting_offers_a_menu_of_taps(db):
+    """A bare "hi" should offer choices, not a paragraph to read."""
+    reply = router.route(db, "hi")
+    assert reply.prompt is not None
+    assert [b.title for b in reply.prompt.buttons] == [
+        "Prices", "Availability", "Facilities"]
+    assert [b.id for b in reply.prompt.buttons] == [
+        "menu:price", "menu:availability", "menu:facilities"]
+    # The help text is still the fallback body for a channel without buttons.
+    assert "Sagar PG" in reply.text
+
+
+def test_menu_word_asks_for_the_menu(db):
+    for word in ("menu", "help", "options", "start", "MENU!"):
+        reply = router.route(db, word)
+        assert reply.prompt is not None, word
+
+
+def test_help_inside_a_sentence_is_not_the_menu(db):
+    """"help me book a bed" is a real request, not a call for the menu."""
+    reply = router.route(db, "help me book a bed for tomorrow")
+    assert reply.intent != "greeting"
+
+
+def test_tapping_prices_starts_the_price_flow(db):
+    reply = router.route(db, "Prices", button_id="menu:price")
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons][0] == "price:room:AC"
+
+
+def test_tapping_availability_answers_without_the_ai(db):
+    reply = router.route(db, "Availability", button_id="menu:availability")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+    assert "free" in reply.text
+
+
+def test_tapping_facilities_answers_without_the_ai(db):
+    reply = router.route(db, "Facilities", button_id="menu:facilities")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+    assert "Sagar PG" in reply.text
+
+
+def test_a_menu_button_never_carries_a_price(db):
+    reply = router.route(db, "hi")
+    for button in reply.prompt.buttons:
+        assert "Rs" not in button.title
+        assert not any(ch.isdigit() for ch in button.title)
+
+
+def test_an_unknown_menu_id_is_ignored(db):
+    """A stale or foreign menu id must fall through, not crash."""
+    reply = router.route(db, "hi", button_id="menu:nonsense")
+    assert reply.handled is True
+    assert reply.intent == "greeting"
+
+
 def test_price_quotes_the_owners_rates(db):
     reply = router.route(db, "what is the price?")
     assert reply.handled is True

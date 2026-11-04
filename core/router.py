@@ -60,6 +60,9 @@ _FACIL = re.compile(r"\b(food|meals|mess|wifi|wi-fi|water|ac|non[- ]?ac|"
                     r"laundry|parking|timing|rules|facilit\w*)\b", re.I)
 _HOURS = re.compile(r"\b(hour|hourly|per hour|few hours|short stay)\b", re.I)
 _GREET = re.compile(r"^\s*(hi|hii+|hello|hey|namaste|good (morning|evening|afternoon))\b", re.I)
+# A bare "menu" or "help" asks for the options. Anchored to the whole message so
+# "help me book a bed" is still handled on its merits.
+_MENU_WORD = re.compile(r"^\s*(menu|help|options|start)\s*[.!?]*\s*$", re.I)
 _THANKS = re.compile(r"\b(thank|thanks|thank you|dhanyavad)\b", re.I)
 _NIGHTS = re.compile(r"(\d+)\s*(night|nights|day|days|din|roju)", re.I)
 _AC = re.compile(r"\bnon[- ]?ac\b", re.I)
@@ -69,7 +72,7 @@ def classify(text: str | None) -> str:
     """Best-effort intent. Returns 'unknown' when the AI should take over."""
     if not text or not text.strip():
         return "empty"
-    if _GREET.match(text):
+    if _GREET.match(text) or _MENU_WORD.match(text):
         return "greeting"
     if _THANKS.search(text):
         return "thanks"
@@ -94,7 +97,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     the id is stable, where the label the guest saw is not.
     """
     if button_id:
-        tapped = _price_button(db, button_id)
+        tapped = _menu_button(db, button_id) or _price_button(db, button_id)
         if tapped is not None:
             return tapped
 
@@ -104,7 +107,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         return Reply("", handled=False, needs_ai=True, intent=intent)
 
     if intent == "greeting":
-        return Reply(HELP, handled=True, intent=intent)
+        return _greeting_reply(db)
 
     if intent == "thanks":
         return Reply("You're welcome. Anything else I can help with?", handled=True,
@@ -198,6 +201,43 @@ def _price(db: Database, text: str, room_type: str | None,
     lines.append("")
     lines.append("Tell me your dates and I can check availability.")
     return "\n".join(lines)
+
+
+# --- the greeting menu, answered by tapping --------------------------------
+
+_MENU = "menu:"
+
+# The menu's own buttons never carry a figure, and the sub-answers reuse the
+# price flow, so the rate card stays the only source of a price.
+_MENU_TITLES = (
+    ("menu:price", "Prices"),
+    ("menu:availability", "Availability"),
+    ("menu:facilities", "Facilities"),
+)
+
+
+def _greeting_reply(db: Database) -> Reply:
+    """Greet with tappable options, falling back to the help text."""
+    buttons = tuple(Button(bid, title) for bid, title in _MENU_TITLES)
+    prompt = Prompt(
+        body="Hello! What would you like to know about Sagar PG Hostel?",
+        buttons=buttons)
+    return Reply(HELP, handled=True, intent="greeting", prompt=prompt)
+
+
+def _menu_button(db: Database, button_id: str) -> Reply | None:
+    """Answer a menu tap. Returns None if the id is not ours."""
+    if not button_id.startswith(_MENU):
+        return None
+    what = button_id[len(_MENU):]
+    if what == "price":
+        return _price_reply(db, "", None, None)
+    if what == "availability":
+        return Reply(_availability(db, "", None, None, None), handled=True,
+                     intent="availability")
+    if what == "facilities":
+        return Reply(_facilities(db, None, None), handled=True, intent="facilities")
+    return None
 
 
 # --- the price flow, answered by tapping -----------------------------------

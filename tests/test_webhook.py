@@ -189,7 +189,8 @@ def test_the_reply_is_recorded_as_outbound(client, db, channel):
 def test_a_greeting_gets_a_reply(client, channel):
     body = _payload(text="hello")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
+    assert len(channel.prompts) == 1
+    assert len(channel.sent) == 0
 
 
 def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
