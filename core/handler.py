@@ -14,10 +14,11 @@ import logging
 from dataclasses import dataclass
 
 from ai.adapter import AIClient, AIUnavailable
-from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM
-from core import commands, router, security, tools
+from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM, STAFF_SYSTEM
+from core import commands, memory, router, security, tools
 from core.channel.adapter import Prompt
 from core.db import Database
+from core.export import DataFile
 
 log = logging.getLogger(__name__)
 
@@ -35,13 +36,16 @@ class Outcome:
     tool_calls: tuple[str, ...] = ()
     # Tappable answers to send alongside the reply, when the router offered them.
     prompt: Prompt | None = None
+    # A data file to send alongside the reply, e.g. an owner export.
+    file: DataFile | None = None
 
 
 def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | None,
                    ai: AIClient | None = None, history: list[dict] | None = None,
-                   button_id: str | None = None) -> Outcome:
+                   button_id: str | None = None,
+                   staff_phones: tuple[str, ...] = ()) -> Outcome:
     """Produce the reply for one inbound message."""
-    role = security.role_for(phone, owner_phone)
+    role = security.role_for(phone, owner_phone, set(staff_phones) or None)
 
     if security.looks_like_injection(text):
         log.warning("possible prompt injection from %s", phone)
@@ -50,12 +54,19 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
         command_result = commands.handle(db, phone=phone, text=text, owner_phone=owner_phone)
         if command_result is not None:
             return Outcome(reply=command_result.text, handled_by="owner_command",
-                           intent=command_result.action or "owner_command")
+                           intent=command_result.action or "owner_command",
+                           file=command_result.file)
 
         owner_reply = router.owner_answer(db, text)
         if owner_reply.handled:
             return Outcome(reply=owner_reply.text, handled_by="router",
                            intent=owner_reply.intent)
+
+    elif role == security.STAFF:
+        staff_reply = router.staff_answer(db, text, button_id=button_id)
+        if staff_reply.handled:
+            return Outcome(reply=staff_reply.text, handled_by="router",
+                           intent=staff_reply.intent, prompt=staff_reply.prompt)
 
     else:
         customer_reply = router.route(db, text, role=role, button_id=button_id)
@@ -69,13 +80,34 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
     return _ask_ai(db, ai=ai, role=role, phone=phone, text=text, history=history)
 
 
+def _system_for(db: Database, *, role: str, phone: str) -> str:
+    """The rules, plus what the database knows about this caller.
+
+    The memory block is facts read from the database, never a summary and never
+    a guess. Money is left out on purpose; a tool supplies it live.
+    """
+    if role == security.OWNER:
+        base = OWNER_SYSTEM
+    elif role == security.STAFF:
+        base = STAFF_SYSTEM
+    else:
+        base = CUSTOMER_SYSTEM
+    return f"{base}\n\n{memory.memory_for(db, phone=phone, role=role)}"
+
+
 def _ask_ai(db: Database, *, ai: AIClient, role: str, phone: str, text: str,
             history: list[dict] | None) -> Outcome:
     """Ask the model, letting it call tools, then return its answer."""
-    system = OWNER_SYSTEM if role == security.OWNER else CUSTOMER_SYSTEM
+    system = _system_for(db, role=role, phone=phone)
     ctx = tools.ToolContext(db=db, phone=phone, role=role)
     specs = tools.specs_for(role)
-    messages = list(history or []) + [{"role": "user", "content": text or ""}]
+    # The caller's current message is already the last stored turn, so history
+    # must not repeat it or the model sees the same sentence twice.
+    history = list(history or [])
+    if history and history[-1].get("role") == "user" \
+            and (history[-1].get("content") or "").strip() == (text or "").strip():
+        history = history[:-1]
+    messages = history + [{"role": "user", "content": text or ""}]
     used: list[str] = []
 
     for _ in range(MAX_TOOL_ROUNDS):

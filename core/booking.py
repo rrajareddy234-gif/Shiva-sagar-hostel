@@ -25,6 +25,7 @@ from core import pricing
 from core.db import Database
 from core.errors import (BedUnavailable, InvalidTransition, NotFound,
                          ValidationError)
+from core.pricing import money
 
 DEFAULT_HOLD_MINUTES = 120
 
@@ -53,6 +54,9 @@ class BookingRequest:
     hold_id: str | None
     hold_expires_at: datetime | None
     quote: pricing.Quote
+    payment_terms: str = "ADVANCE"
+    guests_count: int = 1
+    advance_due: Decimal = Decimal("0")
 
 
 def _audit(cur, actor: str, action: str, entity: str, entity_id: str,
@@ -107,12 +111,18 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
                    mode: str = "daily", extras=0, discount=0,
                    stay_mode: str = "NIGHT",
                    hold_minutes: int = DEFAULT_HOLD_MINUTES,
+                   payment_terms: str = "ADVANCE", guests_count: int = 1,
+                   enquiry_id: str | None = None,
                    source: str = "WHATSAPP") -> BookingRequest:
     """Create a booking request and a temporary hold. Does not confirm anything."""
     if check_out_at <= check_in_at:
         raise ValidationError("the checkout time must be after the check-in time")
     if hold_minutes <= 0:
         raise ValidationError("a hold must last at least a minute")
+    if payment_terms not in ("FULL", "ADVANCE"):
+        raise ValidationError("payment terms must be FULL or ADVANCE")
+    if int(guests_count or 1) < 1:
+        raise ValidationError("there must be at least one guest")
 
     bed = db.query_one(
         "SELECT b.bed_id, r.room_type FROM beds b JOIN rooms r ON r.room_id = b.room_id "
@@ -127,6 +137,11 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
                           start=check_in_at, end=check_out_at, mode=mode,
                           stay_mode=stay_mode, extras=extras, discount=discount)
     food_included = quote.food_included
+
+    # Imported here to keep booking independent of billing at import time.
+    from core import billing
+    advance = (billing.advance_due(db, int(guests_count))
+               if payment_terms == "ADVANCE" else money(0))
 
     with db.transaction() as cur:
         # Refuse if the bed is already held by someone else for this window.
@@ -145,12 +160,14 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
         cur.execute(
             """
             INSERT INTO bookings (guest_id, bed_id, check_in_at, check_out_at, status,
-                                  food_included, agreed_daily_rate, charges_total, source)
-            VALUES (%s, %s, %s, %s, 'REQUESTED', %s, %s, %s, %s)
+                                  food_included, agreed_daily_rate, charges_total, source,
+                                  payment_terms, guests_count, advance_due, enquiry_id)
+            VALUES (%s, %s, %s, %s, 'REQUESTED', %s, %s, %s, %s, %s, %s, %s, %s)
             RETURNING booking_id, reference
             """,
             (guest_id, bed_id, check_in_at, check_out_at, food_included,
-             quote.unit_rate, quote.charges_total, source),
+             quote.unit_rate, quote.charges_total, source, payment_terms,
+             int(guests_count), advance, enquiry_id),
         )
         booking = cur.fetchone()
 
@@ -166,7 +183,8 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
 
         _audit(cur, phone, "booking_requested", "booking", str(booking["booking_id"]),
                None, {"status": "REQUESTED", "bed_id": bed_id,
-                      "check_in_at": check_in_at, "check_out_at": check_out_at})
+                      "check_in_at": check_in_at, "check_out_at": check_out_at,
+                      "payment_terms": payment_terms, "advance_due": str(advance)})
 
     return BookingRequest(
         booking_id=str(booking["booking_id"]),
@@ -180,6 +198,9 @@ def create_request(db: Database, *, phone: str, full_name: str | None,
         hold_id=hold_id,
         hold_expires_at=expires_at,
         quote=quote,
+        payment_terms=payment_terms,
+        guests_count=int(guests_count),
+        advance_due=advance,
     )
 
 

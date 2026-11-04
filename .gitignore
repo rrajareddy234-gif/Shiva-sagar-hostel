@@ -31,3 +31,4 @@ deploy/.env
 
 # Local push token; never commit
 .github-push-token
+.agent_tmp/
