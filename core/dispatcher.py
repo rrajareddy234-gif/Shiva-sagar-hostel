@@ -13,8 +13,9 @@ from __future__ import annotations
 import logging
 
 from ai.adapter import AIClient
-from core import handler, inbox
+from core import alerts, handler, inbox
 from core.channel.adapter import ChannelAdapter, InboundMessage, Prompt
+from core.export import DataFile
 from core.config import Settings
 from core.db import Database
 
@@ -80,7 +81,8 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
             db, phone=message.from_phone, text=message.text,
             owner_phone=settings.owner_phone, ai=ai,
             history=history_for(db, message.from_phone),
-            button_id=message.button_id)
+            button_id=message.button_id,
+            staff_phones=settings.staff_phones)
     except Exception as exc:
         log.exception("handling failed for %s: %s", message.from_phone, exc)
         _reply(db, channel, message.from_phone,
@@ -90,8 +92,17 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
             inbox.mark_processed(db, message_id)
         return True
 
+    # An outage is silent from the guest's side, so the owner is told about it
+    # here, where the outcome and the channel are both in hand. Both calls are
+    # best-effort: a failed alert must not stop the guest's reply going out.
+    if outcome.escalate:
+        alerts.note_failure(db, channel=channel, owner_phone=settings.owner_phone,
+                            reason="AI unavailable")
+    elif outcome.handled_by == "ai":
+        alerts.note_recovery(db, channel=channel, owner_phone=settings.owner_phone)
+
     sent = _reply(db, channel, message.from_phone, outcome.reply,
-                  prompt=outcome.prompt)
+                  prompt=outcome.prompt, file=outcome.file)
     if not sent:
         return False
 
@@ -101,12 +112,25 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
 
 
 def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
-           prompt: Prompt | None = None) -> bool:
+           prompt: Prompt | None = None, file: DataFile | None = None) -> bool:
     """Send the reply, preferring tappable answers when the router offered them.
 
     A prompt is a nicety, never a requirement: if it cannot be sent, the guest
     still gets the plain text. An invalid prompt is not attempted at all.
     """
+    if file is not None:
+        # The file carries the answer; the text is only a caption. If the file
+        # cannot be sent, say so instead of silently sending a caption that
+        # promises a file the owner never receives.
+        result = channel.send_document(phone, file.filename, file.content,
+                                       file.media_type, caption=text)
+        if result.ok:
+            inbox.record_outbound(db, phone, text, result.provider_message_id)
+            return True
+        log.warning("document send failed for %s: %s", phone, result.error)
+        text = ("I could not send the file just now. Please ask me again in a "
+                "moment. Nothing has changed in your records.")
+
     if prompt is not None and prompt.is_valid():
         result = channel.send_interactive(phone, prompt)
         if result.ok:
