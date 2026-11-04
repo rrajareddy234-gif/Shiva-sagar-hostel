@@ -123,6 +123,20 @@ The dev database contains leftover rows from earlier manual runs
 - `db/seed.sql` upserts rate plans on the slot (room type, food option, stay
   mode) rather than skipping existing names, so re-running it applies a rate
   change instead of leaving a stale price behind.
+- Interactive messages (tappable buttons/lists) carry an **id** as well as the
+  title the guest reads. `InboundMessage.button_id` holds that id, and the
+  router answers on it before looking at the text: a relabelled or translated
+  title must not break a flow. Button ids are namespaced strings, e.g.
+  `price:room:AC` and `price:food:AC:1`.
+- A button never carries an amount. It carries the *choice*; the figure is
+  computed from the rate card. This keeps the "never guess a price" rule.
+- Interactive sends are best-effort: `dispatcher._reply` tries the prompt, and
+  falls back to plain text if it fails or the prompt is invalid. Text is always
+  the fallback body, so a channel without buttons still works.
+- `Prompt` (core/channel/adapter.py) is buttons (up to 3) or a list (up to 10
+  rows). `is_valid()` enforces Meta's limits; titles are clipped when sent.
+- Interactive messages are only valid inside the 24-hour service window, like
+  text. They need no Meta approval and cost the same as text.
 - Monthly (PG) stays are a **separate product** with their own table,
   `monthly_plans`, not a stay mode on `rate_plans`. It carries `stay_mode` like
   `rate_plans`: NIGHT is a night-only arrangement, DAY a full day. Every room
