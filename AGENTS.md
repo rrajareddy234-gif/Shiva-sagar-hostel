@@ -127,7 +127,12 @@ The dev database contains leftover rows from earlier manual runs
   title the guest reads. `InboundMessage.button_id` holds that id, and the
   router answers on it before looking at the text: a relabelled or translated
   title must not break a flow. Button ids are namespaced strings, e.g.
-  `price:room:AC` and `price:food:AC:1`.
+  `menu:price`, `price:room:AC` and `price:food:AC:1`. The `menu:` prefix is
+  matched before the `price:` prefix.
+- A greeting offers the same taps as the price question: "hi" (or a bare
+  "menu"/"help"/"options"/"start") sends `[Prices] [Availability] [Facilities]`.
+  Only a *bare* "help" asks for the menu - "help me book a bed" is a real
+  request and is handled on its merits.
 - A button never carries an amount. It carries the *choice*; the figure is
   computed from the rate card. This keeps the "never guess a price" rule.
 - Interactive sends are best-effort: `dispatcher._reply` tries the prompt, and
