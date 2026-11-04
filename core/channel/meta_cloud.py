@@ -9,7 +9,13 @@ import logging
 import urllib.error
 import urllib.request
 
-from core.channel.adapter import ChannelAdapter, InboundMessage, SendResult
+from core.channel.adapter import (
+    Button,
+    ChannelAdapter,
+    InboundMessage,
+    Prompt,
+    SendResult,
+)
 
 log = logging.getLogger(__name__)
 
@@ -61,12 +67,16 @@ class MetaCloudAdapter(ChannelAdapter):
                 for msg in value.get("messages", []) or []:
                     msg_type = msg.get("type", "unknown")
                     text = None
+                    button_id = None
                     if msg_type == "text":
                         text = (msg.get("text") or {}).get("body")
                     elif msg_type == "interactive":
                         interactive = msg.get("interactive") or {}
                         reply = interactive.get("button_reply") or interactive.get("list_reply") or {}
-                        text = reply.get("title") or reply.get("id")
+                        # Keep the id as well as the label: the router answers on
+                        # the id, which cannot be mistyped or translated away.
+                        button_id = reply.get("id")
+                        text = reply.get("title") or button_id
                     out.append(InboundMessage(
                         provider_message_id=msg.get("id", ""),
                         from_phone=_normalise_phone(msg.get("from", "")),
@@ -74,6 +84,7 @@ class MetaCloudAdapter(ChannelAdapter):
                         message_type=msg_type,
                         timestamp=int(msg["timestamp"]) if msg.get("timestamp") else None,
                         raw=msg,
+                        button_id=button_id,
                     ))
         return out
 
@@ -106,6 +117,44 @@ class MetaCloudAdapter(ChannelAdapter):
                 "components": components,
             },
         }
+        return self._post(body)
+
+    def send_interactive(self, to_phone: str, prompt: Prompt) -> SendResult:
+        if prompt.rows:
+            body = {
+                "messaging_product": "whatsapp",
+                "to": _digits(to_phone),
+                "type": "interactive",
+                "interactive": {
+                    "type": "list",
+                    "body": {"text": prompt.body},
+                    "action": {
+                        "button": prompt.button_text,
+                        "sections": [{
+                            "title": prompt.button_text,
+                            "rows": [{"id": row.id, "title": row.title[:24]}
+                                     for row in prompt.rows],
+                        }],
+                    },
+                },
+            }
+        else:
+            body = {
+                "messaging_product": "whatsapp",
+                "to": _digits(to_phone),
+                "type": "interactive",
+                "interactive": {
+                    "type": "button",
+                    "body": {"text": prompt.body},
+                    "action": {
+                        "buttons": [
+                            {"type": "reply",
+                             "reply": {"id": button.id, "title": button.title[:20]}}
+                            for button in prompt.buttons
+                        ],
+                    },
+                },
+            }
         return self._post(body)
 
     def _post(self, body: dict) -> SendResult:

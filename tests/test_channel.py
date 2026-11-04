@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+from core.channel.adapter import Button, Prompt, SendResult
 from core.channel.meta_cloud import MetaCloudAdapter
 from core.channel.peach import PeachAdapter
 from core.channel.registry import build_channel
@@ -187,3 +188,90 @@ def test_peach_stub_fails_closed(adapter):
     peach = PeachAdapter(api_key="k", phone_number_id="1")
     assert peach.verify_inbound(b"{}", {}) is False
     assert peach.send_text("+919000000000", "hi").ok is False
+    assert peach.send_interactive(
+        "+919000000000", Prompt(body="hi", buttons=(Button("a", "A"),))).ok is False
+
+
+# --- interactive messages --------------------------------------------------
+
+def _sent_body(adapter, monkeypatch, prompt):
+    """Call send_interactive and return the JSON body it would have posted."""
+    captured = {}
+
+    def fake_post(self, body):
+        captured.update(body)
+        return SendResult(ok=True, provider_message_id="wamid.SENT")
+
+    monkeypatch.setattr(MetaCloudAdapter, "_post", fake_post)
+    result = adapter.send_interactive("+919876543210", prompt)
+    assert result.ok
+    return captured
+
+
+def test_send_interactive_sends_reply_buttons(adapter, monkeypatch):
+    prompt = Prompt(body="Which room type?",
+                    buttons=(Button("price:room:AC", "AC"),
+                             Button("price:room:NON_AC", "Non-AC")))
+    body = _sent_body(adapter, monkeypatch, prompt)
+
+    assert body["type"] == "interactive"
+    assert body["to"] == "919876543210"
+    interactive = body["interactive"]
+    assert interactive["type"] == "button"
+    assert interactive["body"]["text"] == "Which room type?"
+    assert interactive["action"]["buttons"] == [
+        {"type": "reply", "reply": {"id": "price:room:AC", "title": "AC"}},
+        {"type": "reply", "reply": {"id": "price:room:NON_AC", "title": "Non-AC"}},
+    ]
+
+
+def test_send_interactive_sends_a_list_when_more_than_three(adapter, monkeypatch):
+    rows = tuple(Button(f"price:room:R{i}", f"Room {i}") for i in range(4))
+    prompt = Prompt(body="Which room?", rows=rows, button_text="Choose a room")
+    body = _sent_body(adapter, monkeypatch, prompt)
+
+    interactive = body["interactive"]
+    assert interactive["type"] == "list"
+    assert interactive["action"]["button"] == "Choose a room"
+    assert len(interactive["action"]["sections"][0]["rows"]) == 4
+
+
+def test_send_interactive_truncates_over_long_titles(adapter, monkeypatch):
+    """Meta rejects over-long labels, so they are clipped rather than failing."""
+    prompt = Prompt(body="?", buttons=(Button("a", "x" * 40),))
+    body = _sent_body(adapter, monkeypatch, prompt)
+    assert len(body["interactive"]["action"]["buttons"][0]["reply"]["title"]) == 20
+
+
+def test_parse_interactive_reply_keeps_the_button_id(adapter):
+    payload = json.dumps({
+        "entry": [{"changes": [{"value": {"messages": [{
+            "from": "919000000000", "id": "wamid.BTN2", "type": "interactive",
+            "interactive": {"type": "button_reply",
+                            "button_reply": {"id": "price:room:AC", "title": "AC"}},
+        }]}}]}],
+    }).encode()
+    message = adapter.parse_inbound(payload)[0]
+    assert message.button_id == "price:room:AC"
+    assert message.text == "AC"
+
+
+def test_parse_interactive_list_reply_keeps_the_row_id(adapter):
+    payload = json.dumps({
+        "entry": [{"changes": [{"value": {"messages": [{
+            "from": "919000000000", "id": "wamid.LST", "type": "interactive",
+            "interactive": {"type": "list_reply",
+                            "list_reply": {"id": "price:room:DORM", "title": "Dormitory"}},
+        }]}}]}],
+    }).encode()
+    message = adapter.parse_inbound(payload)[0]
+    assert message.button_id == "price:room:DORM"
+    assert message.text == "Dormitory"
+
+
+def test_prompt_validity_matches_the_meta_limits():
+    assert Prompt(body="?", buttons=(Button("a", "A"),)).is_valid()
+    assert Prompt(body="?", buttons=tuple(Button(f"b{i}", "B") for i in range(4))).is_valid() is False
+    assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(10))).is_valid()
+    assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(11))).is_valid() is False
+    assert Prompt(body="?").is_valid() is False

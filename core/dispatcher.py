@@ -14,7 +14,7 @@ import logging
 
 from ai.adapter import AIClient
 from core import handler, inbox
-from core.channel.adapter import ChannelAdapter, InboundMessage
+from core.channel.adapter import ChannelAdapter, InboundMessage, Prompt
 from core.config import Settings
 from core.db import Database
 
@@ -63,7 +63,10 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
 
     Returns True when the message was handled, so the caller can mark it done.
     """
-    if message.message_type != "text" or not (message.text or "").strip():
+    # A tap is a text message the guest did not have to type. It carries the
+    # button id, so it is handled exactly like typed text.
+    if not message.button_id and (message.message_type != "text"
+                                  or not (message.text or "").strip()):
         # Media and other message types are acknowledged but not yet understood.
         _reply(db, channel, message.from_phone,
                "Thanks for your message. Please send it as text so I can help, "
@@ -76,7 +79,8 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
         outcome = handler.handle_message(
             db, phone=message.from_phone, text=message.text,
             owner_phone=settings.owner_phone, ai=ai,
-            history=history_for(db, message.from_phone))
+            history=history_for(db, message.from_phone),
+            button_id=message.button_id)
     except Exception as exc:
         log.exception("handling failed for %s: %s", message.from_phone, exc)
         _reply(db, channel, message.from_phone,
@@ -86,7 +90,8 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
             inbox.mark_processed(db, message_id)
         return True
 
-    sent = _reply(db, channel, message.from_phone, outcome.reply)
+    sent = _reply(db, channel, message.from_phone, outcome.reply,
+                  prompt=outcome.prompt)
     if not sent:
         return False
 
@@ -95,7 +100,21 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     return True
 
 
-def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str) -> bool:
+def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
+           prompt: Prompt | None = None) -> bool:
+    """Send the reply, preferring tappable answers when the router offered them.
+
+    A prompt is a nicety, never a requirement: if it cannot be sent, the guest
+    still gets the plain text. An invalid prompt is not attempted at all.
+    """
+    if prompt is not None and prompt.is_valid():
+        result = channel.send_interactive(phone, prompt)
+        if result.ok:
+            inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
+            return True
+        log.warning("interactive send failed for %s, falling back to text: %s",
+                    phone, result.error)
+
     result = channel.send_text(phone, text)
     if not result.ok:
         log.error("could not send to %s: %s", phone, result.error)

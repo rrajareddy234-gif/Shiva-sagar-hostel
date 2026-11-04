@@ -168,11 +168,14 @@ def test_a_new_enquiry_is_recorded(client, db):
 
 # --- end to end: a message in, a reply out --------------------------------
 
-def test_a_price_question_gets_a_reply(client, db, channel):
+def test_a_price_question_gets_tappable_answers(client, db, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
-    assert "350" in channel.sent[0][1]
+    assert len(channel.prompts) == 1, "the price question is answered with buttons"
+    prompt = channel.prompts[0][1]
+    assert [b.id for b in prompt.buttons] == [
+        "price:room:AC", "price:room:NON_AC", "price:room:DORM"]
+    assert [b.title for b in prompt.buttons] == ["AC", "Non-AC", "Dormitory"]
 
 
 def test_the_reply_is_recorded_as_outbound(client, db, channel):
@@ -180,7 +183,7 @@ def test_the_reply_is_recorded_as_outbound(client, db, channel):
     client.post("/webhook", content=body, headers=_signed(body))
     row = db.query_one("SELECT body, direction FROM messages WHERE direction = 'OUT'")
     assert row["direction"] == "OUT"
-    assert "350" in row["body"]
+    assert "which room type" in row["body"].lower()
 
 
 def test_a_greeting_gets_a_reply(client, channel):
@@ -193,7 +196,32 @@ def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
+    assert len(channel.sent) + len(channel.prompts) == 1
+
+
+def test_a_failed_button_send_still_replies_with_text(db, seeded):
+    """Buttons are a nicety. If they fail, the guest must still get the rates."""
+    from fastapi.testclient import TestClient
+    from api.webhook import create_app
+    from core.config import Settings
+    from tests.conftest import TEST_DSN, FakeChannel
+
+    settings = Settings(
+        database_url=TEST_DSN, channel_provider="meta_cloud",
+        owner_phone="+919999999999", timezone="Asia/Kolkata",
+        meta_app_secret=APP_SECRET, meta_access_token="t",
+        meta_phone_number_id="123456789", meta_verify_token=VERIFY_TOKEN,
+        ai_provider="gemini", ai_model="gemini-3.5-flash",
+        ai_api_key=None, ai_base_url=None)
+    failing = FakeChannel(fail_interactive=True)
+    client = TestClient(create_app(settings, channel=failing, ai=None))
+
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+
+    assert failing.prompts == [], "the prompt could not be sent"
+    assert len(failing.sent) == 1, "the guest still gets a text fallback"
+    assert "350" in failing.sent[0][1]
 
 
 def test_a_verified_customer_is_marked_answered(client, db, channel):
@@ -243,4 +271,4 @@ def test_several_rapid_messages_each_get_one_reply(client, db, channel):
     for i in range(4):
         body = _payload(message_id=f"wamid.RAPID{i}", text="what is the price?")
         client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 4
+    assert len(channel.sent) + len(channel.prompts) == 4

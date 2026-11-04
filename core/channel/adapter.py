@@ -22,6 +22,39 @@ class InboundMessage:
     message_type: str = "text"        # text | image | audio | document | interactive | ...
     timestamp: int | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    # Set when the guest tapped a button or a list row: the id we chose, never
+    # the label. Routing on the id survives a relabelling or a translation.
+    button_id: str | None = None
+
+
+@dataclass(frozen=True)
+class Button:
+    """One tappable answer. `id` is ours; `title` is what the guest reads."""
+
+    id: str
+    title: str
+
+
+@dataclass(frozen=True)
+class Prompt:
+    """A question with tappable answers, so the guest does not have to type.
+
+    Up to three `buttons` are shown directly under the body. More than three
+    options must go in `rows`, which WhatsApp reveals behind one `button_text`.
+    """
+
+    body: str
+    buttons: tuple[Button, ...] = ()
+    rows: tuple[Button, ...] = ()
+    button_text: str = "Choose"
+
+    def is_valid(self) -> bool:
+        """Meta's limits. A prompt that breaks them is never sent as-is."""
+        if self.rows:
+            return 1 <= len(self.rows) <= 10 and len(self.button_text) <= 20
+        if self.buttons:
+            return 1 <= len(self.buttons) <= 3
+        return False
 
 
 @dataclass(frozen=True)
@@ -60,6 +93,14 @@ class ChannelAdapter(ABC):
                       params: list[str] | None = None,
                       language: str = "en") -> SendResult:
         """Send an approved template. Required outside the 24-hour service window."""
+
+    @abstractmethod
+    def send_interactive(self, to_phone: str, prompt: Prompt) -> SendResult:
+        """Send a question with tappable answers.
+
+        Only valid inside the 24-hour service window, like send_text. The caller
+        is responsible for falling back to send_text when this fails.
+        """
 
     def verify_challenge(self, query: dict[str, str]) -> str | None:
         """Handle the GET webhook verification handshake.

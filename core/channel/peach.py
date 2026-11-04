@@ -53,3 +53,6 @@ class PeachAdapter(ChannelAdapter):
                       params: list[str] | None = None,
                       language: str = "en") -> SendResult:
         return SendResult(ok=False, error="Peach adapter is not implemented")
+
+    def send_interactive(self, to_phone: str, prompt) -> SendResult:
+        return SendResult(ok=False, error="Peach adapter is not implemented")

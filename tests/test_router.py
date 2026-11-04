@@ -86,6 +86,75 @@ def test_price_reply_names_the_night_and_day_rates(db):
     assert "a day" in reply.text
 
 
+# --- the price flow, answered by tapping -----------------------------------
+
+def test_price_question_offers_room_buttons(db):
+    """The guest is asked which room, with taps, instead of reading every rate."""
+    reply = router.route(db, "what are the prices?")
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons] == [
+        "price:room:AC", "price:room:NON_AC", "price:room:DORM"]
+    assert [b.title for b in reply.prompt.buttons] == ["AC", "Non-AC", "Dormitory"]
+    # The full text is still the fallback body for a channel without buttons.
+    assert "350" in reply.text
+
+
+def test_tapping_a_room_asks_the_food_question(db):
+    reply = router.route(db, "what are the prices?", button_id="price:room:DORM")
+    assert reply.prompt is not None
+    assert [b.title for b in reply.prompt.buttons] == ["With food", "Without food"]
+
+
+def test_tapping_food_quotes_exactly_one_rate_from_the_rate_card(db):
+    """Two taps give one room's rate, computed from the database, not guessed."""
+    reply = router.route(db, "x", button_id="price:food:AC:1")
+    assert "AC with food" in reply.text
+    assert "Rs 350 a night" in reply.text
+    assert "Rs 450 a day" in reply.text
+    # Other rooms must not be listed: that was the whole point of the flow.
+    assert "Non-AC" not in reply.text
+    assert "Dormitory" not in reply.text
+
+
+def test_tapping_food_without_quotes_the_without_food_rate(db):
+    reply = router.route(db, "x", button_id="price:food:AC:0")
+    assert "AC without food" in reply.text
+    assert "Rs 300 a night" in reply.text
+    assert "Rs 350 a day" in reply.text
+
+
+def test_a_room_that_offers_only_one_food_option_is_quoted_immediately(db):
+    """When a room has no food choice to make, the question is skipped."""
+    db.execute("UPDATE rate_plans SET active = false "
+               "WHERE room_type = 'NON_AC' AND food_included = false")
+    reply = router.route(db, "x", button_id="price:room:NON_AC")
+    assert reply.prompt is None, "no question is needed when there is no choice"
+    assert "Non-AC with food" in reply.text
+    assert "Rs 250 a night" in reply.text
+
+
+def test_a_tap_is_answered_without_the_ai(db):
+    reply = router.route(db, "x", button_id="price:room:AC")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+
+
+def test_an_unknown_button_id_falls_through_to_normal_routing(db):
+    """A foreign or stale button id must not be mistaken for a price tap."""
+    reply = router.route(db, "what is the price?", button_id="something:else")
+    assert reply.handled is True
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons][0] == "price:room:AC"
+
+
+def test_the_guest_never_sees_a_price_on_a_button(db):
+    """Buttons carry the choice only; every figure is computed from the rate card."""
+    reply = router.route(db, "what are the prices?")
+    for button in reply.prompt.buttons:
+        assert "Rs" not in button.title
+        assert not any(ch.isdigit() for ch in button.title)
+
+
 def test_price_does_not_invent_a_figure_when_no_plan_exists(db):
     db.execute("UPDATE rate_plans SET active = false")
     reply = router.route(db, "what is the price?")

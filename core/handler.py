@@ -16,6 +16,7 @@ from dataclasses import dataclass
 from ai.adapter import AIClient, AIUnavailable
 from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM
 from core import commands, router, security, tools
+from core.channel.adapter import Prompt
 from core.db import Database
 
 log = logging.getLogger(__name__)
@@ -32,10 +33,13 @@ class Outcome:
     intent: str = "unknown"
     escalate: bool = False
     tool_calls: tuple[str, ...] = ()
+    # Tappable answers to send alongside the reply, when the router offered them.
+    prompt: Prompt | None = None
 
 
 def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | None,
-                   ai: AIClient | None = None, history: list[dict] | None = None) -> Outcome:
+                   ai: AIClient | None = None, history: list[dict] | None = None,
+                   button_id: str | None = None) -> Outcome:
     """Produce the reply for one inbound message."""
     role = security.role_for(phone, owner_phone)
 
@@ -54,10 +58,10 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
                            intent=owner_reply.intent)
 
     else:
-        customer_reply = router.route(db, text, role=role)
+        customer_reply = router.route(db, text, role=role, button_id=button_id)
         if customer_reply.handled:
             return Outcome(reply=customer_reply.text, handled_by="router",
-                           intent=customer_reply.intent)
+                           intent=customer_reply.intent, prompt=customer_reply.prompt)
 
     if ai is None:
         return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)

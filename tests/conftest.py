@@ -145,9 +145,11 @@ class FakeChannel(ChannelAdapter):
 
     name = "fake"
 
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False, fail_interactive: bool = False):
         self.sent: list[tuple[str, str]] = []
+        self.prompts: list[tuple[str, object]] = []
         self.fail = fail
+        self.fail_interactive = fail_interactive
 
     def _meta(self):
         from core.channel.meta_cloud import MetaCloudAdapter
@@ -171,6 +173,12 @@ class FakeChannel(ChannelAdapter):
 
     def send_template(self, to_phone, template_name, params=None, language="en"):
         return SendResult(ok=True, provider_message_id="tpl.1")
+
+    def send_interactive(self, to_phone, prompt):
+        if self.fail or self.fail_interactive:
+            return SendResult(ok=False, error="simulated interactive failure")
+        self.prompts.append((to_phone, prompt))
+        return SendResult(ok=True, provider_message_id=f"btn.{len(self.prompts)}")
 
 
 @pytest.fixture

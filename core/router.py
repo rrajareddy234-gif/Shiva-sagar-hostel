@@ -15,6 +15,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from core import availability, booking, inbox, payments, pricing
+from core.channel.adapter import Button, Prompt
 from core.db import Database
 
 HELP = (
@@ -30,6 +31,9 @@ class Reply:
     handled: bool
     needs_ai: bool = False
     intent: str = "unknown"
+    # When set, the guest is offered tappable answers instead of typing. `text`
+    # is still the fallback body, so a channel without buttons keeps working.
+    prompt: Prompt | None = None
 
 
 def _day_bounds(day: datetime) -> tuple[datetime, datetime]:
@@ -82,11 +86,18 @@ def classify(text: str | None) -> str:
 def route(db: Database, text: str | None, *, role: str = "customer",
           now: datetime | None = None, room_type: str | None = None,
           food_included: bool | None = None,
-          nights: int | None = None) -> Reply:
+          nights: int | None = None, button_id: str | None = None) -> Reply:
     """Answer if the question is one we handle deterministically.
 
     Returns `needs_ai=True` when the message should go to the AI layer instead.
+    A tapped button arrives as `button_id`, which is matched before the text:
+    the id is stable, where the label the guest saw is not.
     """
+    if button_id:
+        tapped = _price_button(db, button_id)
+        if tapped is not None:
+            return tapped
+
     intent = classify(text)
 
     if intent in ("empty", "unknown"):
@@ -103,7 +114,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         return Reply(_facilities(db, room_type, food_included), handled=True, intent=intent)
 
     if intent == "price":
-        return Reply(_price(db, text, room_type, food_included), handled=True, intent=intent)
+        return _price_reply(db, text, room_type, food_included)
 
     if intent == "availability":
         return Reply(_availability(db, text, now, room_type, nights), handled=True,
@@ -187,6 +198,132 @@ def _price(db: Database, text: str, room_type: str | None,
     lines.append("")
     lines.append("Tell me your dates and I can check availability.")
     return "\n".join(lines)
+
+
+# --- the price flow, answered by tapping -----------------------------------
+
+_ROOM_LABEL = {"AC": "AC", "NON_AC": "Non-AC", "DORM": "Dormitory"}
+
+# Button ids are stable and machine-readable. The guest sees the title; the
+# router answers on the id, so a relabelled or translated title cannot break it.
+_PRICE_ROOM = "price:room:"
+_PRICE_FOOD = "price:food:"
+
+
+def _priced_room_types(db: Database) -> list[str]:
+    """Room types that have an active rate, in a fixed, readable order."""
+    rows = db.query_all(
+        "SELECT DISTINCT room_type FROM rate_plans WHERE active AND daily_rate IS NOT NULL"
+    )
+    present = {row["room_type"] for row in rows}
+    return [rt for rt in ("AC", "NON_AC", "DORM") if rt in present]
+
+
+def _price_reply(db: Database, text: str, room_type: str | None,
+                 food_included: bool | None) -> Reply:
+    """Offer the price question as taps, falling back to the full text list.
+
+    The full list stays the fallback body, so a channel that cannot show buttons
+    behaves exactly as before.
+    """
+    full_text = _price(db, text, room_type, food_included)
+
+    if room_type:
+        return _price_for_room(db, room_type, food_included)
+
+    rooms = _priced_room_types(db)
+    if not rooms:
+        return Reply(full_text, handled=True, intent="price")
+
+    # One room type needs no question at all; go straight to its food choice.
+    if len(rooms) == 1:
+        return _price_for_room(db, rooms[0], food_included)
+
+    choices = tuple(Button(f"{_PRICE_ROOM}{rt}", _ROOM_LABEL.get(rt, rt))
+                    for rt in rooms)
+    body = "Our rates are per bed. Which room type would you like?"
+    if len(choices) <= 3:
+        prompt = Prompt(body=body, buttons=choices)
+    else:
+        prompt = Prompt(body=body, rows=choices, button_text="Choose a room")
+
+    return Reply(full_text, handled=True, intent="price", prompt=prompt)
+
+
+def _price_for_room(db: Database, room_type: str, food_included: bool | None) -> Reply:
+    """Ask the food question if the room offers both, else quote directly."""
+    try:
+        offered = pricing.food_options(db, room_type)
+    except Exception:
+        offered = []
+
+    if not offered:
+        return Reply(_price(db, "", room_type, food_included), handled=True, intent="price")
+
+    if len(offered) == 1:
+        return _quote(db, room_type, offered[0])
+
+    if food_included is not None:
+        return _quote(db, room_type, food_included)
+
+    label = _ROOM_LABEL.get(room_type, room_type)
+    buttons = tuple(
+        Button(f"{_PRICE_FOOD}{room_type}:{'1' if food else '0'}",
+               "With food" if food else "Without food")
+        for food in (True, False)
+    )
+    body = f"{label} room. With food or without?"
+    return Reply(body, handled=True, intent="price",
+                 prompt=Prompt(body=body, buttons=buttons))
+
+
+def _quote(db: Database, room_type: str, food_included: bool) -> Reply:
+    """The exact rate for one room and food choice, read from the rate card."""
+    label = _ROOM_LABEL.get(room_type, room_type)
+    suffix = " with food" if food_included else " without food"
+
+    nightly = pricing.rates_for(db, room_type, food_included)
+    lines = [f"{label}{suffix}:"]
+    if "NIGHT" in nightly:
+        lines.append(f"{_rupees(nightly['NIGHT'].daily_rate)} a night")
+    if "DAY" in nightly:
+        lines.append(f"{_rupees(nightly['DAY'].daily_rate)} a day")
+    if len(lines) == 1:
+        lines.append("I don't have that rate to hand. I'll ask the owner.")
+
+    monthly = [p for p in pricing.list_monthly_plans(db)
+               if p["room_type"] == room_type and p["food_included"] == food_included
+               and p["plan_kind"] == "STANDARD"]
+    if monthly:
+        by_mode = {p["stay_mode"]: p["monthly_rate"] for p in monthly}
+        parts = []
+        if "NIGHT" in by_mode:
+            parts.append(f"{_rupees(by_mode['NIGHT'])} night")
+        if "DAY" in by_mode and by_mode.get("DAY") != by_mode.get("NIGHT"):
+            parts.append(f"{_rupees(by_mode['DAY'])} full day")
+        if parts:
+            lines.append("")
+            lines.append("For a monthly stay: " + " / ".join(parts))
+
+    return Reply("\n".join(lines), handled=True, intent="price")
+
+
+def _price_button(db: Database, button_id: str) -> Reply | None:
+    """Answer a price-flow tap. Returns None if the id is not ours."""
+    if not button_id.startswith((_PRICE_ROOM, _PRICE_FOOD)):
+        return None
+    parts = button_id.split(":")
+    if len(parts) == 3 and parts[1] == "room":
+        room_type = parts[2]
+        if room_type not in _ROOM_LABEL:
+            return None
+        return _price_for_room(db, room_type, None)
+    if len(parts) == 4 and parts[1] == "food":
+        room_type, food = parts[2], parts[3]
+        if room_type not in _ROOM_LABEL or food not in ("0", "1"):
+            return None
+        return _quote(db, room_type, food == "1")
+    return None
 
 
 def _availability(db: Database, text: str, now: datetime | None,
