@@ -102,6 +102,16 @@ class ChannelAdapter(ABC):
         is responsible for falling back to send_text when this fails.
         """
 
+    def send_document(self, to_phone: str, filename: str, content: bytes,
+                      media_type: str = "text/csv",
+                      caption: str | None = None) -> SendResult:
+        """Send a file. Providers that cannot do this keep the default.
+
+        The default reports failure, so the caller falls back to text. This is
+        the same contract as send_interactive: a nicety, never a requirement.
+        """
+        return SendResult(ok=False, error="this channel cannot send documents")
+
     def verify_challenge(self, query: dict[str, str]) -> str | None:
         """Handle the GET webhook verification handshake.
 

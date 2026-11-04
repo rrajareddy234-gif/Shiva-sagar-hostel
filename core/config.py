@@ -56,9 +56,11 @@ class Settings:
     ai_api_key: str | None
     ai_base_url: str | None
     ai_timeout: int = 90
+    staff_phones: tuple[str, ...] = ()
 
     @staticmethod
     def from_env() -> "Settings":
+        raw_staff = _env("STAFF_PHONES", "") or ""
         return Settings(
             database_url=_env("DATABASE_URL", required=True),
             channel_provider=_env("CHANNEL_PROVIDER", "meta_cloud"),
@@ -69,10 +71,11 @@ class Settings:
             meta_phone_number_id=_env("META_PHONE_NUMBER_ID"),
             meta_verify_token=_env("META_VERIFY_TOKEN"),
             ai_provider=_env("AI_PROVIDER", "gemini"),
-            ai_model=_env("AI_MODEL", "gemini-3.5-flash"),
+            ai_model=_env("AI_MODEL", "gemini-flash-lite-latest"),
             ai_api_key=_env("AI_API_KEY"),
             ai_base_url=_env("AI_BASE_URL"),
             ai_timeout=int(_env("AI_TIMEOUT", "90") or 90),
+            staff_phones=tuple(p.strip() for p in raw_staff.split(",") if p.strip()),
         )
 
     def channel_credentials(self) -> dict:

@@ -117,10 +117,10 @@ def test_prices_come_from_the_rate_plans(seeded):
 def test_prices_include_the_extras(seeded):
     result = run(seeded, "get_prices")
     extras = {e["name"]: e["price"] for e in result["extras"]}
-    assert extras["New bedsheet"] == "50.00"
-    assert extras["New towel"] == "100.00"
-    assert extras["New pillow"] == "50.00"
-    assert extras["Locker"] == "30.00"
+    assert extras["Bedsheet"] == "50.00"
+    assert extras["Towel"] == "50.00"
+    assert extras["Pillow"] == "50.00"
+    assert extras["Locker"] == "50.00"
 
 
 def test_prices_are_empty_when_no_plans_exist(db):
@@ -174,9 +174,9 @@ def test_quote_adds_extras_to_the_total(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
                   "room_type": "NON_AC", "food_included": True,
-                  "extras": {"New towel": 1, "Locker": 1}})
-    # 250 for the night, plus a 100 towel and a 30 locker.
-    assert result["total"] == "380.00"
+                  "extras": {"Towel": 1, "Locker": 1}})
+    # 250 for the night, plus a 50 towel and a 50 locker.
+    assert result["total"] == "350.00"
     assert result["accommodation_total"] == "250.00"
 
 

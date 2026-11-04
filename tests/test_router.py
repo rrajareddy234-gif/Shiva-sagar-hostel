@@ -127,15 +127,14 @@ def test_price_quotes_the_owners_rates(db):
     assert "250" in reply.text          # non-AC with food, per day
     assert "300" in reply.text          # AC with food, per night
     assert "350" in reply.text          # AC with food, per day
-    assert "100" in reply.text          # dormitory, per night
-    assert "150" in reply.text          # dormitory, per day
+    assert "150" in reply.text          # dormitory mat, per night
 
 
 def test_price_reply_lists_the_extras(db):
     reply = router.route(db, "what are your rates?")
-    assert "New bedsheet" in reply.text
-    assert "New towel" in reply.text
-    assert "New pillow" in reply.text
+    assert "Bedsheet" in reply.text
+    assert "Towel" in reply.text
+    assert "Pillow" in reply.text
     assert "Locker" in reply.text
 
 

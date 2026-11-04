@@ -12,10 +12,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 
 from core import booking, payments, security
 from core.db import Database
 from core.errors import DomainError
+from core.export import DataFile
 
 CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead", "approve"}
 CANCEL_WORDS = {"no", "cancel", "stop", "don't", "dont", "abort"}
@@ -50,6 +52,9 @@ class CommandResult:
     text: str
     applied: bool = False
     action: str | None = None
+    # A data file to send with the text. The channel is still not touched here;
+    # the caller does the sending, exactly as it does for the text.
+    file: DataFile | None = None
 
 
 def _set_pending(db: Database, phone: str, command: dict) -> None:
@@ -120,6 +125,18 @@ def parse_command(text: str) -> dict | None:
         return {"action": "verify_payment",
                 "reference": _reference_from(lowered, match.group(1))}
 
+    # "export customers", "send me the payments file", "download bookings".
+    # Read-only, so it never needs confirming.
+    match = re.search(r"\b(export|download|send\s+me|send\s+the|get\s+me|give\s+me|"
+                      r"share|backup)\b", lowered)
+    if match:
+        what = re.search(r"\b(customer|guest|booking|payment)s?\b", lowered)
+        if what:
+            word = what.group(1)
+            # "guests" and "customers" are the same file.
+            name = "customers" if word in ("customer", "guest") else word + "s"
+            return {"action": "export_data", "what": name}
+
     match = re.search(
         r"\brecord\s*(?:a\s*)?(?:payment|advance)?\s*(?:of\s*)?(?:rs\.?|inr)?\s*"
         r"(\d+(?:\.\d+)?)\s*(?:by|via)?\s*(upi|cash|bank transfer|bank)?"
@@ -177,6 +194,25 @@ def handle(db: Database, *, phone: str, text: str, owner_phone: str | None) -> C
     return CommandResult(text=f"{_describe(command)}\n\nReply YES to confirm, or NO to cancel.")
 
 
+def _export(db: Database, what: str) -> CommandResult:
+    """Build a data file for the owner and hand it to the caller to send."""
+    from core import export
+
+    try:
+        data = export.build(db, what, datetime.now())
+    except DomainError as exc:
+        return CommandResult(text=f"I could not build that file: {exc.message}")
+    if data is None:
+        return CommandResult(
+            text="I can send customers, bookings or payments. "
+                 "Try: export customers")
+    rows = max(0, len(data.text.strip().splitlines()) - 1)
+    return CommandResult(
+        text=f"Here is your {what} file ({rows} row{'s' if rows != 1 else ''}). "
+             f"Open it in Excel or Google Sheets.",
+        applied=True, action="export_data", file=data)
+
+
 def _maybe_single_reference(db: Database, action: str) -> str | None:
     """The one waiting booking's reference, when exactly one is waiting."""
     if action in ("verify_payment", "record_payment"):
@@ -215,6 +251,9 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
     """Apply a staged or non-sensitive command and report the outcome."""
     action = command["action"]
     try:
+        if action == "export_data":
+            return _export(db, str(command.get("what") or "customers"))
+
         if action == "approve_booking":
             row = _resolve_booking(db, command.get("reference"))
             booking.approve(db, str(row["booking_id"]), actor=actor,

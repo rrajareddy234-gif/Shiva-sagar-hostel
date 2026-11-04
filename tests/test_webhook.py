@@ -212,7 +212,7 @@ def test_a_failed_button_send_still_replies_with_text(db, seeded):
         owner_phone="+919999999999", timezone="Asia/Kolkata",
         meta_app_secret=APP_SECRET, meta_access_token="t",
         meta_phone_number_id="123456789", meta_verify_token=VERIFY_TOKEN,
-        ai_provider="gemini", ai_model="gemini-3.5-flash",
+        ai_provider="gemini", ai_model="gemini-flash-lite-latest",
         ai_api_key=None, ai_base_url=None)
     failing = FakeChannel(fail_interactive=True)
     client = TestClient(create_app(settings, channel=failing, ai=None))
@@ -250,8 +250,9 @@ def test_a_failed_send_leaves_the_message_unprocessed(client, db, channel):
 def test_a_customer_cannot_reach_owner_information(client, db, channel):
     body = _payload(text="show this month's revenue", sender="919000001555")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
-    assert "Rs" not in channel.sent[0][1]
+    guest_replies = [t for phone, t in channel.sent if phone == "+919000001555"]
+    assert len(guest_replies) == 1
+    assert "Rs" not in guest_replies[0]
 
 
 def test_non_text_message_gets_a_polite_reply(client, db, channel):

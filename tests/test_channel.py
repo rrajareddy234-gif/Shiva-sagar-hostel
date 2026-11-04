@@ -275,3 +275,50 @@ def test_prompt_validity_matches_the_meta_limits():
     assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(10))).is_valid()
     assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(11))).is_valid() is False
     assert Prompt(body="?").is_valid() is False
+
+
+# --- documents -------------------------------------------------------------
+
+def test_send_document_uploads_then_sends(adapter, monkeypatch):
+    """Meta needs two calls: upload the bytes, then send the media id."""
+    uploaded = {}
+
+    def fake_upload(self, filename, content, media_type):
+        uploaded.update(filename=filename, content=content, media_type=media_type)
+        return "MEDIA_ID_1"
+
+    def fake_post(self, body):
+        uploaded["body"] = body
+        return SendResult(ok=True, provider_message_id="wamid.DOC")
+
+    monkeypatch.setattr(MetaCloudAdapter, "_upload", fake_upload)
+    monkeypatch.setattr(MetaCloudAdapter, "_post", fake_post)
+    result = adapter.send_document("+919876543210", "customers-1.csv",
+                                   b"name\nRamesh\n", caption="Here you go")
+    assert result.ok
+    assert uploaded["filename"] == "customers-1.csv"
+    assert uploaded["content"] == b"name\nRamesh\n"
+    body = uploaded["body"]
+    assert body["type"] == "document"
+    assert body["to"] == "919876543210"
+    assert body["document"] == {"id": "MEDIA_ID_1", "filename": "customers-1.csv",
+                                "caption": "Here you go"}
+
+
+def test_a_failed_upload_does_not_send_an_empty_message(adapter, monkeypatch):
+    posted = []
+    monkeypatch.setattr(MetaCloudAdapter, "_upload",
+                        lambda self, f, c, m: None)
+    monkeypatch.setattr(MetaCloudAdapter, "_post",
+                        lambda self, body: posted.append(body))
+    result = adapter.send_document("+919876543210", "x.csv", b"a\n")
+    assert result.ok is False
+    assert posted == []
+
+
+def test_a_channel_that_cannot_send_files_fails_closed():
+    from core.channel.peach import PeachAdapter
+
+    peach = PeachAdapter(api_key="k", phone_number_id="1")
+    result = peach.send_document("+919876543210", "x.csv", b"a\n")
+    assert result.ok is False

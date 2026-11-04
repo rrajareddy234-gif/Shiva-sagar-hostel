@@ -467,6 +467,38 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
         return Reply(f"Verified revenue this month: {_rupees(total)}.", handled=True,
                      intent="owner_revenue")
 
+    # "guest details", "customer list", "show me all guests" ask for everyone.
+    # These must be checked before the name lookup, or the word "details" is
+    # mistaken for a guest's name and the search finds nobody.
+    if re.search(r"\b(?:guest|customer|tenant)s?\b", lowered) and (
+            re.search(r"\b(all|list|every|show|details?|data|summary|info|"
+                      r"information|how many|count|total)\b", lowered)
+            # A bare "guests" or "customers" is also a request for the list.
+            or re.fullmatch(r"\s*(?:the\s+)?(?:guest|customer|tenant)s?\s*[?.!]*",
+                            lowered)):
+        return _guest_list(db)
+
+    # "who is Ramesh", "who is 9876543210", "guest Ramesh", "details of Ramesh".
+    # Must come before the enquiry matcher, which would otherwise read "who" as
+    # a general question.
+    found = re.search(r"\b(?:who\s+is|who's|find\s+(?:guest|customer)|"
+                      r"guest|customer|tenant|profile\s+of|details\s+of|"
+                      r"info\s+(?:on|about)|about)\s+(.+)$", lowered)
+    if found:
+        query = found.group(1).strip(" ?.!")
+        # A generic word here is a request for the list, not a name to search.
+        generic = r"(?:the\s+)?(?:owner|staff|me|us|there|details?|data|list|" \
+                  r"summary|info|information|all|everyone|everybody|guests?|" \
+                  r"customers?|tenants?|today|now)"
+        if query and not re.fullmatch(generic, query):
+            return _guest_profile(db, query)
+
+    # "show bill SPG-2026-000012", "bill for SPG-..."
+    bill = re.search(r"\b(?:show\s+)?(?:the\s+)?(?:bill|invoice)\s+(?:for\s+)?"
+                     r"(spg-\d{4}-\d{6}|inv-\d{4}-\d{6})", lowered)
+    if bill:
+        return _bill_reply(db, bill.group(1).upper())
+
     if re.search(r"\b(ai|model|token|gemini|openai)\b.*\b(cost|spend|usage|bill)\b", lowered):
         from ai import usage as ai_usage
         start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -540,6 +572,140 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
     return Reply("", handled=False, needs_ai=True, intent="unknown")
 
 
+def _guest_summary_line(db: Database, guest) -> list[str]:
+    """The lines describing one guest: who they are, and their latest stay."""
+    from core import billing
+
+    lines = [f"{guest['full_name'] or 'Unnamed'} · {guest['phone']}"]
+    if guest["gender"] and guest["gender"] != "UNKNOWN":
+        lines.append(f"  {guest['gender'].lower()}, guest since "
+                     f"{guest['created_at']:%d %b %Y}")
+    else:
+        lines.append(f"  Guest since {guest['created_at']:%d %b %Y}")
+
+    bookings = db.query_all(
+        """
+        SELECT booking_id, reference, status, bed_id, check_in_at, check_out_at
+        FROM bookings WHERE guest_id = %s ORDER BY created_at DESC LIMIT 5
+        """, (guest["guest_id"],))
+    if not bookings:
+        lines.append("  No bookings yet.")
+    for b in bookings:
+        balance = payments.get_balance(db, str(b["booking_id"]))
+        extras = billing.list_booking_extras(db, str(b["booking_id"]))
+        lines.append(
+            f"  - {b['reference']} {b['status']} bed {b['bed_id']}, "
+            f"{b['check_in_at']:%d %b} to {b['check_out_at']:%d %b}")
+        lines.append(
+            f"    Bill {_rupees(balance.charges_total)} · "
+            f"paid {_rupees(balance.verified_paid)} · "
+            f"due {_rupees(balance.balance_due)}")
+        if extras:
+            lines.append("    Extras: " + ", ".join(
+                f"{e['name']} {_rupees(e['amount'])}" for e in extras))
+    if guest["notes"]:
+        lines.append(f"  Note: {guest['notes']}")
+    return lines
+
+
+def _guest_list(db: Database, *, limit: int = 15) -> Reply:
+    """Everyone on the books, with their stays and balances. Owner only.
+
+    A guest with a live booking comes first, then the most recent additions, so
+    the people the owner is actually dealing with today are at the top.
+    """
+    rows = db.query_all(
+        """
+        SELECT g.guest_id, g.full_name, g.phone, g.gender, g.notes, g.created_at,
+               EXISTS (
+                   SELECT 1 FROM bookings b
+                   WHERE b.guest_id = g.guest_id
+                     AND b.status IN ('REQUESTED','CONFIRMED','CHECKED_IN')
+               ) AS active
+        FROM guests g
+        WHERE g.is_owner IS NOT TRUE AND g.is_staff IS NOT TRUE
+        ORDER BY active DESC, g.created_at DESC
+        LIMIT %s
+        """, (limit,))
+    if not rows:
+        return Reply("No guests on the books yet.", handled=True, intent="owner_guests")
+
+    total = db.query_one(
+        "SELECT count(*) AS n FROM guests "
+        "WHERE is_owner IS NOT TRUE AND is_staff IS NOT TRUE")["n"]
+
+    blocks = ["\n".join(_guest_summary_line(db, guest)) for guest in rows]
+    header = f"{total} guest(s) on the books"
+    if total > len(rows):
+        header += f", showing the {len(rows)} most relevant"
+    return Reply(header + ":\n\n" + "\n\n".join(blocks), handled=True,
+                 intent="owner_guests")
+
+
+def _guest_profile(db: Database, query: str) -> Reply:
+    """One guest, everything about them. Owner only. Figures from the database."""
+    from core import billing
+
+    digits = "".join(ch for ch in query if ch.isdigit())
+    rows = db.query_all(
+        """
+        SELECT g.guest_id, g.full_name, g.phone, g.notes, g.created_at
+        FROM guests g
+        WHERE g.full_name ILIKE %(like)s
+           OR (%(digits)s <> '' AND regexp_replace(g.phone, '\\D', '', 'g')
+               LIKE '%%' || %(digits)s || '%%')
+        ORDER BY g.created_at DESC LIMIT 5
+        """,
+        {"like": f"%{query}%", "digits": digits})
+    if not rows:
+        return Reply(f"No guest matches {query!r}.", handled=True, intent="owner_guest")
+
+    blocks: list[str] = []
+    for guest in rows:
+        lines = [f"{guest['full_name'] or 'Unnamed'} · {guest['phone']}",
+                 f"Guest since {guest['created_at']:%d %b %Y}"]
+        bookings = db.query_all(
+            """
+            SELECT booking_id, reference, status, bed_id, check_in_at, check_out_at
+            FROM bookings WHERE guest_id = %s ORDER BY created_at DESC LIMIT 5
+            """, (guest["guest_id"],))
+        if not bookings:
+            lines.append("No bookings.")
+        for b in bookings:
+            balance = payments.get_balance(db, str(b["booking_id"]))
+            extras = billing.list_booking_extras(db, str(b["booking_id"]))
+            lines.append(
+                f"- {b['reference']} {b['status']} bed {b['bed_id']}, "
+                f"{b['check_in_at']:%d %b} to {b['check_out_at']:%d %b}")
+            lines.append(
+                f"  Bill {_rupees(balance.charges_total)} · "
+                f"paid {_rupees(balance.verified_paid)} · "
+                f"due {_rupees(balance.balance_due)}")
+            if extras:
+                lines.append("  Extras: " + ", ".join(
+                    f"{e['name']} {_rupees(e['amount'])}" for e in extras))
+        if guest["notes"]:
+            lines.append(f"Note: {guest['notes']}")
+        blocks.append("\n".join(lines))
+
+    return Reply("\n\n".join(blocks), handled=True, intent="owner_guest")
+
+
+def _bill_reply(db: Database, reference: str) -> Reply:
+    """An itemized bill for one booking. Owner only."""
+    from core import billing
+
+    row = db.query_one(
+        "SELECT booking_id FROM bookings WHERE reference = %(ref)s "
+        "OR booking_id::text = %(ref)s", {"ref": reference})
+    if not row:
+        return Reply(f"No booking found for {reference}.", handled=True,
+                     intent="owner_bill")
+    invoice = billing.issue_invoice(db, booking_id=str(row["booking_id"]),
+                                    actor="owner")
+    return Reply(billing.render_invoice(invoice), handled=True, intent="owner_bill")
+
+
 def _full_status(db: Database, now: datetime) -> Reply:
     """One screen answering "how is the hostel doing right now"."""
     start = now.replace(hour=12, minute=0, second=0, microsecond=0)
@@ -578,3 +744,116 @@ def _full_status(db: Database, now: datetime) -> Reply:
 
 def unanswered(db: Database) -> list[dict]:
     return inbox.unanswered_enquiries(db)
+
+
+# --- staff view ------------------------------------------------------------
+
+_STAFF_MENU = "staff:"
+# WhatsApp shows at most three buttons, so the fourth action is stated in the
+# body instead of becoming a tap.
+_STAFF_MENU_TITLES = (
+    ("staff:arrivals", "Arrivals"),
+    ("staff:departures", "Departures"),
+    ("staff:free", "Free beds"),
+)
+
+
+def _staff_menu() -> Reply:
+    body = ("Front desk. What do you need?\n"
+            "To record a payment, send the reference, the amount and the method, "
+            "for example: SPG-2026-000012 paid 500 by UPI.")
+    return Reply(
+        body, handled=True, intent="staff_menu",
+        prompt=Prompt(
+            body=body,
+            buttons=tuple(Button(id=i, title=t) for i, t in _STAFF_MENU_TITLES),
+        ),
+    )
+
+
+def staff_answer(db: Database, text: str | None, *, button_id: str | None = None,
+                 now: datetime | None = None) -> Reply:
+    """The front desk's common questions, answered from SQL, with no AI call.
+
+    A staff member sees the day's work and may record what they are told. They
+    never see revenue, dues totals, rates or the owner's own reports.
+    """
+    now = now or datetime.now().astimezone()
+    lowered = (text or "").lower().strip()
+
+    if button_id and button_id.startswith(_STAFF_MENU):
+        choice = button_id[len(_STAFF_MENU):]
+        if choice == "arrivals":
+            return _staff_arrivals(db, now)
+        if choice == "departures":
+            return _staff_departures(db, now)
+        if choice == "free":
+            return _staff_free(db, now)
+
+    if re.search(r"^\s*(menu|help|options|start)\s*[.!?]*\s*$", lowered):
+        return _staff_menu()
+
+    if re.search(r"\b(arriv\w*|checking in|check[- ]?ins?|coming today)\b", lowered):
+        return _staff_arrivals(db, now)
+
+    if re.search(r"\b(departur\w*|checking out|check[- ]?outs?|leaving)\b", lowered):
+        return _staff_departures(db, now)
+
+    if re.search(r"\b(free|available|vacant|vacanc\w*)\b.*\b(beds?|rooms?)\b|"
+                 r"\b(beds?|rooms?)\b.*\b(free|available|vacant)\b", lowered):
+        return _staff_free(db, now)
+
+    if re.search(r"\b(occupied|in house|staying|checked in)\b", lowered):
+        rows = booking.in_house(db)
+        if not rows:
+            return Reply("No guests are checked in right now.", handled=True,
+                         intent="staff_in_house")
+        lines = [f"{len(rows)} guest(s) in house:"]
+        for row in rows:
+            lines.append(f"- {row['full_name'] or row['phone']}, bed {row['bed_id']}, "
+                         f"until {row['check_out_at']:%d %b}")
+        return Reply("\n".join(lines), handled=True, intent="staff_in_house")
+
+    if re.search(r"\b(overdue|not checked out)\b", lowered):
+        rows = booking.overdue_checkouts(db)
+        if not rows:
+            return Reply("No overdue checkouts.", handled=True, intent="staff_overdue")
+        lines = [f"{len(rows)} overdue checkout(s):"]
+        for row in rows:
+            lines.append(f"- {row['full_name'] or row['phone']}, bed {row['bed_id']}, "
+                         f"due {row['check_out_at']:%d %b %H:%M}")
+        return Reply("\n".join(lines), handled=True, intent="staff_overdue")
+
+    return Reply("", handled=False, needs_ai=True, intent="unknown")
+
+
+def _staff_arrivals(db: Database, now: datetime) -> Reply:
+    rows = booking.arrivals_on(db, now)
+    if not rows:
+        return Reply("No arrivals today.", handled=True, intent="staff_arrivals")
+    lines = [f"{len(rows)} arrival(s) today:"]
+    for row in rows:
+        lines.append(f"- {row['full_name'] or row['phone']} to bed {row['bed_id']} "
+                     f"({row['reference']})")
+    return Reply("\n".join(lines), handled=True, intent="staff_arrivals")
+
+
+def _staff_departures(db: Database, now: datetime) -> Reply:
+    rows = booking.departures_on(db, now)
+    if not rows:
+        return Reply("No departures today.", handled=True, intent="staff_departures")
+    lines = [f"{len(rows)} departure(s) today:"]
+    for row in rows:
+        lines.append(f"- {row['full_name'] or row['phone']}, bed {row['bed_id']} "
+                     f"({row['reference']})")
+    return Reply("\n".join(lines), handled=True, intent="staff_departures")
+
+
+def _staff_free(db: Database, now: datetime) -> Reply:
+    start = now.replace(hour=12, minute=0, second=0, microsecond=0)
+    summary = availability.availability_summary(db, start, start + timedelta(days=1))
+    return Reply(
+        f"{summary['available_beds']} of {summary['total_beds']} beds are free. "
+        f"{summary['occupied_beds']} occupied, {summary['blocked_beds']} blocked. "
+        f"Full rooms: {', '.join(summary['full_rooms']) or 'none'}.",
+        handled=True, intent="staff_free")

@@ -8,6 +8,8 @@ import json
 import logging
 import urllib.error
 import urllib.request
+import uuid
+from typing import Any
 
 from core.channel.adapter import (
     Button,
@@ -156,6 +158,64 @@ class MetaCloudAdapter(ChannelAdapter):
                 },
             }
         return self._post(body)
+
+    def send_document(self, to_phone: str, filename: str, content: bytes,
+                      media_type: str = "text/csv",
+                      caption: str | None = None) -> SendResult:
+        """Upload the file, then send it. Meta needs two calls.
+
+        The upload returns a media id that the send call references. A failed
+        upload stops here rather than sending a message with no file attached.
+        """
+        media_id = self._upload(filename, content, media_type)
+        if not media_id:
+            return SendResult(ok=False, error="document upload failed")
+        document: dict[str, Any] = {"id": media_id, "filename": filename}
+        if caption:
+            document["caption"] = caption
+        return self._post({
+            "messaging_product": "whatsapp",
+            "to": _digits(to_phone),
+            "type": "document",
+            "document": document,
+        })
+
+    def _upload(self, filename: str, content: bytes, media_type: str) -> str | None:
+        """Upload media and return its id, or None on any failure."""
+        boundary = "----sagar" + uuid.uuid4().hex
+        parts = []
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="messaging_product"\r\n\r\n'
+            f"whatsapp\r\n".encode("utf-8"))
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="type"\r\n\r\n'
+            f"{media_type}\r\n".encode("utf-8"))
+        parts.append(
+            f"--{boundary}\r\n"
+            f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
+            f"Content-Type: {media_type}\r\n\r\n".encode("utf-8"))
+        parts.append(content)
+        parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        body = b"".join(parts)
+
+        url = f"{GRAPH_BASE}/{self._phone_number_id}/media"
+        req = urllib.request.Request(url, data=body, method="POST", headers={
+            "Authorization": f"Bearer {self._access_token}",
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+        })
+        try:
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                parsed = json.loads(resp.read().decode("utf-8"))
+            return parsed.get("id")
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", "replace")[:500]
+            log.error("meta upload failed: %s %s", exc.code, detail)
+            return None
+        except Exception as exc:  # network, timeout, DNS
+            log.error("meta upload error: %s", exc)
+            return None
 
     def _post(self, body: dict) -> SendResult:
         url = f"{GRAPH_BASE}/{self._phone_number_id}/messages"
