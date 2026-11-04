@@ -55,6 +55,7 @@ class Settings:
     ai_model: str
     ai_api_key: str | None
     ai_base_url: str | None
+    ai_timeout: int = 90
 
     @staticmethod
     def from_env() -> "Settings":
@@ -71,6 +72,7 @@ class Settings:
             ai_model=_env("AI_MODEL", "gemini-2.5-flash"),
             ai_api_key=_env("AI_API_KEY"),
             ai_base_url=_env("AI_BASE_URL"),
+            ai_timeout=int(_env("AI_TIMEOUT", "90") or 90),
         )
 
     def channel_credentials(self) -> dict:

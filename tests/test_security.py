@@ -221,7 +221,8 @@ def test_env_example_has_no_real_values():
             if key.strip() in ("CHANNEL_PROVIDER", "AI_PROVIDER", "AI_MODEL",
                                "HOSTEL_TIMEZONE", "DATABASE_URL",
                                # Non-secret defaults, safe to show.
-                               "POSTGRES_USER", "POSTGRES_DB", "N8N_USER"):
+                               "POSTGRES_USER", "POSTGRES_DB", "N8N_USER",
+                               "AI_TIMEOUT"):
                 continue
             assert value.strip() == "", f"{key.strip()} must be blank in .env.example"
 

@@ -31,7 +31,8 @@ def build_ai(settings: Settings) -> AIClient | None:
     try:
         return build_ai_client(settings.ai_provider, model=settings.ai_model,
                                api_key=settings.ai_api_key,
-                               base_url=settings.ai_base_url)
+                               base_url=settings.ai_base_url,
+                               timeout=settings.ai_timeout)
     except Exception as exc:
         log.error("could not build the AI client: %s", exc)
         return None
