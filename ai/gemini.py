@@ -22,7 +22,7 @@ BASE = "https://generativelanguage.googleapis.com/v1beta"
 class GeminiClient(AIClient):
     provider = "gemini"
 
-    def __init__(self, *, api_key: str, model: str = "gemini-2.5-flash",
+    def __init__(self, *, api_key: str, model: str = "gemini-3.5-flash",
                  timeout: int = 30):
         if not api_key:
             raise ValueError("Gemini requires an API key")
