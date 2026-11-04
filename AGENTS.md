@@ -152,3 +152,160 @@ The dev database contains leftover rows from earlier manual runs
   ('STANDARD'/'CONCESSION') so a concession could be added later, and
   `_load_monthly_plan` prefers an exact room type over `ANY`. Months are whole;
   there is no pro-rating.
+
+## Owner dashboard (built 2026-11-03)
+- Read-only web page at `/dashboard`, password-protected. Files:
+  `core/dashboard.py` (data), `api/dashboard_page.py` (HTML), `api/dashboard.py`
+  (routes), registered in `api/webhook.py`.
+- Password from `DASHBOARD_PASSWORD`. There is no fixed default: when it is
+  unset a random password is generated for the run and logged, so a public
+  deployment never opens the guest table to a guessable password. Login sets an httponly
+  cookie `sagar_dash`; `/dashboard/logout` clears it. The login body is parsed
+  with `urllib.parse.parse_qs` so `python-multipart` is NOT a dependency.
+- Every figure reuses the same core helpers as the WhatsApp chat
+  (`availability.availability_summary`, `booking.pending_requests`,
+  `payments.*`), so the page and the chat can never disagree.
+- Run locally:
+  `DATABASE_URL=postgresql://sagar:devpass@localhost:5432/sagarpg DASHBOARD_PASSWORD=sagar python -m uvicorn api.main:app --host 0.0.0.0 --port 12000`
+- Still to do: Approve/Reject buttons (phase 2). Owner has NO domain yet; the
+  workspace preview URL is temporary. Production needs a server + domain.
+
+## Dashboard phase 2: Approve / Reject (built 2026-11-03)
+- Pending bookings now show Approve and Reject buttons. `POST /dashboard/decide`
+  with `reference` + `decision` in the body. `core/dashboard.approve_booking` /
+  `reject_booking` call the SAME `core.booking.approve`/`reject` as the WhatsApp
+  command, so the bed-conflict and bed-not-ready checks still apply, and the
+  action is written to `audit_log` with actor `owner-dashboard`.
+- A refusal (bed taken while the request waited) redirects back with a clear red
+  message; the booking stays REQUESTED.
+- Result is shown as a green/red notice via `?notice=...&failed=0|1` on the GET.
+- Tests: tests/test_dashboard.py now 22 tests. Full suite 526 passed.
+
+## Live WhatsApp is connected (verified 2026-11-04)
+- Meta Cloud API credentials in `.env` are LIVE: bot `sagar-pg-bot`, business
+  number +91 83176 05360 ("Sagarpghostel", quality GREEN), WABA
+  `1434890208208126`, phone id `1371188006084487`. Webhook points at the
+  workspace URL.
+- Meta exposes NO customer list: `/contacts` and `/messages` both return
+  "#100 nonexisting field". Customer details only arrive through the webhook and
+  land in our own DB. Never promise to "fetch" customers from Meta.
+- A real customer messaged (+91 86883 97996) and the bot captured it.
+
+## AI model fixed (2026-11-04)
+- `AI_MODEL` was `gemini-3.5-flash`, which does not exist -> every free-text
+  reply failed with "I could not reach the assistant just now". Fixed to
+  `gemini-flash-lite-latest` (then `gemini-flash-lite-latest` after the daily quota ran out).
+  Updated in `.env`, `.env.example`, `core/config.py`, `ai/gemini.py`,
+  `docs/OPERATIONS.md`, `docs/HANDOVER.md`, `tests/test_webhook.py`.
+- Note: the key is on the Gemini FREE tier (about 20 requests/minute). Heavy
+  testing trips HTTP 429. A real customer volume may need a paid key.
+
+## Clearing demo data (2026-11-04)
+- `scripts/reset_demo_data.py` clears people and money, keeping the hostel's own
+  setup (rooms, beds, rate plans, extras, settings) and the record of real
+  inbound contact (conversations, messages, enquiries). Dry-run by default;
+  `--yes` to apply. Also frees every bed and restarts `booking_ref_seq` at 1.
+- Demo data has been cleared: 0 guests/bookings/payments, 68 beds AVAILABLE,
+  next booking is SPG-2026-000001. Backup at `backups/` (gitignored).
+
+## Workspace resets wipe the runtime (2026-11-04)
+- The workspace was recycled mid-session: installed Python packages, the Docker
+  daemon, the postgres container and its volume ALL disappeared. The repo files,
+  `.env` and `backups/` survived (they are on the mounted volume).
+- Recovery, in order:
+  1. `sudo dockerd > /tmp/dockerd.log 2>&1 &` then wait ~8s.
+  2. `pip install -r requirements.txt`
+  3. `docker compose -f deploy/docker-compose.dev.yml up -d` then wait for healthy
+  4. Restore data: `docker exec -i sagarpg-pg psql -U sagar -d sagarpg < backups/<file>.sql`
+  5. Re-apply cleanup: `python scripts/reset_demo_data.py --yes`
+  6. Start the app detached so it survives the shell:
+     `setsid env DATABASE_URL=... DASHBOARD_PASSWORD=... python -m uvicorn api.main:app --host 0.0.0.0 --port 12000 &`
+- The public link is a preview tunnel to port 12000. If nothing listens on 12000,
+  the link looks "broken" — check the server first, not the code.
+
+## How approval works, and why no alert arrives (2026-11-04)
+- Every booking request is created with status REQUESTED. Nothing confirms
+  itself; the owner approves. Verified end to end: guest request ->
+  owner types "pending" -> lists it -> owner types "approve SPG-..." ->
+  bot asks "Reply YES to confirm" -> owner types "yes" -> status CONFIRMED.
+- OWNER_PHONE in `.env` is +918688397996 — the same number that messaged the
+  bot. `security.role_for` resolves it to role "owner", so owner commands work
+  from that number only.
+- The automatic "a booking is waiting" alert comes from the n8n workflow
+  `n8n/pending-booking-requests.json` (Schedule -> fetch -> WhatsApp owner).
+  n8n is NOT running in this workspace, so no alert arrives. Approval itself
+  does not depend on n8n.
+- Fastest approval path: the dashboard Approve button (one tap, no YES step).
+  WhatsApp path: "approve SPG-..." then "yes".
+- `scripts/start_app.sh` brings Docker, packages, DB (restoring the newest
+  backup if the volume was lost) and the app back up in one command.
+
+## Gemini free-tier daily cap (found 2026-11-04)
+- The free tier allows only **20 generateContent requests per DAY per model**
+  (`GenerateRequestsPerDayPerProjectPerModel-FreeTier`). Once spent, every
+  free-text reply fails with HTTP 429 / RESOURCE_EXHAUSTED and the bot falls
+  back to "I'll check with the owner", for up to ~17 hours (`retryDelay`
+  ~61061s). This is what made the bot look broken while the owner tested it.
+- The cap is **per model**, so switching `AI_MODEL` moves to a fresh bucket.
+  Switched to `gemini-flash-lite-latest`, which answered correctly in testing
+  (real rates and availability). Updated `.env`, `.env.example`,
+  `core/config.py`, `ai/gemini.py`, `docs/OPERATIONS.md`, `docs/HANDOVER.md`,
+  `tests/test_webhook.py`.
+- 20/day is far too low for real guests. Before go-live the owner needs a paid
+  Gemini key (or another provider) — see the AI_PROVIDER setting.
+- The fallback message never tells the owner something is broken, so a silent
+  AI outage looks like "the bot ignores me". Worth surfacing.
+
+## AI-lockout alert (built 2026-11-04)
+- `core/alerts.py` tells the owner over WhatsApp when the AI stops answering,
+  and again when it recovers. State is one row in `settings` under key
+  `ai_alert` (`down`/`up`), so the owner is told ONCE per outage, not once per
+  guest message, and the state survives a restart.
+- Wired in `core/dispatcher.py`: `outcome.escalate` -> note_failure,
+  `outcome.handled_by == "ai"` -> note_recovery. Both are best-effort; a failed
+  alert never stops the guest's reply.
+- `outcome.escalate` was already set by the handler but had no consumer, so the
+  owner was never actually alerted before this. That was the real gap.
+- 11 tests in `tests/test_alerts.py` (once-per-outage, recovery, guest reply
+  still sent, broken channel never raises, no OWNER_PHONE is safe).
+- Owner can check spend any time: message "ai cost".
+
+## Extras prices settled + a silent-write bug (2026-11-04)
+Owner confirmed the extras: Bedsheet Rs 50 each, Pillow Rs 50 each,
+Locker Rs 50 per month, **Towel Rs 100 each**.
+
+CORRECTION to an earlier note here: the live database had Towel at Rs 50 while
+the committed branch already had it at Rs 100. The live DB had simply been
+seeded from an older revision, so this was drift between the running database
+and the committed code, NOT an underquoting bug. The real price was always
+Rs 100 in the branch. Locker was genuinely wrong everywhere (Rs 30 -> Rs 50). `docs/RATE_CARD.md`, `docs/OPERATIONS.md` and
+`docs/HOW_TO_MAKE_IT_LIVE.md` all said Locker Rs 30 and "New towel"; corrected.
+
+**Bug found:** `pricing.set_extra()` wrote with `db.query_one()`, which opens a
+connection and closes it WITHOUT committing. Every extras price change was
+silently discarded -- the call returned an id and looked like it worked.
+Rewritten to use `db.transaction()`. Regression tests added in
+`tests/test_pricing.py` (persist across connections, no duplicate row, quote
+uses the new price, negative price and bad unit refused). This was the only
+write-via-query_one in the codebase.
+
+## PR #1 description: DONE (2026-11-04)
+Rewritten and published. The extras table now reads Locker Rs 50 / Towel Rs 100
+and drops the "New" prefix. Verified against the committed branch, the live DB
+and the published body -- all three agree.
+
+Also corrected here: "412 tests passing" was RIGHT all along, not stale. The
+committed branch collects exactly 412. The 542 figure is the working tree,
+which carries extra uncommitted suites (test_alerts, test_billing, test_export,
+test_dashboard, test_memory, test_handler_memory, test_staff_and_billing_flow)
+and ~20 uncommitted commits. Those extra suites are NOT in the PR, so the
+description must quote 412. Do not "fix" it to 542.
+
+Committing an extras price change: the write must go through `db.transaction()`.
+`db.query_one()` opens a connection and closes it WITHOUT committing, so a write
+through it is silently discarded (this is what made set_extra look like it
+worked). `db.execute()` also commits.
+
+The live dev DB was seeded from an older revision, which is why its extras
+disagreed with the committed code. If the DB and the branch disagree, check
+which revision seeded the DB before calling it a code bug.

@@ -115,10 +115,10 @@ def seeded(db: Database) -> Database:
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "
-            "('New bedsheet',50,'PER_ITEM'), "
-            "('New towel',100,'PER_ITEM'), "
-            "('New pillow',50,'PER_ITEM'), "
-            "('Locker',30,'PER_MONTH')"
+            "('Towel',50,'PER_ITEM'), "
+            "('Bedsheet',50,'PER_ITEM'), "
+            "('Pillow',50,'PER_ITEM'), "
+            "('Locker',50,'PER_MONTH')"
         )
     return db
 
@@ -138,6 +138,8 @@ def tomorrow(tz):
 
 APP_SECRET = "test-app-secret"
 VERIFY_TOKEN = "test-verify-token"
+# The dashboard has no fixed default password, so tests set one explicitly.
+DASHBOARD_PASSWORD = "test-dashboard-password"
 
 
 class FakeChannel(ChannelAdapter):
@@ -145,11 +147,14 @@ class FakeChannel(ChannelAdapter):
 
     name = "fake"
 
-    def __init__(self, *, fail: bool = False, fail_interactive: bool = False):
+    def __init__(self, *, fail: bool = False, fail_interactive: bool = False,
+                 fail_document: bool = False):
         self.sent: list[tuple[str, str]] = []
         self.prompts: list[tuple[str, object]] = []
+        self.documents: list[tuple[str, str, bytes]] = []
         self.fail = fail
         self.fail_interactive = fail_interactive
+        self.fail_document = fail_document
 
     def _meta(self):
         from core.channel.meta_cloud import MetaCloudAdapter
@@ -180,6 +185,13 @@ class FakeChannel(ChannelAdapter):
         self.prompts.append((to_phone, prompt))
         return SendResult(ok=True, provider_message_id=f"btn.{len(self.prompts)}")
 
+    def send_document(self, to_phone, filename, content, media_type="text/csv",
+                      caption=None):
+        if self.fail or self.fail_document:
+            return SendResult(ok=False, error="simulated document failure")
+        self.documents.append((to_phone, filename, content))
+        return SendResult(ok=True, provider_message_id=f"doc.{len(self.documents)}")
+
 
 @pytest.fixture
 def channel() -> FakeChannel:
@@ -187,13 +199,14 @@ def channel() -> FakeChannel:
 
 
 @pytest.fixture
-def client(db, channel, seeded):
+def client(db, channel, seeded, monkeypatch):
     """A TestClient against the real database with a fake WhatsApp channel."""
     from fastapi.testclient import TestClient
 
     from api.webhook import create_app
     from core.config import Settings
 
+    monkeypatch.setenv("DASHBOARD_PASSWORD", DASHBOARD_PASSWORD)
     settings = Settings(
         database_url=TEST_DSN,
         channel_provider="meta_cloud",
