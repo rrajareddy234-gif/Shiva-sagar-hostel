@@ -120,14 +120,30 @@ UPDATE monthly_plans SET active = false
 WHERE active AND plan_kind = 'CONCESSION';
 
 -- ---------------------------------------------------------------------------
--- Extras the owner sells or rents. Confirmed 2026-11-03.
+-- Extras the owner sells or rents. Prices re-confirmed 2026-11-04.
+-- ON CONFLICT updates, so a re-run corrects an old price without duplicating.
 -- ---------------------------------------------------------------------------
+-- Older databases named these "New towel", "New bedsheet". Rename in place so a
+-- re-run does not leave a duplicate, differently-priced row behind.
+UPDATE extras SET name = 'Towel'    WHERE name = 'New towel';
+UPDATE extras SET name = 'Bedsheet' WHERE name = 'New bedsheet';
+UPDATE extras SET name = 'Pillow'   WHERE name = 'New pillow';
+
 INSERT INTO extras (name, price, unit, notes) VALUES
-    ('New bedsheet', 50.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
-    ('New towel',   100.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
-    ('New pillow',   50.00, 'PER_ITEM', 'confirmed by the owner 2026-11-03'),
-    ('Locker',       30.00, 'PER_MONTH','confirmed by the owner 2026-11-03')
-ON CONFLICT (name) DO NOTHING;
+    ('Towel',    100.00, 'PER_ITEM', 'confirmed by the owner 2026-11-04'),
+    ('Bedsheet', 50.00, 'PER_ITEM',  'confirmed by the owner 2026-11-04'),
+    ('Pillow',   50.00, 'PER_ITEM',  'confirmed by the owner 2026-11-04'),
+    ('Locker',   50.00, 'PER_MONTH', 'confirmed by the owner 2026-11-04')
+ON CONFLICT (name) DO UPDATE SET price = EXCLUDED.price,
+                                 unit  = EXCLUDED.unit,
+                                 notes = EXCLUDED.notes;
+
+-- ---------------------------------------------------------------------------
+-- The minimum advance per guest to hold a bed. Not refunded on cancellation.
+-- ---------------------------------------------------------------------------
+INSERT INTO settings (key, value) VALUES
+    ('advance_per_guest', '{"amount": "100"}'::jsonb)
+ON CONFLICT (key) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- A flag the owner can read back, so nothing here is silently treated as live.

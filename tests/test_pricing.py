@@ -9,7 +9,10 @@ from decimal import Decimal
 import pytest
 
 from core import pricing
+from core.db import Database
 from core.errors import NotFound, ValidationError
+
+from tests.conftest import TEST_DSN
 
 pytestmark = pytest.mark.usefixtures("seeded")
 
@@ -336,3 +339,42 @@ def test_rate_card_document_matches_the_database(db):
 
     missing = (nightly | monthly | extras) - card
     assert not missing, f"rate card is missing figures: {sorted(missing)}"
+
+# --- changing an extra's price must actually reach the database ------------
+
+def test_setting_an_extra_price_persists(db, seeded):
+    """A price change written and not committed looks like it worked.
+
+    It must be readable from a *separate* connection, which is what a later
+    request or a fresh process sees.
+    """
+    pricing.set_extra(db, name="Towel", price=100, unit="PER_ITEM")
+
+    fresh = Database(TEST_DSN)
+    row = fresh.query_one("SELECT price FROM extras WHERE name = 'Towel'")
+    assert Decimal(row["price"]) == Decimal("100.00")
+
+
+def test_setting_an_extra_price_updates_an_existing_row(db, seeded):
+    pricing.set_extra(db, name="Towel", price=100, unit="PER_ITEM")
+    assert pricing.extras_total(db, {"Towel": 1})[0] == Decimal("100.00")
+    # And it does not create a second, differently-priced Towel.
+    assert db.query_one("SELECT count(*) AS n FROM extras WHERE name = 'Towel'")["n"] == 1
+
+
+def test_a_quote_uses_the_new_extra_price(db, seeded):
+    pricing.set_extra(db, name="Towel", price=100, unit="PER_ITEM")
+    total, lines = pricing.extras_total(db, {"Towel": 2})
+    assert total == Decimal("200.00")
+    assert lines[0]["unit_price"] == "100.00"
+
+
+def test_setting_an_extra_rejects_a_negative_price(db, seeded):
+    with pytest.raises(ValidationError):
+        pricing.set_extra(db, name="Towel", price=-1)
+
+
+def test_setting_an_extra_rejects_an_unknown_unit(db, seeded):
+    with pytest.raises(ValidationError):
+        pricing.set_extra(db, name="Towel", price=50, unit="PER_FORTNIGHT")
+

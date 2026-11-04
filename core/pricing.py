@@ -431,16 +431,20 @@ def set_extra(db: Database, *, name: str, price: Decimal | float | int,
         raise ValidationError(f"unknown extra unit {unit!r}")
     if money(price) < 0:
         raise ValidationError("an extra price cannot be negative")
-    row = db.query_one(
-        """
-        INSERT INTO extras (name, price, unit, active) VALUES (%s, %s, %s, %s)
-        ON CONFLICT (name) DO UPDATE
-            SET price = EXCLUDED.price, unit = EXCLUDED.unit, active = EXCLUDED.active
-        RETURNING extra_id
-        """,
-        (name, money(price), unit, active),
-    )
-    return str(row["extra_id"])
+    # This is a write, so it must run in a transaction. Reading it back with
+    # query_one would open a connection that is closed without committing, and
+    # the new price would silently never reach the database.
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO extras (name, price, unit, active) VALUES (%s, %s, %s, %s)
+            ON CONFLICT (name) DO UPDATE
+                SET price = EXCLUDED.price, unit = EXCLUDED.unit, active = EXCLUDED.active
+            RETURNING extra_id
+            """,
+            (name, money(price), unit, active),
+        )
+        return str(cur.fetchone()["extra_id"])
 
 
 def extras_total(db: Database, items: dict[str, int]) -> tuple[Decimal, list[dict]]:

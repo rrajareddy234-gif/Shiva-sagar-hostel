@@ -97,7 +97,7 @@ This is one setting, not a code change. Edit `.env`:
 
 ```
 AI_PROVIDER=gemini
-AI_MODEL=gemini-3.5-flash
+AI_MODEL=gemini-flash-lite-latest
 AI_API_KEY=...
 ```
 
@@ -153,7 +153,7 @@ Do these in order. Do not skip the test in step 5.
    | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
    | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
 
-   Plus extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month.
+   Plus extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 50 a month.
 
    **Monthly (PG) stays** are held separately in `db/seed.sql` as
    `monthly_plans`:

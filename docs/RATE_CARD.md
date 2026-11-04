@@ -42,10 +42,10 @@ lower rate must speak to the owner.
 
 | Item | Price | Unit |
 |---|---:|---|
-| Locker | Rs 30 | per month |
-| New bedsheet | Rs 50 | each |
-| New pillow | Rs 50 | each |
-| New towel | Rs 100 | each |
+| Locker | Rs 50 | per month |
+| Bedsheet | Rs 50 | each |
+| Pillow | Rs 50 | each |
+| Towel | Rs 100 | each |
 
 ## Rooms and beds
 

@@ -135,8 +135,7 @@ answered, because the AI must never invent a price or a bed.
    | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
    | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
 
-   Extras: new bedsheet Rs 50, new towel Rs 100, new pillow Rs 50, locker Rs 30
-   a month.
+   Extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 50 a month.
 
    Monthly (PG) stays:
 
