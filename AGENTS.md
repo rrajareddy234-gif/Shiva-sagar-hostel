@@ -309,3 +309,29 @@ worked). `db.execute()` also commits.
 The live dev DB was seeded from an older revision, which is why its extras
 disagreed with the committed code. If the DB and the branch disagree, check
 which revision seeded the DB before calling it a code bug.
+
+## Watchdog: the app cannot report its own death (2026-11-04)
+`scripts/watchdog.py` watches `/health` every 30s from OUTSIDE the app, because
+a stopped process runs no code. On a failure it records the outage, restarts via
+`scripts/start_app.sh`, and sends the owner one WhatsApp message; one more when
+the app answers again. Once per outage, never once per check.
+
+`scripts/watch_app.sh` starts the app and the watchdog together, both detached.
+State lives in `/tmp/sagarpg-watchdog/`: `events.jsonl` (one JSON line per event),
+`outages.log` (plain down/up lines), `state.json` (current status). Read it by
+timestamp with `python scripts/failures.py --at 14:32` or `--outages`.
+
+Notification reuses the app's own channel + `inbox.record_outbound`, so owner
+messages are recorded like every other one. `restart_app` strips lines
+containing "password" from the start script's output, because start_app.sh
+prints the generated dashboard password.
+
+This all dies when the workspace resets -- it is inside the workspace. The
+durable fix is a real server with `restart: unless-stopped` (already set in
+deploy/docker-compose.yml) plus an external uptime monitor.
+
+## The dashboard password must never have a fixed default (2026-11-04)
+`core/dashboard.py` previously fell back to the literal password "sagar". The
+repo is PUBLIC, so that password was world-readable, and the page shows every
+guest's name, phone and booking. An unset `DASHBOARD_PASSWORD` now generates a
+random one per run and logs it. Never reintroduce a fixed default here.
