@@ -241,10 +241,21 @@ class MetaCloudAdapter(ChannelAdapter):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:500]
             log.error("meta send failed: %s %s", exc.code, detail)
-            return SendResult(ok=False, error=f"HTTP {exc.code}: {detail}")
+            return SendResult(ok=False, error=f"HTTP {exc.code}: {detail}",
+                              retryable=not _is_rate_limited(exc.code, detail))
         except Exception as exc:  # network, timeout, DNS
             log.error("meta send error: %s", exc)
             return SendResult(ok=False, error=str(exc))
+
+
+def _is_rate_limited(code: int, detail: str) -> bool:
+    """True when Meta refused the send because the pair is throttled.
+
+    Code 131056 is "(Business Account, Consumer Account) pair rate limit hit":
+    too many messages from this number to the same guest in a short window.
+    Sending again is counted against the same limit, so it must not be retried.
+    """
+    return code == 429 or "131056" in detail
 
 
 def _digits(phone: str) -> str:

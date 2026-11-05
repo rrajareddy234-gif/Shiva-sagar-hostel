@@ -558,3 +558,32 @@ the running app: dropping `name_source` and restarting logged
 done when the schema matches the code. Any column the code writes must be
 reaching existing databases through `db/schema.sql`, not only through the
 empty-database path.
+
+## A throttled send must not be retried (2026-11-05)
+
+A guest number sent roughly seven messages a minute for twelve minutes. Meta
+answered every reply with **400 `(#131056) (Business Account, Consumer Account)
+pair rate limit hit`** — too many messages from this number to the same guest in
+a short window. The guest saw nothing.
+
+The app made it worse. `_reply` prefers an interactive message and falls back to
+plain text when it cannot be sent, so a refused prompt was immediately followed
+by a refused text: **two** messages counted against the same limit instead of
+one. The fallback is right for a broken prompt and wrong for a throttle.
+
+`SendResult` now carries `retryable` (default `True`, so every existing
+construction is unchanged). The Meta adapter sets it `False` for `131056` and
+HTTP 429. `_reply` returns without the text fallback when `retryable` is
+`False`; with no prompt there is nothing to fall back from, so a plain text
+reply is still attempted exactly once.
+
+Note what this does **not** do: a guest who sends seven messages a minute will
+still be throttled, because that is Meta's rule, not ours. The fix stops the app
+from spending its quota twice on one reply.
+
+Tests: `test_a_rate_limited_send_is_marked_not_retryable`,
+`test_an_ordinary_failure_stays_retryable`,
+`test_a_throttled_prompt_does_not_trigger_a_second_message`,
+`test_a_throttled_plain_text_reply_is_attempted_once`. `FakeChannel` gained
+`throttle` and an `attempts` list, because a test that only inspects successful
+sends cannot tell "did not try" from "tried and failed".

@@ -216,6 +216,14 @@ def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
         if result.ok:
             inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
             return True
+        if not result.retryable:
+            # Sending the text now would be a second message to the same guest
+            # while Meta is throttling this pair, which is counted against the
+            # same limit and deepens the block. Stop, and leave it for the guest
+            # to retry once the window passes.
+            log.error("could not send to %s, and a retry would worsen the "
+                      "throttle: %s", phone, result.error)
+            return False
         log.warning("interactive send failed for %s, falling back to text: %s",
                     phone, result.error)
 

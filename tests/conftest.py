@@ -160,13 +160,18 @@ class FakeChannel(ChannelAdapter):
     name = "fake"
 
     def __init__(self, *, fail: bool = False, fail_interactive: bool = False,
-                 fail_document: bool = False):
+                 fail_document: bool = False, throttle: bool = False):
         self.sent: list[tuple[str, str]] = []
         self.prompts: list[tuple[str, object]] = []
         self.documents: list[tuple[str, str, bytes]] = []
         self.fail = fail
         self.fail_interactive = fail_interactive
         self.fail_document = fail_document
+        self.throttle = throttle
+        # Every outbound attempt, whether or not it succeeded. A test that only
+        # looks at successes cannot tell "did not try" from "tried and failed",
+        # and the whole point of the throttle guard is not to try twice.
+        self.attempts: list[str] = []
 
     def _meta(self):
         from core.channel.meta_cloud import MetaCloudAdapter
@@ -183,6 +188,10 @@ class FakeChannel(ChannelAdapter):
         return self._meta().verify_challenge(query)
 
     def send_text(self, to_phone, text):
+        self.attempts.append("text")
+        if self.throttle:
+            return SendResult(ok=False, retryable=False,
+                              error="HTTP 400: (#131056) pair rate limit hit")
         if self.fail:
             return SendResult(ok=False, error="simulated outage")
         self.sent.append((to_phone, text))
@@ -192,6 +201,10 @@ class FakeChannel(ChannelAdapter):
         return SendResult(ok=True, provider_message_id="tpl.1")
 
     def send_interactive(self, to_phone, prompt):
+        self.attempts.append("interactive")
+        if self.throttle:
+            return SendResult(ok=False, retryable=False,
+                              error="HTTP 400: (#131056) pair rate limit hit")
         if self.fail or self.fail_interactive:
             return SendResult(ok=False, error="simulated interactive failure")
         self.prompts.append((to_phone, prompt))

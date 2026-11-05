@@ -322,3 +322,75 @@ def test_a_channel_that_cannot_send_files_fails_closed():
     peach = PeachAdapter(api_key="k", phone_number_id="1")
     result = peach.send_document("+919876543210", "x.csv", b"a\n")
     assert result.ok is False
+
+
+# --- a throttled send must not be retried -----------------------------------
+
+def _http_error(code, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("https://graph.facebook.com", code,
+                                  "err", {}, io.BytesIO(body.encode()))
+
+
+def _failing_urlopen(code, body):
+    def opener(req, timeout=None):
+        raise _http_error(code, body)
+    return opener
+
+
+def test_a_rate_limited_send_is_marked_not_retryable(adapter, monkeypatch):
+    """Meta's 131056 means this pair is throttled; a retry deepens the block."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", _failing_urlopen(
+        400, '{"error":{"code":131056,"message":"pair rate limit hit"}}'))
+
+    result = adapter.send_text("+919876543210", "hello")
+
+    assert result.ok is False
+    assert result.retryable is False
+
+
+def test_an_ordinary_failure_stays_retryable(adapter, monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        _failing_urlopen(500, '{"error":{"code":2}}'))
+
+    result = adapter.send_text("+919876543210", "hello")
+
+    assert result.ok is False
+    assert result.retryable is True
+
+
+def test_a_throttled_prompt_does_not_trigger_a_second_message(db, channel):
+    """One throttled send must not be followed by another.
+
+    Meta counts each message to the pair against the same limit, so the
+    interactive-then-text fallback turns one refusal into two more messages
+    while the guest is already blocked. The reply must stop instead.
+    """
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.throttle = True
+    prompt = Prompt(body="Would you like to book a room?",
+                    buttons=(Button("book", "Book"),))
+
+    sent = _reply(db, channel, "+919000009999", "Would you like to book a room?",
+                  prompt=prompt)
+
+    assert sent is False
+    assert channel.attempts == ["interactive"], (
+        "the prompt was tried, but the text fallback must not run while "
+        "throttled: a second message is counted against the same limit")
+
+
+def test_a_throttled_plain_text_reply_is_attempted_once(db, channel):
+    """With no prompt there is nothing to fall back from, so one attempt is made."""
+    from core.dispatcher import _reply
+
+    channel.throttle = True
+    sent = _reply(db, channel, "+919000009999", "hello")
+
+    assert sent is False
+    assert channel.attempts == ["text"]

@@ -67,6 +67,11 @@ class SendResult:
     ok: bool
     provider_message_id: str | None = None
     error: str | None = None
+    # False when trying again would only make things worse. Meta's per-pair
+    # rate limit is the case that matters: a second send to the same guest
+    # while throttled is another message counted against the same limit, so
+    # retrying deepens the block instead of working around it.
+    retryable: bool = True
 
 
 class ChannelAdapter(ABC):
