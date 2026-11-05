@@ -23,7 +23,7 @@ reused, what was tested, what is still missing, and what is needed from the owne
 - **Phase 1 audit** — `docs/PHASE1_AUDIT_AND_ARCHITECTURE.md`
 - **Phase 2 architecture and costs** — same document, plus
   `docs/ADR-001-whatsapp-channel.md` for the WhatsApp channel decision
-- **Phases 3 and 4 build and test** — 345 tests pass against a real PostgreSQL.
+- **Phases 3 and 4 build and test** — 718 tests pass against a real PostgreSQL.
   See `docs/TEST_PLAN.md` for what is covered and what is not.
 - **Phase 5 deployment preparation** — `docs/DEPLOYMENT.md`,
   `docs/OPERATIONS.md`, `docs/COST_REPORT.md`, `deploy/`

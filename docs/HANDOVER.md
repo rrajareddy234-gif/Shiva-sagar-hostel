@@ -27,9 +27,9 @@ It does five things:
 
 ### Size of the thing
 
-- 345 tests, all passing, against a real PostgreSQL database.
-- 15 commits, every change reversible with git.
-- About 3,700 lines of application code and 1,500 lines of documentation.
+- 718 tests, all passing, against a real PostgreSQL database.
+- 42 commits on this branch, every change reversible with git.
+- About 10,000 lines of application code and 1,500 lines of documentation.
 
 ## 2. What was reused
 

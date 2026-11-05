@@ -640,3 +640,69 @@ changed.
 
 `scripts/build_demo_page.py` taps button labels, so its `[Advance]` became
 `[Reservation]`; the pages are generated, so they cannot drift.
+
+## A party's beds were only counted once (2026-11-05)
+
+Found while testing the full-room work, and it is the worst kind of bug this
+codebase can have: it showed beds as free when they were sold.
+
+`core/availability.py` read only `bookings.bed_id`. A booking row names **one**
+bed -- the first of the party -- and `booking_beds` names the rest. So a guest
+booking five dorm beds left four of them reporting free, and those four could be
+sold again to someone else. Measured on the dev DB: 19 of 20 dorm beds were
+sold, and availability still said they were free.
+
+Both `_fetch_beds()` and `bed_is_available()` now check `booking_beds` **and**
+`bookings`. It is a union, not a replacement: a bed is free only when neither
+record says it is taken. The tests insert into `bookings` alone, so replacing
+the old check would have silently broken every existing availability test while
+looking like a fix.
+
+The lesson for this repo: **when two tables can describe the same fact, read
+both.** `bookings.bed_id` and `booking_beds.bed_id` both mean "this bed is
+taken", and reading one of them is a guess.
+
+## A typed answer is read back before it is used (2026-11-05)
+
+A number typed by hand is easy to get wrong, and a wrong night count sends a
+wrong bill -- which breaks the standing rule that every amount is computed from
+the rate card, because the amount would be computed from a wrong input.
+
+So a typed **date, night count, guest count or room type** is now read back and
+confirmed with `Yes, correct` / `Change` before it is used. The value is held in
+`state["pending"]` and is not committed to its real key until the guest agrees.
+
+Three details worth keeping:
+
+- **A tap is never re-asked.** A button is already an explicit choice. Only typed
+  input goes through the confirm step, or the flow would double every question.
+- **Any other reply is read as the correction.** A guest who types `3` instead
+  of tapping Change is understood, not scolded.
+- **The pending value is not the value.** `_confirm_typed` stores it under
+  `pending`, so a guest who abandons the flow mid-confirm leaves no half-set
+  field behind.
+
+## A full room type is shown, then refused (2026-11-05)
+
+WhatsApp buttons have **no disabled state** -- Meta's interactive message has no
+way to grey a button out. So a full room type cannot be hidden or disabled
+cleanly. The chosen approach, which is the honest one:
+
+- the button stays visible, labelled `Dormitory (full)`, so the guest can see
+  the hostel is busy rather than wondering why a room type vanished;
+- the body text says the room is full and points at the other types;
+- the tap is **intercepted** and answered with the reason, instead of silently
+  advancing or dumping the guest back on the same question.
+
+`_full_room_types(db, state)` is the single place that decides "full", so the
+label and the tap guard can never disagree.
+
+## The published demo page is generated -- regenerate it after behaviour changes (2026-11-05)
+
+`docs/demo.html` is built by `scripts/build_demo_page.py --site docs` from a real
+run of the engine. It is committed, and it is published on GitHub Pages, so it
+**can** go stale: it did. After the map-link and confirm-step work the page still
+showed the old location reply with no map link. Nothing failed; the page was
+simply old.
+
+Run the generator after any change a guest would see, before committing.
