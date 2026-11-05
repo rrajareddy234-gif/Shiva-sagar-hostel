@@ -445,3 +445,17 @@ behaviour and real rate-card prices, not a model's mood. The guest script taps
 the app's real button labels (`[Prices]`, `[Availability]`, …), which only works
 because the simulator accumulates button labels across prompts — real WhatsApp
 keeps every interactive message, so a label from an earlier prompt stays tappable.
+
+## The guest menu is the owner's list
+
+The greeting a guest gets on `hi` is `_MENU_TITLES` in `core/router.py`. It is
+seven rows, sent as a WhatsApp **list** (three is the most a button message
+allows), and the titles are the owner's own words in the owner's order. Renaming
+a row means editing that tuple and the assertions in
+`tests/test_router.py::test_greeting_offers_a_menu_of_taps` together.
+
+`Guest Reviews` reads `guest_reviews` through `core/reviews.py`. Two rules hold,
+the same ones as `hostel_facts`: a review is **never invented** (none stored is
+answered honestly) and **never a price** (a review mentioning an amount is
+refused, because a figure there could be quoted back as one). Only `published`
+reviews reach a guest, so the owner can hide one without deleting it.
