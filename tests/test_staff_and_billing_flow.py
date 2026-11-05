@@ -26,8 +26,16 @@ def _now():
 def _request(db, *, phone="+919000000901", name="Ramesh Kumar", bed="1NA-B1",
              days=3, terms="ADVANCE", guests=1):
     start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    # A party needs one bed per guest: the named bed first, then its neighbours
+    # in the same room. A single guest gets exactly the bed that was asked for.
+    room = bed.split("-")[0]
+    bed_ids = [bed]
+    if guests > 1:
+        bed_ids = [b["bed_id"] for b in db.query_all(
+            "SELECT bed_id FROM beds WHERE room_id = %s ORDER BY bed_id LIMIT %s",
+            (room, guests))]
     return booking.create_request(
-        db, phone=phone, full_name=name, gender="MALE", bed_id=bed,
+        db, phone=phone, full_name=name, gender="MALE", bed_ids=bed_ids,
         check_in_at=start, check_out_at=start + timedelta(days=days),
         food_included=True, payment_terms=terms, guests_count=guests)
 

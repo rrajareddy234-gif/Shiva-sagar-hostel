@@ -15,9 +15,9 @@ import logging
 from ai.adapter import AIClient
 from core import alerts, handler, inbox
 from core.channel.adapter import ChannelAdapter, InboundMessage, Prompt
-from core.export import DataFile
 from core.config import Settings
 from core.db import Database
+from core.export import DataFile
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +78,7 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
 
     try:
         outcome = handler.handle_message(
-            db, phone=message.from_phone, text=message.text,
+            db, phone=message.from_phone, text=inbox.bounded_text(message.text),
             owner_phone=settings.owner_phone, ai=ai,
             history=history_for(db, message.from_phone),
             button_id=message.button_id,
@@ -101,6 +101,16 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     elif outcome.handled_by == "ai":
         alerts.note_recovery(db, channel=channel, owner_phone=settings.owner_phone)
 
+    # A request the AI just created is put in front of the owner with one-tap
+    # Approve/Reject buttons. Best effort: the guest's own reply is unaffected
+    # if this cannot be sent.
+    for event in outcome.events:
+        if event.get("type") == "booking_requested":
+            alerts.notify_new_request(
+                db, channel=channel, owner_phone=settings.owner_phone,
+                reference=event["reference"],
+                summary=_request_summary(event))
+
     sent = _reply(db, channel, message.from_phone, outcome.reply,
                   prompt=outcome.prompt, file=outcome.file)
     if not sent:
@@ -109,6 +119,28 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     if message_id:
         inbox.mark_processed(db, message_id)
     return True
+
+
+def _request_summary(event: dict) -> str:
+    """The owner's approval message for one booking request.
+
+    Every figure comes from the request the engine created; nothing is computed
+    here, so the owner sees exactly the amount the pricing engine produced.
+    """
+    beds = ", ".join(event.get("bed_ids") or [])
+    guests = event.get("guests") or 1
+    party = f"{guests} guest(s)" if guests != 1 else "1 guest"
+    lines = [
+        f"New booking request {event['reference']}",
+        f"{event.get('guest_name') or 'Guest'} - {party}",
+        f"Bed(s): {beds}",
+        f"{event.get('check_in')} to {event.get('check_out')}",
+        f"Total: Rs {event.get('charges_total')}",
+        f"Advance due: Rs {event.get('advance_due')}",
+        "",
+        "Approve or reject with a tap below.",
+    ]
+    return "\n".join(lines)
 
 
 def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,

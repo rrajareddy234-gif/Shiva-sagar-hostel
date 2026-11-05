@@ -10,7 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import ROUND_HALF_UP, Decimal
 
 from core.db import Database
 from core.errors import NotFound, ValidationError
@@ -39,13 +39,14 @@ class Quote:
     room_type: str
     food_included: bool
     mode: str                 # "daily" or "hourly"
-    units: int                # days or hours
-    unit_rate: Decimal
-    base_amount: Decimal
+    units: int                # days or hours, per guest
+    unit_rate: Decimal        # per bed, per unit
+    base_amount: Decimal      # unit_rate * units * guests
     extras: Decimal
     discount: Decimal
     charges_total: Decimal
     rate_plan_id: str
+    guests: int = 1           # beds charged for; 1 unless a party is booked
     breakdown: dict = field(default_factory=dict)
 
 
@@ -142,9 +143,20 @@ def billable_units(start: datetime, end: datetime, mode: str) -> int:
 
 def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
                    mode: str = "daily",
+                   guests: int = 1,
                    extras: Decimal | float | int = 0,
                    discount: Decimal | float | int = 0) -> Quote:
-    """Pure calculation. No database, no AI, no side effects."""
+    """Pure calculation. No database, no AI, no side effects.
+
+    A bed is charged per night, and a party is charged per bed: the nightly rate
+    is multiplied by the nights and then by the number of guests. So two guests
+    for three nights is `rate * 3 * 2`. `guests` defaults to 1, which is the
+    single-guest case every existing caller gets.
+    """
+    guests = int(guests or 1)
+    if guests < 1:
+        raise ValidationError("there must be at least one guest")
+
     if mode == "hourly":
         if plan.hourly_rate is None:
             raise ValidationError(f"rate plan {plan.name!r} has no hourly rate")
@@ -158,7 +170,7 @@ def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
         unit_rate = money(plan.daily_rate)
         units = billable_units(start, end, "daily")
 
-    base = money(unit_rate * units)
+    base = money(unit_rate * units * guests)
     extras_amt = money(extras)
     discount_amt = money(discount)
     if discount_amt < 0:
@@ -178,9 +190,11 @@ def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
         discount=discount_amt,
         charges_total=total,
         rate_plan_id=plan.rate_plan_id,
+        guests=guests,
         breakdown={
             "unit_rate": str(unit_rate),
             "units": units,
+            "guests": guests,
             "base": str(base),
             "extras": str(extras_amt),
             "discount": str(discount_amt),
@@ -192,6 +206,7 @@ def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
 def quote(db: Database, *, room_type: str, food_included: bool | None,
           start: datetime, end: datetime, mode: str = "daily",
           stay_mode: str = "NIGHT",
+          guests: int = 1,
           extras: Decimal | float | int = 0,
           discount: Decimal | float | int = 0) -> Quote:
     """Look up the owner's rate plan and compute a quote.
@@ -202,10 +217,14 @@ def quote(db: Database, *, room_type: str, food_included: bool | None,
 
     `food_included` may be None, in which case the room type's only food option
     is used. If the room type offers both, the caller must say which.
+
+    `guests` is the size of the party: the nightly rate is charged once per
+    guest. It defaults to 1.
     """
     food = resolve_food_option(db, room_type, food_included)
     plan = _load_plan(db, room_type, food, stay_mode)
-    return compute_charge(plan, start, end, mode=mode, extras=extras, discount=discount)
+    return compute_charge(plan, start, end, mode=mode, guests=guests,
+                          extras=extras, discount=discount)
 
 
 def set_rate(db: Database, *, name: str, room_type: str, food_included: bool,

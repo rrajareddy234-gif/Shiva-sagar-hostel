@@ -25,6 +25,11 @@ class InboundMessage:
     # Set when the guest tapped a button or a list row: the id we chose, never
     # the label. Routing on the id survives a relabelling or a translation.
     button_id: str | None = None
+    # The name the guest uses on WhatsApp, when the provider supplies it. This
+    # is a display name, not a verified identity: it may be a handle, a
+    # nickname or a business name. It is stored as WHATSAPP_PROFILE so it can
+    # never overwrite a name the guest typed or the owner entered.
+    profile_name: str | None = None
 
 
 @dataclass(frozen=True)

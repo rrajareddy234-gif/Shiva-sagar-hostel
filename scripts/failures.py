@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 STATE_DIR = Path(__import__("os").environ.get("WATCHDOG_STATE_DIR", "/tmp/sagarpg-watchdog"))
@@ -75,7 +75,7 @@ def main() -> int:
     parser.add_argument("--app-log", action="store_true", help="also tail the app log")
     args = parser.parse_args()
 
-    now = datetime.now(timezone.utc).astimezone()
+    now = datetime.now(UTC).astimezone()
 
     if args.outages:
         if not OUTAGE_LOG.exists():

@@ -26,13 +26,11 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## GitHub
 - Authenticated as `rrajareddy234-gif`.
-- The available token is READ-ONLY. Re-verified 2026-11-03: creating a ref
-  returns `403 Resource not accessible by integration`, and `git push` is
-  refused with `403`. The repo API may report `permissions.push = true` for the
-  user, but that is the owner's permission, not the token's. Commits stay local
-  until a write-capable credential is supplied.
-- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (public). `main` is at
-  commit `8b831b8` and matches the local checkout.
+- The token is now WRITE-CAPABLE. Re-verified 2026-11-05: creating and deleting
+  a test ref returned `201` / `204`, and `git push` works. The earlier note that
+  it was read-only no longer holds.
+- Target repo: `rrajareddy234-gif/Shiva-sagar-hostel` (public). Work happens on
+  branch `fix/remove-unused-imports`, PR #1 into `main`.
 
 ## Not accessible
 - No n8n instance, no workflow exports, no n8n credentials anywhere.
@@ -50,8 +48,12 @@ booking rules; AI only for understanding free text and drafting replies.
 
 ## Running the tests
 ```bash
-python -m pytest          # 345 tests; needs the sagarpg-pg container running
+python -m pytest          # 579 tests; needs the sagarpg-pg container running
+python -m ruff check .    # lint; config in ruff.toml
 ```
+CI (`.github/workflows/ci.yml`) runs both on every push and pull request: a
+lint job, and a test job against a `postgres:16-alpine` service container with
+the same credentials as the dev container.
 Tests create and drop a throwaway `sagarpg_test` database, so the `sagarpg`
 admin database must exist. The admin DSN is `TEST_ADMIN_DSN`
 (default `postgresql://sagar:devpass@localhost:5432/sagarpg`).
@@ -107,6 +109,10 @@ The dev database contains leftover rows from earlier manual runs
   not conflict. Money is `Decimal`, never float.
 
 ## Test-writing notes
+- `tests/conftest.py` derives `TABLES` from `db/schema.sql` at import time, so
+  the truncate list can never drift from the schema. Do not replace it with a
+  hand-kept list: a table missing from the truncate leaks rows between tests and
+  the failure looks unrelated to the change that caused it.
 - Webhook tests must give each message a **unique** id. Reusing one is correctly
   treated as a duplicate delivery and silently dropped, which looks like a bug
   and is not.
@@ -367,6 +373,26 @@ Two bugs found while building this, both worth remembering:
 - Writing through `db.query_one` silently loses the write: that helper closes
   its connection without committing. Use `db.transaction()` for writes. This is
   the same trap noted under "Extras prices settled".
-- `tests/conftest.py` `TABLES` was missing several newer tables (invoices,
-  booking_extras, ai_usage, and now faq). A missing table means data leaks
-  between tests. When adding a table, add it there too.
+- `tests/conftest.py` `TABLES` is now derived from `db/schema.sql` at import
+  time, so it cannot drift again. A hand-kept list had gone stale twice and let
+  rows leak between tests; do not go back to one.
+
+## Backups must be proven, not just taken (2026-11-05)
+`deploy/backup.sh` wrote a dump and reported success. Nothing proved the dump
+could be restored, so "we have backups" was an assumption. Two real defects
+were found while fixing that:
+
+- **`backup.sh` could delete a good backup.** It piped `zcat` into `grep -q`.
+  Under `set -o pipefail`, grep exits on first match, `zcat` takes SIGPIPE, the
+  pipeline reports failure, and the script deleted a perfectly valid file. It
+  now decompresses to a temp file and greps the file. `tests/test_deploy_scripts.py`
+  guards against this pattern returning.
+- **`docker exec` in `_pg.sh` needed `-i`.** Without it stdin is not attached,
+  psql exits immediately, and any pipe into it dies with SIGPIPE (exit 141).
+  Compose uses `exec -T`; the plain-container branch now uses `exec -i`.
+
+New: `deploy/_pg.sh` (shared DB access across compose / container / local),
+`deploy/restore_drill.sh` (restores the newest dump into a scratch database,
+compares row counts, never touches live data, exits non-zero on failure).
+Verified end to end on 2026-11-05: drill passed on a good dump and failed
+correctly on a corrupt one. `docs/OPERATIONS.md` has the cron lines.

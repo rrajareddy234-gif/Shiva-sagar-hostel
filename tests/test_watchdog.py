@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -82,7 +82,7 @@ def test_a_restart_is_retried_after_the_retry_window(state_dir, monkeypatch):
 
     # A stale timestamp lets the next attempt through.
     state["last_restart_at"] = (
-        datetime.now(timezone.utc) - timedelta(minutes=10)).isoformat()
+        datetime.now(UTC) - timedelta(minutes=10)).isoformat()
     watchdog.handle_down(state, "down", restart=True, notify=True)
     assert len(restarts) == 2
 

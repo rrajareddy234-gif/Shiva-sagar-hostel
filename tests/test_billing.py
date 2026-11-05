@@ -14,16 +14,22 @@ from datetime import datetime, timedelta
 import pytest
 
 from core import billing, booking, payments
-from core.errors import NotFound, ValidationError
+from core.errors import NotFound, PaymentError, ValidationError
 
 IST = None  # set from the tz fixture
 
 
 def _stay(db, seeded, tz, *, phone="+919876500001", terms="ADVANCE", guests=1):
+    """One booking for `guests` people. A party needs one bed per guest, so the
+    helper takes the first `guests` beds of the same room type."""
     start = datetime.now(tz) + timedelta(days=1)
+    beds = db.query_all(
+        "SELECT bed_id FROM beds WHERE room_id = '1NA' ORDER BY bed_id LIMIT %s",
+        (guests,))
+    bed_ids = [b["bed_id"] for b in beds]
     return booking.create_request(
         db, phone=phone, full_name="Test Guest", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3),
+        bed_ids=bed_ids, check_in_at=start, check_out_at=start + timedelta(days=3),
         food_included=True, payment_terms=terms, guests_count=guests)
 
 
@@ -116,7 +122,7 @@ def test_an_invoice_has_a_number_and_lines(db, seeded, tz):
     invoice = billing.issue_invoice(db, booking_id=request.booking_id, actor="owner")
 
     assert invoice.number.startswith("INV-")
-    kinds = [l["kind"] for l in invoice.lines]
+    kinds = [line["kind"] for line in invoice.lines]
     assert "ROOM" in kinds and "EXTRA" in kinds
     assert invoice.total == 800  # 250 x 3 nights + 50 towel
 
@@ -143,12 +149,12 @@ def test_reissuing_returns_the_same_invoice(db, seeded, tz):
 def test_invoice_lines_never_change_after_issue(db, seeded, tz):
     request = _stay(db, seeded, tz)
     invoice = billing.issue_invoice(db, booking_id=request.booking_id, actor="owner")
-    before = [(l["description"], l["amount"]) for l in invoice.lines]
+    before = [(line["description"], line["amount"]) for line in invoice.lines]
 
     # A late extra must not alter the issued document.
     billing.add_extra(db, booking_id=request.booking_id, name="Towel", actor="owner")
     after = billing.get_invoice(db, invoice.number)
-    assert [(l["description"], l["amount"]) for l in after.lines] == before
+    assert [(line["description"], line["amount"]) for line in after.lines] == before
 
 
 def test_a_discount_reduces_the_bill(db, seeded, tz):
@@ -156,7 +162,7 @@ def test_a_discount_reduces_the_bill(db, seeded, tz):
     invoice = billing.issue_invoice(db, booking_id=request.booking_id, actor="owner",
                                     discount=50)
     assert invoice.total == 700
-    assert any(l["kind"] == "DISCOUNT" for l in invoice.lines)
+    assert any(line["kind"] == "DISCOUNT" for line in invoice.lines)
 
 
 def test_a_discount_bigger_than_the_bill_is_refused(db, seeded, tz):
@@ -169,7 +175,7 @@ def test_a_discount_bigger_than_the_bill_is_refused(db, seeded, tz):
 def test_an_invoice_cannot_be_settled_while_money_is_owed(db, seeded, tz):
     request = _stay(db, seeded, tz)
     invoice = billing.issue_invoice(db, booking_id=request.booking_id, actor="owner")
-    with pytest.raises(Exception):
+    with pytest.raises(PaymentError):
         billing.settle_invoice(db, invoice.invoice_id, actor="owner")
 
 

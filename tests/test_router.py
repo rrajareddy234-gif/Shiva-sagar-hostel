@@ -66,10 +66,14 @@ def test_greeting_offers_a_menu_of_taps(db):
     """A bare "hi" should offer choices, not a paragraph to read."""
     reply = router.route(db, "hi")
     assert reply.prompt is not None
-    assert [b.title for b in reply.prompt.buttons] == [
-        "Prices", "Availability", "Facilities"]
-    assert [b.id for b in reply.prompt.buttons] == [
-        "menu:price", "menu:availability", "menu:facilities"]
+    # Six choices, so they are sent as a list, not three buttons.
+    assert [b.title for b in reply.prompt.rows] == [
+        "Prices", "Availability", "Facilities", "Address", "Book a bed",
+        "Talk to owner"]
+    assert [b.id for b in reply.prompt.rows] == [
+        "menu:price", "menu:availability", "menu:facilities", "menu:location",
+        "menu:book", "menu:talk"]
+    assert reply.prompt.is_valid()
     # The help text is still the fallback body for a channel without buttons.
     assert "Sagar PG" in reply.text
 
@@ -371,8 +375,8 @@ def test_owner_in_house_list(db):
 
 
 def test_owner_unanswered_enquiries(db):
-    from core.channel.adapter import InboundMessage
     from core import inbox
+    from core.channel.adapter import InboundMessage
     inbox.store_inbound(db, InboundMessage(
         provider_message_id="wamid.ROUTER", from_phone="+919000000804",
         text="is a room free?", message_type="text"))
@@ -469,3 +473,29 @@ def test_full_status_never_reaches_the_ai(db):
                                          ai=None)
         assert outcome.handled_by in ("router", "owner_command"), \
             f"{text!r} fell through to {outcome.handled_by}"
+
+
+# --- greeting by name ------------------------------------------------------
+
+def test_greeting_uses_the_name_we_hold(db):
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO guests (full_name, phone, name_source) "
+            "VALUES ('Sagar Reddy', '+919000003333', 'WHATSAPP_PROFILE')")
+    reply = router.route(db, "hi", phone="+919000003333")
+    assert "Sagar" in reply.prompt.body
+
+
+def test_greeting_without_a_name_stays_generic(db):
+    reply = router.route(db, "hi", phone="+919000004444")
+    assert reply.prompt.body.startswith("Hello!")
+
+
+def test_a_handle_that_is_not_a_name_is_not_used(db):
+    """An emoji-only or punctuation display name must not become a greeting."""
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO guests (full_name, phone, name_source) "
+            "VALUES ('!!!', '+919000005555', 'WHATSAPP_PROFILE')")
+    reply = router.route(db, "hi", phone="+919000005555")
+    assert reply.prompt.body.startswith("Hello!")

@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -50,10 +51,9 @@ class Database:
                 raise _translate(exc) from exc
 
     def query_all(self, sql: str, params: tuple | dict = ()) -> list[dict[str, Any]]:
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.fetchall()
+        with self.connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
 
     def query_one(self, sql: str, params: tuple | dict = ()) -> dict[str, Any] | None:
         rows = self.query_all(sql, params)

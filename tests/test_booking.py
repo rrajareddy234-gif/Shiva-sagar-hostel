@@ -31,8 +31,9 @@ def _request(db, bed_id="1NA-B1", phone="+919000000100", **kwargs):
 
 
 def booking_start():
-    from tests.conftest import IST
     from datetime import datetime
+
+    from tests.conftest import IST
     return (datetime.now(IST) + timedelta(days=1)).replace(
         hour=10, minute=0, second=0, microsecond=0)
 
@@ -143,9 +144,10 @@ def test_approving_a_taken_bed_is_refused(db):
     booking.approve(db, first.booking_id, actor=OWNER)
 
     # A second request can only exist because the bed was not held for it; force
-    # the situation by requesting a different bed, then moving it onto the taken bed.
+    # the situation by requesting a different bed, then moving it onto the taken
+    # bed. `booking_beds` is the source of truth for which beds a stay holds.
     second = _request(db, bed_id="1NA-B2", phone="+919000000105")
-    db.execute("UPDATE bookings SET bed_id = '1NA-B1' WHERE booking_id = %s",
+    db.execute("UPDATE booking_beds SET bed_id = '1NA-B1' WHERE booking_id = %s",
                (second.booking_id,))
     with pytest.raises(BedUnavailable, match="taken"):
         booking.approve(db, second.booking_id, actor=OWNER)

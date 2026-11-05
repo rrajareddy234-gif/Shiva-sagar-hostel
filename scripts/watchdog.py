@@ -31,7 +31,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -46,7 +46,7 @@ OUTAGE_LOG = STATE_DIR / "outages.log"
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
+    return datetime.now(UTC).astimezone().isoformat(timespec="seconds")
 
 
 def _load_state() -> dict:
@@ -160,7 +160,7 @@ def _restart_due(state: dict, retry_after: float) -> bool:
     if not last:
         return True
     try:
-        elapsed = (datetime.now(timezone.utc)
+        elapsed = (datetime.now(UTC)
                    - datetime.fromisoformat(last)).total_seconds()
     except ValueError:
         return True

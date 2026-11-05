@@ -12,7 +12,6 @@ import uuid
 from typing import Any
 
 from core.channel.adapter import (
-    Button,
     ChannelAdapter,
     InboundMessage,
     Prompt,
@@ -66,6 +65,15 @@ class MetaCloudAdapter(ChannelAdapter):
         for entry in payload.get("entry", []) or []:
             for change in entry.get("changes", []) or []:
                 value = change.get("value", {}) or {}
+                # Meta sends the sender's display name in `contacts`, keyed by
+                # wa_id, separately from the messages. Build a lookup so each
+                # message can carry the name of the person who sent it.
+                names: dict[str, str] = {}
+                for contact in value.get("contacts", []) or []:
+                    wa_id = _digits(contact.get("wa_id") or "")
+                    name = ((contact.get("profile") or {}).get("name") or "").strip()
+                    if wa_id and name:
+                        names[wa_id] = name
                 for msg in value.get("messages", []) or []:
                     msg_type = msg.get("type", "unknown")
                     text = None
@@ -87,6 +95,7 @@ class MetaCloudAdapter(ChannelAdapter):
                         timestamp=int(msg["timestamp"]) if msg.get("timestamp") else None,
                         raw=msg,
                         button_id=button_id,
+                        profile_name=names.get(_digits(msg.get("from", ""))),
                     ))
         return out
 
@@ -187,17 +196,17 @@ class MetaCloudAdapter(ChannelAdapter):
         parts.append(
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="messaging_product"\r\n\r\n'
-            f"whatsapp\r\n".encode("utf-8"))
+            f"whatsapp\r\n".encode())
         parts.append(
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="type"\r\n\r\n'
-            f"{media_type}\r\n".encode("utf-8"))
+            f"{media_type}\r\n".encode())
         parts.append(
             f"--{boundary}\r\n"
             f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
-            f"Content-Type: {media_type}\r\n\r\n".encode("utf-8"))
+            f"Content-Type: {media_type}\r\n\r\n".encode())
         parts.append(content)
-        parts.append(f"\r\n--{boundary}--\r\n".encode("utf-8"))
+        parts.append(f"\r\n--{boundary}--\r\n".encode())
         body = b"".join(parts)
 
         url = f"{GRAPH_BASE}/{self._phone_number_id}/media"

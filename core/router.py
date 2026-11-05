@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, booking, faq, inbox, payments, pricing
+from core import availability, booking, faq, hostel_facts, inbox, payments, pricing
 from core.channel.adapter import Button, Prompt
 from core.db import Database
 
@@ -55,10 +55,14 @@ _AVAIL = re.compile(r"\b(available beds?|beds? available|any beds?|free beds?|"
                     r"rooms? (free|available|left)|any rooms?|khali)\b", re.I)
 _FULL = re.compile(r"\b(full|no (beds?|rooms?)|occupied|housefull)\b", re.I)
 _FACIL_INFO = re.compile(r"\b(food|meals|mess|wifi|wi-fi|water|laundry|parking|"
-                         r"timing|rules)\b", re.I)
+                         r"timing|rules|facilit\w*|amenit\w*)\b", re.I)
 _FACIL = re.compile(r"\b(food|meals|mess|wifi|wi-fi|water|ac|non[- ]?ac|"
                     r"laundry|parking|timing|rules|facilit\w*)\b", re.I)
 _HOURS = re.compile(r"\b(hour|hourly|per hour|few hours|short stay)\b", re.I)
+# "Where are you?", "address", "location", "how do I reach you", "directions".
+_LOCATION = re.compile(r"\b(address|location|located|where (are|is)|directions?|"
+                       r"how (do i|to) (reach|come|get there)|landmark|map|"
+                       r"ekkada|kahan)\b", re.I)
 _GREET = re.compile(r"^\s*(hi|hii+|hello|hey|namaste|good (morning|evening|afternoon))\b", re.I)
 # A bare "menu" or "help" asks for the options. Anchored to the whole message so
 # "help me book a bed" is still handled on its merits.
@@ -76,6 +80,10 @@ def classify(text: str | None) -> str:
         return "greeting"
     if _THANKS.search(text):
         return "thanks"
+    # Location is checked before price and availability: "where is the hostel"
+    # must not be read as an availability question.
+    if _LOCATION.search(text):
+        return "location"
     if _PRICE.search(text):
         return "price"
     # An availability question may mention "AC" or "food"; availability wins.
@@ -89,7 +97,8 @@ def classify(text: str | None) -> str:
 def route(db: Database, text: str | None, *, role: str = "customer",
           now: datetime | None = None, room_type: str | None = None,
           food_included: bool | None = None,
-          nights: int | None = None, button_id: str | None = None) -> Reply:
+          nights: int | None = None, button_id: str | None = None,
+          phone: str | None = None) -> Reply:
     """Answer if the question is one we handle deterministically.
 
     Returns `needs_ai=True` when the message should go to the AI layer instead.
@@ -107,11 +116,14 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         return Reply("", handled=False, needs_ai=True, intent=intent)
 
     if intent == "greeting":
-        return _greeting_reply(db)
+        return _greeting_reply(db, phone)
 
     if intent == "thanks":
         return Reply("You're welcome. Anything else I can help with?", handled=True,
                      intent=intent)
+
+    if intent == "location":
+        return Reply(_location(db), handled=True, intent=intent)
 
     if intent == "facilities":
         # A stored answer is specific ("yes, there is wifi, password is X"),
@@ -226,20 +238,53 @@ _MENU = "menu:"
 
 # The menu's own buttons never carry a figure, and the sub-answers reuse the
 # price flow, so the rate card stays the only source of a price.
+# Six options, so WhatsApp shows them as a list rather than three buttons.
 _MENU_TITLES = (
-    ("menu:price", "Prices"),
-    ("menu:availability", "Availability"),
-    ("menu:facilities", "Facilities"),
+    ("menu:price", "Prices", "Rates for AC, Non-AC and dorm"),
+    ("menu:availability", "Availability", "Which beds are free"),
+    ("menu:facilities", "Facilities", "Food, Wi-Fi, water, security"),
+    ("menu:location", "Address", "Where the hostel is"),
+    ("menu:book", "Book a bed", "Send a booking request"),
+    ("menu:talk", "Talk to owner", "The owner will reply"),
 )
 
 
-def _greeting_reply(db: Database) -> Reply:
-    """Greet with tappable options, falling back to the help text."""
-    buttons = tuple(Button(bid, title) for bid, title in _MENU_TITLES)
-    prompt = Prompt(
-        body="Hello! What would you like to know about Sagar PG Hostel?",
-        buttons=buttons)
+def _greeting_reply(db: Database, phone: str | None = None) -> Reply:
+    """Greet with tappable options, falling back to the help text.
+
+    Six choices, so they are offered as a WhatsApp list: three buttons is the
+    most a plain button message allows. The body still carries the help text,
+    so a channel without lists, or a guest who prefers typing, is not stuck.
+
+    The guest is greeted by the name we hold, when we hold one. A WhatsApp
+    display name is a handle, not a verified name, so it is used to be friendly,
+    never to claim we know who the person is.
+    """
+    rows = tuple(Button(bid, title) for bid, title, _ in _MENU_TITLES)
+    name = _guest_first_name(db, phone)
+    hello = f"Hello {name}! What would you like to know about Sagar PG Hostel?" \
+        if name else "Hello! What would you like to know about Sagar PG Hostel?"
+    prompt = Prompt(body=hello, rows=rows, button_text="Choose")
     return Reply(HELP, handled=True, intent="greeting", prompt=prompt)
+
+
+def _guest_first_name(db: Database, phone: str | None) -> str | None:
+    """The guest's first name, or None. Used only to say hello."""
+    if not phone:
+        return None
+    row = db.query_one(
+        "SELECT full_name FROM guests WHERE phone = %s AND full_name IS NOT NULL "
+        "AND btrim(full_name) <> ''",
+        (phone,),
+    )
+    if not row:
+        return None
+    first = (row["full_name"] or "").strip().split()[0]
+    # A display name may be emoji, a business name or a whole sentence. Keep it
+    # only if it looks like a short, plain word.
+    if not first or len(first) > 40 or not first[0].isalpha():
+        return None
+    return first
 
 
 def _menu_button(db: Database, button_id: str) -> Reply | None:
@@ -254,7 +299,33 @@ def _menu_button(db: Database, button_id: str) -> Reply | None:
                      intent="availability")
     if what == "facilities":
         return Reply(_facilities(db, None, None), handled=True, intent="facilities")
+    if what == "location":
+        return Reply(_location(db), handled=True, intent="location")
+    if what == "book":
+        return _booking_prompt(db)
+    if what == "talk":
+        return Reply(
+            "Of course. Tell me what you need and I will pass it to the owner, "
+            "who will reply here personally.",
+            handled=True, intent="talk_to_owner")
     return None
+
+
+def _booking_prompt(db: Database) -> Reply:
+    """Start a booking by asking for the first thing we need: the dates.
+
+    A price is never quoted here. It is computed from the rate card once the
+    dates and the room type are known, so no figure is ever guessed.
+    """
+    return Reply(
+        "Happy to help you book. Please tell me:\n"
+        "1. Your check-in date (for example 2026-11-10)\n"
+        "2. How many nights\n"
+        "3. How many guests\n"
+        "4. AC or Non-AC, and whether you want food\n\n"
+        "I will then show you the exact amount and hold the bed for the owner "
+        "to confirm.",
+        handled=True, intent="book")
 
 
 # --- the price flow, answered by tapping -----------------------------------
@@ -410,7 +481,9 @@ def _availability(db: Database, text: str, now: datetime | None,
 
 
 def _facilities(db: Database, room_type: str | None, food_included: bool | None) -> str:
-    """Describe only the room types that actually exist in the database."""
+    """Describe only what is actually true: rooms from the database, amenities
+    from the owner's recorded facts. Nothing is added that the owner has not
+    confirmed."""
     rows = db.query_all(
         "SELECT DISTINCT room_type FROM rooms WHERE active ORDER BY room_type"
     )
@@ -422,7 +495,27 @@ def _facilities(db: Database, room_type: str | None, food_included: bool | None)
         lines.append("- Non-AC rooms")
     if "DORM" in kinds:
         lines.append("- A dormitory with mat spaces, no cots")
+    amenities = hostel_facts.amenities_block(db)
+    for sentence in amenities:
+        lines.append(f"- {sentence}")
     lines.append("Food can be included with a room. Ask me about rates or availability.")
+    return "\n".join(lines)
+
+
+def _location(db: Database) -> str:
+    """The address, from the owner's recorded fact. Never invented.
+
+    If the owner has not recorded an address the guest is told honestly and the
+    question is handed on, rather than being given a plausible guess.
+    """
+    full = hostel_facts.address_block(db)
+    if not full:
+        return ("I don't have the exact address recorded yet. I've asked the owner "
+                "to add it, and they will confirm it for you shortly.")
+    lines = [full]
+    landmark = hostel_facts.get(db, "address.landmark")
+    if landmark and landmark not in full:
+        lines.append(f"Landmark: {landmark}")
     return "\n".join(lines)
 
 

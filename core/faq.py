@@ -28,6 +28,15 @@ DEFAULT_THRESHOLD = 0.55
 # Below this many characters a trigram match is noise ("ok", "hi").
 MIN_ASK_LENGTH = 3
 
+# A one- or two-word question ("wifi?", "hot water") shares too few trigrams
+# with a full sentence to clear the threshold, yet it is unambiguous. Such a
+# short question is accepted on a whole-word match instead, and only against a
+# word of at least this length, so a stray "the" or "is" cannot trigger an
+# answer. A longer message never uses this path: it must earn its match on
+# similarity like everything else.
+MAX_KEYWORD_WORDS = 3
+MIN_KEYWORD_LENGTH = 4
+
 
 @dataclass(frozen=True)
 class Match:
@@ -57,8 +66,8 @@ def match(db: Database, text: str | None,
         """
         SELECT f.faq_id, f.question, f.answer,
                GREATEST(
-                   word_similarity(%(asked)s, f.question),
-                   COALESCE((SELECT max(word_similarity(%(asked)s, a))
+                   similarity(%(asked)s, f.question),
+                   COALESCE((SELECT max(similarity(%(asked)s, a))
                              FROM unnest(f.aliases) AS a), 0)
                )::float AS score
         FROM faq f
@@ -73,9 +82,51 @@ def match(db: Database, text: str | None,
 
     limit = DEFAULT_THRESHOLD if threshold is None else threshold
     if row["score"] < limit:
-        return None
+        # A short, unambiguous question ("wifi?", "hot water") may still be
+        # answered, but only on a whole-word match against a stored word.
+        return _keyword_match(db, asked)
     return Match(faq_id=row["faq_id"], question=row["question"],
                  answer=row["answer"], score=float(row["score"]))
+
+
+def _keyword_match(db: Database, asked: str) -> Match | None:
+    """Answer a very short question on a whole-word match, or give up.
+
+    Only messages of a few words are eligible, and only words of four or more
+    characters count, so a stray preposition cannot pull up an answer. The
+    match is a whole word, never a substring: "wifi" matches "wifi", but "the"
+    matches nothing.
+    """
+    words = [w.strip("?.,!") for w in asked.split()]
+    words = [w for w in words if len(w) >= MIN_KEYWORD_LENGTH]
+    if not words or len(asked.split()) > MAX_KEYWORD_WORDS:
+        return None
+
+    row = db.query_one(
+        """
+        SELECT f.faq_id, f.question, f.answer
+        FROM faq f
+        WHERE f.active
+          AND EXISTS (
+              SELECT 1 FROM unnest(
+                  ARRAY[f.question] || f.aliases
+              ) AS haystack
+              WHERE EXISTS (
+                  SELECT 1 FROM unnest(%(words)s::text[]) AS needle
+                  WHERE haystack ~* ('\\m' || needle || '\\M')
+              )
+          )
+        ORDER BY f.priority DESC, f.faq_id
+        LIMIT 1
+        """,
+        {"words": words},
+    )
+    if not row:
+        return None
+    # A keyword hit is a weaker signal than a similarity hit; it is recorded
+    # with a score below the threshold so the owner can see it was a fallback.
+    return Match(faq_id=row["faq_id"], question=row["question"],
+                 answer=row["answer"], score=0.0)
 
 
 def answer(db: Database, text: str | None,

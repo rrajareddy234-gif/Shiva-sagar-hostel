@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from core import booking, payments, security
+from core.channel.adapter import Button, Prompt
 from core.db import Database
 from core.errors import DomainError
 from core.export import DataFile
@@ -55,6 +56,56 @@ class CommandResult:
     # A data file to send with the text. The channel is still not touched here;
     # the caller does the sending, exactly as it does for the text.
     file: DataFile | None = None
+    # Tappable answers to offer with the reply, when the owner has a choice to
+    # make. Used to let the owner approve or reject a booking with one tap.
+    prompt: Prompt | None = None
+
+
+# --- owner buttons ---------------------------------------------------------
+#
+# The owner confirms a booking with a tap instead of a typed command. A button
+# carries the exact booking id and an explicit verb, so it is less ambiguous
+# than text, not more: there is nothing to mis-type and no doubt about which
+# booking was meant. The tap is still gated on the sender being the owner, and
+# every action is audited exactly as a typed command is.
+_OWNER = "own:"
+
+
+def approval_prompt(reference: str, *, summary: str | None = None) -> Prompt:
+    """The approve/reject buttons for one booking request."""
+    body = summary or f"Booking request {reference} is waiting for you."
+    return Prompt(
+        body=body,
+        buttons=(
+            Button(f"{_OWNER}approve:{reference}", "Approve"),
+            Button(f"{_OWNER}reject:{reference}", "Reject"),
+        ),
+    )
+
+
+def handle_button(db: Database, *, phone: str, button_id: str | None,
+                  owner_phone: str | None) -> CommandResult | None:
+    """Apply an owner button tap. None if the id is not one of ours.
+
+    Only the owner's own number can use these, checked here as everywhere else:
+    a button id that arrives from a customer is ignored.
+    """
+    if not button_id or not button_id.startswith(_OWNER):
+        return None
+    if security.role_for(phone, owner_phone) != security.OWNER:
+        return None
+
+    rest = button_id[len(_OWNER):]
+    verb, _, reference = rest.partition(":")
+    reference = (reference or "").strip().upper()
+    if not reference:
+        return None
+
+    if verb == "approve":
+        return _apply(db, phone, {"action": "approve_booking", "reference": reference})
+    if verb == "reject":
+        return _apply(db, phone, {"action": "reject_booking", "reference": reference})
+    return None
 
 
 def _set_pending(db: Database, phone: str, command: dict) -> None:

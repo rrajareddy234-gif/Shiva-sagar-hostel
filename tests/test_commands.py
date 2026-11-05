@@ -11,7 +11,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from ai.adapter import AIUnavailable, AIResponse
+from ai.adapter import AIResponse, AIUnavailable
 from core import booking, commands, handler, payments, router, security
 from tests.conftest import IST
 
@@ -155,8 +155,8 @@ def test_approve_without_a_reference_when_several_are_pending(db):
 
 
 def test_unknown_reference_reports_clearly(db):
-    result = commands.handle(db, phone=OWNER, text="approve booking SPG-9999-999999",
-                             owner_phone=OWNER)
+    commands.handle(db, phone=OWNER, text="approve booking SPG-9999-999999",
+                    owner_phone=OWNER)
     commands_result = commands.handle(db, phone=OWNER, text="yes", owner_phone=OWNER)
     assert "did not work" in commands_result.text.lower()
 
@@ -335,3 +335,69 @@ def test_injection_from_a_customer_does_not_change_role(db):
     assert outcome.handled_by == "fallback"
     assert "Rs" not in outcome.reply
     assert outcome.escalate is True
+
+
+# --- owner approve/reject buttons ------------------------------------------
+
+def test_a_button_prompt_carries_the_reference(db):
+    request = _request(db)
+    prompt = commands.approval_prompt(request.reference)
+    assert prompt.is_valid()
+    assert [b.title for b in prompt.buttons] == ["Approve", "Reject"]
+    assert [b.id for b in prompt.buttons] == [
+        f"own:approve:{request.reference}", f"own:reject:{request.reference}"]
+
+
+def test_the_owner_approves_with_a_tap(db):
+    request = _request(db)
+    result = commands.handle_button(
+        db, phone=OWNER, button_id=f"own:approve:{request.reference}",
+        owner_phone=OWNER)
+    assert result is not None
+    assert result.applied is True
+    row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
+                       (request.booking_id,))
+    assert row["status"] == "CONFIRMED"
+
+
+def test_the_owner_rejects_with_a_tap(db):
+    request = _request(db)
+    result = commands.handle_button(
+        db, phone=OWNER, button_id=f"own:reject:{request.reference}",
+        owner_phone=OWNER)
+    assert result is not None
+    assert result.applied is True
+    row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
+                       (request.booking_id,))
+    assert row["status"] == "REJECTED"
+
+
+def test_a_customer_cannot_use_an_owner_button(db):
+    """A customer replaying an approve id must change nothing."""
+    request = _request(db)
+    result = commands.handle_button(
+        db, phone=CUSTOMER, button_id=f"own:approve:{request.reference}",
+        owner_phone=OWNER)
+    assert result is None
+    row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
+                       (request.booking_id,))
+    assert row["status"] == "REQUESTED"
+
+
+def test_a_foreign_button_id_is_ignored(db):
+    assert commands.handle_button(
+        db, phone=OWNER, button_id="menu:price", owner_phone=OWNER) is None
+    assert commands.handle_button(
+        db, phone=OWNER, button_id="own:approve:", owner_phone=OWNER) is None
+
+
+def test_a_customer_tapping_an_owner_button_gets_no_confirmation(db):
+    """The whole path, not just the helper: a customer tap must not confirm."""
+    request = _request(db)
+    outcome = handler.handle_message(
+        db, phone=CUSTOMER, text="", owner_phone=OWNER, ai=None,
+        button_id=f"own:approve:{request.reference}")
+    assert outcome.handled_by != "owner_command"
+    row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
+                       (request.booking_id,))
+    assert row["status"] == "REQUESTED"

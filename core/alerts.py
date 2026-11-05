@@ -20,9 +20,9 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
-from core.channel.adapter import ChannelAdapter
+from core.channel.adapter import ChannelAdapter, Prompt
 from core.db import Database
 
 log = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def _set_state(db: Database, new_state: str) -> None:
         "INSERT INTO settings (key, value, updated_at) VALUES (%s, %s::jsonb, now()) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
         (STATE_KEY, json.dumps({"state": new_state,
-                                "changed_at": datetime.now(timezone.utc).isoformat()})),
+                                "changed_at": datetime.now(UTC).isoformat()})),
     )
 
 
@@ -63,6 +63,38 @@ def _send(db: Database, channel: ChannelAdapter, phone: str, text: str) -> None:
         inbox.record_outbound(db, phone, text, result.provider_message_id)
     except Exception as exc:  # an alert must never break the guest's reply
         log.error("could not alert the owner: %s", exc)
+
+
+def _send_prompt(db: Database, channel: ChannelAdapter, phone: str,
+                 prompt: Prompt) -> None:
+    """Send an interactive message to the owner, best effort. Never raises.
+
+    Falls back to plain text if the interactive send fails, so the owner is
+    never left without the message just because buttons were rejected.
+    """
+    from core import inbox
+    try:
+        result = channel.send_interactive(phone, prompt)
+        if result.ok:
+            inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
+            return
+        log.error("could not send the owner buttons: %s", result.error)
+    except Exception as exc:
+        log.error("could not send the owner buttons: %s", exc)
+    _send(db, channel, phone, prompt.body)
+
+
+def notify_new_request(db: Database, *, channel: ChannelAdapter,
+                       owner_phone: str | None, reference: str, summary: str) -> None:
+    """Tell the owner a booking request is waiting, with Approve/Reject buttons.
+
+    Best effort, like every alert: a failure here must not affect the guest's
+    own reply. The buttons carry the booking reference, so a tap is unambiguous.
+    """
+    if not owner_phone:
+        return
+    from core.commands import approval_prompt
+    _send_prompt(db, channel, owner_phone, approval_prompt(reference, summary=summary))
 
 
 def note_failure(db: Database, *, channel: ChannelAdapter, owner_phone: str | None,

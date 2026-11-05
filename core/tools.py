@@ -14,9 +14,10 @@ Two rules hold here:
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from collections.abc import Callable
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Callable
+from typing import Any
 
 from ai.adapter import ToolSpec
 from core import availability, payments, pricing
@@ -41,6 +42,11 @@ class ToolContext:
     db: Database
     phone: str
     role: str
+    # Side effects worth telling the caller about after the tools have run, such
+    # as a booking request that the owner should be asked to approve. A tool
+    # appends here instead of talking to the channel itself, so a tool still
+    # cannot send a message on its own.
+    events: list[dict] = field(default_factory=list)
 
 
 class Tool:
@@ -241,27 +247,60 @@ def _create_booking_request(ctx: ToolContext, args: dict) -> dict:
     if room_type == "NONAC":
         room_type = "NON_AC"
 
+    guests = int(args.get("guests") or 1)
+    if guests < 1:
+        raise DomainError("there must be at least one guest")
+
+    terms = (args.get("payment_terms") or "ADVANCE").upper()
+    if terms not in ("FULL", "ADVANCE"):
+        raise DomainError("payment terms must be FULL or ADVANCE")
+
     beds = availability.list_bed_availability(ctx.db, start, end)
     free = [b for b in beds if b.available]
     if room_type:
         free = [b for b in free if b.room_type == room_type]
-    if not free:
-        raise DomainError("no bed of that type is free for those dates")
+    if len(free) < guests:
+        raise DomainError(
+            f"only {len(free)} bed(s) of that type are free for those dates, "
+            f"but {guests} are needed")
 
     request = booking.create_request(
         ctx.db, phone=ctx.phone, full_name=full_name,
         gender=(args.get("gender") or "UNKNOWN").upper(),
-        bed_id=free[0].bed_id, check_in_at=start, check_out_at=end,
+        bed_ids=[b.bed_id for b in free[:guests]],
+        check_in_at=start, check_out_at=end,
         food_included=args.get("food_included"),
         stay_mode=(args.get("stay_mode") or "NIGHT").upper(),
+        guests_count=guests, payment_terms=terms,
+        name_source="GUEST_TYPED",
         hold_minutes=HOLD_MINUTES,
     )
+    ctx.events.append({
+        "type": "booking_requested",
+        "reference": request.reference,
+        "bed_ids": [b.bed_id for b in free[:guests]],
+        "guests": guests,
+        "check_in": start.date().isoformat(),
+        "check_out": end.date().isoformat(),
+        "charges_total": str(request.charges_total),
+        "advance_due": str(request.advance_due),
+        "payment_terms": terms,
+        "guest_name": full_name,
+    })
     return {
         "reference": request.reference,
+        # `bed_id` is the first bed, kept for the single-guest caller; the full
+        # party is in `bed_ids`.
         "bed_id": free[0].bed_id,
+        "bed_ids": [b.bed_id for b in free[:guests]],
+        "guests": guests,
+        "charges_total": str(request.charges_total),
+        "advance_due": str(request.advance_due),
+        "payment_terms": terms,
         "status": "REQUESTED",
         "note": ("This is a request only, not a confirmed booking. Tell the guest "
-                 "the owner will confirm shortly. Do not say the booking is confirmed."),
+                 "the owner will confirm shortly. Do not say the booking is confirmed. "
+                 "Quote charges_total and advance_due exactly; never compute a figure."),
     }
 
 
@@ -404,10 +443,24 @@ def _issue_invoice(ctx: ToolContext, args: dict) -> dict:
         "paid": str(invoice.paid),
         "balance_due": str(invoice.balance_due),
         "non_refundable": str(invoice.non_refundable),
-        "lines": [{"description": l["description"], "amount": str(l["amount"])}
-                  for l in invoice.lines],
+        "lines": [{"description": line["description"], "amount": str(line["amount"])}
+                  for line in invoice.lines],
         "currency": "INR",
     }
+
+
+def _hostel_facts(ctx: ToolContext, args: dict) -> dict:
+    """The owner's recorded facts, never a price and never a guess."""
+    from core import hostel_facts
+
+    category = (args.get("category") or "").strip()
+    rows = hostel_facts.by_category(ctx.db, category) if category \
+        else hostel_facts.all_facts(ctx.db)
+    facts = {row["key"]: row["value"] for row in rows}
+    if not facts:
+        return {"facts": {}, "note": "The owner has not recorded this yet. Say so; "
+                                    "do not invent an answer."}
+    return {"facts": facts}
 
 
 def _who_is(ctx: ToolContext, args: dict) -> dict:
@@ -568,8 +621,12 @@ TOOLS: list[Tool] = [
                 "check_in": {"type": "string", "description": "YYYY-MM-DD"},
                 "check_out": {"type": "string", "description": "YYYY-MM-DD"},
                 "room_type": {"type": "string", "enum": ["AC", "NON_AC", "DORM"]},
+                "guests": {"type": "integer", "minimum": 1,
+                           "description": "how many people are in the party"},
                 "food_included": {"type": "boolean"},
                 "gender": {"type": "string", "enum": ["MALE", "FEMALE", "OTHER"]},
+                "payment_terms": {"type": "string", "enum": ["FULL", "ADVANCE"],
+                                  "description": "FULL or ADVANCE (default)"},
             },
             "required": ["full_name", "check_in", "check_out"],
         },
@@ -652,6 +709,24 @@ TOOLS: list[Tool] = [
         },
         _who_is,
         owner_only=True,
+    ),
+    Tool(
+        "hostel_facts",
+        "The facts the owner has recorded about the hostel: the address, the "
+        "amenities, the policies. Use this for questions about where the hostel "
+        "is or what it offers. It never returns a price; use a quote tool for "
+        "prices.",
+        {
+            "type": "object",
+            "properties": {
+                "category": {
+                    "type": "string",
+                    "enum": ["location", "amenity", "identity", "policy", "general"],
+                    "description": "narrow the facts to one category",
+                },
+            },
+        },
+        _hostel_facts,
     ),
 ]
 

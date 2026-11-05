@@ -15,8 +15,10 @@ import hashlib
 import hmac
 import json
 
-from tests.conftest import APP_SECRET  # noqa: F401
-from tests.conftest import client  # noqa: F401
+from tests.conftest import (
+    APP_SECRET,  # noqa: F401
+    client,  # noqa: F401
+)
 
 OWNER = "+919999999999"          # as stored after normalisation
 OWNER_SENDS = "919999999999"     # as Meta delivers it, no plus
@@ -133,8 +135,9 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
 
     # 5. The guest's bed is now taken for those dates.
     from datetime import datetime
-    from tests.conftest import IST
+
     from core import availability
+    from tests.conftest import IST
     free = availability.list_bed_availability(
         db, datetime(2026, 12, 1, 12, tzinfo=IST), datetime(2026, 12, 3, 10, tzinfo=IST))
     assert not next(b for b in free if b.bed_id == bed_id).available
@@ -231,11 +234,11 @@ def test_a_duplicate_webhook_delivery_replies_once(client, channel, db):
 
 def test_an_outage_leaves_the_message_for_a_retry(client, db):
     """If sending fails, the message stays unprocessed so it can be retried."""
-    from tests.conftest import FakeChannel
+    from fastapi.testclient import TestClient
+
     from api.webhook import create_app
     from core.config import Settings
-    from fastapi.testclient import TestClient
-    from tests.conftest import TEST_DSN, VERIFY_TOKEN
+    from tests.conftest import TEST_DSN, VERIFY_TOKEN, FakeChannel
 
     broken = FakeChannel(fail=True)
     settings = Settings(

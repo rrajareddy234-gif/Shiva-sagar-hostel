@@ -14,8 +14,7 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import APP_SECRET, VERIFY_TOKEN  # noqa: F401
-from tests.conftest import FakeChannel, channel, client  # noqa: F401
+from tests.conftest import APP_SECRET, VERIFY_TOKEN, FakeChannel, channel, client  # noqa: F401  # noqa: F401
 
 
 def _payload(message_id="wamid.HOOK1", text="hello", sender="919000001000") -> bytes:
@@ -203,6 +202,7 @@ def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
 def test_a_failed_button_send_still_replies_with_text(db, seeded):
     """Buttons are a nicety. If they fail, the guest must still get the rates."""
     from fastapi.testclient import TestClient
+
     from api.webhook import create_app
     from core.config import Settings
     from tests.conftest import TEST_DSN, FakeChannel
@@ -274,3 +274,24 @@ def test_several_rapid_messages_each_get_one_reply(client, db, channel):
         body = _payload(message_id=f"wamid.RAPID{i}", text="what is the price?")
         client.post("/webhook", content=body, headers=_signed(body))
     assert len(channel.sent) + len(channel.prompts) == 4
+
+
+# --- transport hardening ---------------------------------------------------
+
+def test_responses_carry_security_headers(client):
+    r = client.get("/health")
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["Referrer-Policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
+
+
+def test_the_dashboard_also_carries_security_headers(client):
+    r = client.get("/dashboard")
+    assert r.headers["X-Frame-Options"] == "DENY"
+
+
+def test_an_oversized_body_is_refused_early(client):
+    r = client.post("/webhook", content=b"x" * 2_000_000,
+                    headers={"Content-Length": "2000000"})
+    assert r.status_code == 413

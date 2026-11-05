@@ -81,7 +81,7 @@ def test_the_customer_file_carries_the_bill_and_the_balance(db):
                             amount=200, method="UPI", actor=OWNER, verified=True)
     data = export.customer_file(db, _now())
     header, row = _rows(data)[0], _rows(data)[1]
-    values = dict(zip(header, row))
+    values = dict(zip(header, row, strict=True))
     assert values["name"] == "Ramesh Kumar"
     assert values["phone"] == "919000000901"
     assert values["since"]
@@ -94,7 +94,7 @@ def test_the_customer_file_carries_the_bill_and_the_balance(db):
 def test_the_booking_file_lists_the_bed_and_the_room(db):
     _confirmed(db)
     data = export.booking_file(db, _now())
-    values = dict(zip(_rows(data)[0], _rows(data)[1]))
+    values = dict(zip(_rows(data)[0], _rows(data)[1], strict=True))
     assert values["bed"] == "1NA-B1"
     assert values["room"] == "1NA"
     assert values["food"] == "yes"
@@ -104,7 +104,7 @@ def test_extras_reach_the_booking_file(db):
     request = _confirmed(db)
     billing.add_extra(db, booking_id=request.booking_id, name="Towel",
                       quantity=2, actor=OWNER)
-    values = dict(zip(*_rows(export.booking_file(db, _now()))[:2]))
+    values = dict(zip(*_rows(export.booking_file(db, _now()))[:2], strict=True))
     assert values["extras"] == "100.00"
 
 
@@ -113,7 +113,7 @@ def test_the_payment_file_shows_an_unverified_payment_as_unverified(db):
     payments.record_payment(db, booking_id=request.booking_id, guest_id=None,
                             amount=200, method="UPI", actor=OWNER, verified=False)
     data = export.payment_file(db, _now())
-    values = dict(zip(_rows(data)[0], _rows(data)[1]))
+    values = dict(zip(_rows(data)[0], _rows(data)[1], strict=True))
     assert values["verified"] == "no"
     assert values["amount"] == "200.00"
     assert values["booking"].startswith("SPG-")
@@ -130,14 +130,14 @@ def test_a_name_starting_with_equals_is_not_a_formula(db):
         check_in_at=_now() + timedelta(days=1),
         check_out_at=_now() + timedelta(days=2), food_included=False)
     data = export.customer_file(db, _now())
-    name = dict(zip(*_rows(data)[:2]))["name"]
+    name = dict(zip(*_rows(data)[:2], strict=True))["name"]
     assert not name.startswith("=")
     assert name.startswith("'=")
 
 
 def test_a_phone_is_digits_only(db):
     _confirmed(db)
-    phone = dict(zip(*_rows(export.customer_file(db, _now()))[:2]))["phone"]
+    phone = dict(zip(*_rows(export.customer_file(db, _now()))[:2], strict=True))["phone"]
     assert phone == "919000000901"
     assert "+" not in phone
 

@@ -27,6 +27,25 @@ from core.inbox import store_inbound
 
 log = logging.getLogger(__name__)
 
+# A WhatsApp webhook payload is a few kilobytes. Anything near a megabyte is
+# not Meta; it is an attempt to make the app buffer and parse a huge body. The
+# cap is generous for real traffic and small enough to refuse abuse early.
+MAX_BODY_BYTES = 1_000_000
+
+# Sent on every response. The dashboard renders guest names and phones, so it
+# must not be framed by another site, sniffed into another content type, or leak
+# its URL to a third party through the Referer header. `default-src 'none'` with
+# inline styles allowed is enough for the self-contained dashboard pages, which
+# use no scripts and no external resources.
+SECURITY_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "X-Frame-Options": "DENY",
+    "Referrer-Policy": "no-referrer",
+    "Content-Security-Policy":
+        "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; "
+        "frame-ancestors 'none'; base-uri 'none'",
+}
+
 
 def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
     """Build the app. `channel` and `ai` may be injected for tests."""
@@ -45,6 +64,17 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
 
     app.include_router(jobs.router)
     app.include_router(dashboard.router)
+
+    @app.middleware("http")
+    async def _guard(request: Request, call_next):
+        """Refuse an oversized body early, and stamp security headers on replies."""
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+            return JSONResponse({"status": "too large"}, status_code=413)
+        response = await call_next(request)
+        for name, value in SECURITY_HEADERS.items():
+            response.headers.setdefault(name, value)
+        return response
 
     @app.get("/health")
     def health() -> dict:

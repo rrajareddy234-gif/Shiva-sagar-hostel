@@ -15,7 +15,7 @@ from dataclasses import dataclass
 
 from ai.adapter import AIClient, AIUnavailable
 from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM, STAFF_SYSTEM
-from core import commands, memory, router, security, tools
+from core import commands, hostel_facts, memory, router, security, tools
 from core.channel.adapter import Prompt
 from core.db import Database
 from core.export import DataFile
@@ -38,6 +38,10 @@ class Outcome:
     prompt: Prompt | None = None
     # A data file to send alongside the reply, e.g. an owner export.
     file: DataFile | None = None
+    # Side effects a tool performed that the caller should act on, such as a
+    # booking request the owner must be asked to approve. The handler never
+    # sends these itself; the dispatcher owns the channel.
+    events: tuple[dict, ...] = ()
 
 
 def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | None,
@@ -51,11 +55,20 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
         log.warning("possible prompt injection from %s", phone)
 
     if role == security.OWNER:
+        # A tap on an Approve/Reject button is handled before typed commands:
+        # the id names the booking exactly, so there is nothing to resolve.
+        tapped = commands.handle_button(db, phone=phone, button_id=button_id,
+                                       owner_phone=owner_phone)
+        if tapped is not None:
+            return Outcome(reply=tapped.text, handled_by="owner_command",
+                           intent=tapped.action or "owner_command",
+                           prompt=tapped.prompt, file=tapped.file)
+
         command_result = commands.handle(db, phone=phone, text=text, owner_phone=owner_phone)
         if command_result is not None:
             return Outcome(reply=command_result.text, handled_by="owner_command",
                            intent=command_result.action or "owner_command",
-                           file=command_result.file)
+                           prompt=command_result.prompt, file=command_result.file)
 
         owner_reply = router.owner_answer(db, text)
         if owner_reply.handled:
@@ -69,7 +82,8 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
                            intent=staff_reply.intent, prompt=staff_reply.prompt)
 
     else:
-        customer_reply = router.route(db, text, role=role, button_id=button_id)
+        customer_reply = router.route(db, text, role=role, button_id=button_id,
+                                      phone=phone)
         if customer_reply.handled:
             return Outcome(reply=customer_reply.text, handled_by="router",
                            intent=customer_reply.intent, prompt=customer_reply.prompt)
@@ -84,7 +98,9 @@ def _system_for(db: Database, *, role: str, phone: str) -> str:
     """The rules, plus what the database knows about this caller.
 
     The memory block is facts read from the database, never a summary and never
-    a guess. Money is left out on purpose; a tool supplies it live.
+    a guess. Money is left out on purpose; a tool supplies it live. The hostel
+    facts are appended after the memory block, so the assistant answers "where
+    are you?" and "is there wifi?" from the owner's own words.
     """
     if role == security.OWNER:
         base = OWNER_SYSTEM
@@ -92,7 +108,11 @@ def _system_for(db: Database, *, role: str, phone: str) -> str:
         base = STAFF_SYSTEM
     else:
         base = CUSTOMER_SYSTEM
-    return f"{base}\n\n{memory.memory_for(db, phone=phone, role=role)}"
+    parts = [base, memory.memory_for(db, phone=phone, role=role)]
+    facts = hostel_facts.render_for_prompt(db)
+    if facts:
+        parts.append(facts)
+    return "\n\n".join(parts)
 
 
 def _ask_ai(db: Database, *, ai: AIClient, role: str, phone: str, text: str,
@@ -125,7 +145,8 @@ def _ask_ai(db: Database, *, ai: AIClient, role: str, phone: str, text: str,
         if not response.tool_calls:
             if not response.text:
                 return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)
-            return Outcome(reply=response.text, handled_by="ai", tool_calls=tuple(used))
+            return Outcome(reply=response.text, handled_by="ai", tool_calls=tuple(used),
+                           events=tuple(ctx.events))
 
         # Record the model's request, run each tool, and feed the results back.
         messages.append({"role": "assistant", "content": response.text or "",
@@ -140,7 +161,7 @@ def _ask_ai(db: Database, *, ai: AIClient, role: str, phone: str, text: str,
 
     log.warning("the model kept calling tools without answering for %s", phone)
     return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True,
-                   tool_calls=tuple(used))
+                   tool_calls=tuple(used), events=tuple(ctx.events))
 
 
 def _json(value) -> str:

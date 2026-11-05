@@ -3,6 +3,44 @@
 What to do when things go wrong, and how to check the system is healthy. Written
 for the owner, not for a programmer.
 
+## Backups and recovery
+
+A backup you have never restored is not a backup. It is a file you hope is one.
+
+**Nightly backup.** `deploy/backup.sh` dumps the database to
+`backups/sagarpg-<date>.sql.gz` and keeps 14 days. It refuses to report success
+unless the file is non-empty, decompresses, and actually contains the `bookings`
+table — a truncated dump that looks fine is the dangerous kind. Add it to cron:
+
+```
+15 2 * * * cd /opt/sagar && ./deploy/backup.sh >> /var/log/sagar-backup.log 2>&1
+```
+
+**Copy it off the machine.** A backup sitting on the same server is lost with
+the server. Use `rclone` to cloud storage or `scp` to another machine, nightly.
+
+**Prove it restores.** `deploy/restore_drill.sh` is the check that matters. It
+restores the newest backup into a throwaway database, counts rows in the tables
+that hold money and bookings, compares them with the live database, and drops
+the throwaway again. It never touches the live data. Run it nightly, right after
+the backup:
+
+```
+45 2 * * * cd /opt/sagar && ./deploy/restore_drill.sh >> /var/log/sagar-backup.log 2>&1
+```
+
+It exits non-zero if the dump will not restore or if any count is wrong, so a
+failing cron job is your alarm. Run it by hand before going live:
+
+```bash
+./deploy/restore_drill.sh backups/sagarpg-2026-11-04-1413.sql.gz
+```
+
+**A real restore** (this destroys the live database) is `deploy/restore.sh`. It
+takes a fresh backup first, so a wrong restore is itself recoverable, and asks
+you to type the database name before it does anything. Restore only after a
+drill has passed on the same file.
+
 ## Daily checks
 
 The morning report covers most of it. Open WhatsApp and look for:
@@ -185,8 +223,9 @@ Do these in order. Do not skip the test in step 5.
    - `show pending booking requests`
    - `approve booking <reference>` then `YES`
 6. **Make one test booking** with a name you recognise as fake, then cancel it.
-7. **Rehearse a restore.** Run `./deploy/restore.sh` against a copy. Do this
-   before you need it.
+7. **Rehearse a restore.** Run `./deploy/restore_drill.sh` and confirm it says
+   "restores cleanly with matching row counts". This is the check that proves
+   your backups are real. Do this before you need it, and let it run nightly.
 8. **Turn on the workflows** one at a time, starting with the health check.
 
 ## What is not automatic

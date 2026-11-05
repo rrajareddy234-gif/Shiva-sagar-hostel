@@ -11,7 +11,6 @@ import pytest
 from core import pricing
 from core.db import Database
 from core.errors import NotFound, ValidationError
-
 from tests.conftest import TEST_DSN
 
 pytestmark = pytest.mark.usefixtures("seeded")

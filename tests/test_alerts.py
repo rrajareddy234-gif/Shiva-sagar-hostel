@@ -6,12 +6,11 @@ never at the cost of the guest's own reply.
 
 from __future__ import annotations
 
-from ai.adapter import AIUnavailable, AIResponse
+from ai.adapter import AIResponse, AIUnavailable
 from core import alerts
 from core.channel.adapter import InboundMessage
-from core.dispatcher import dispatch
 from core.config import Settings
-
+from core.dispatcher import dispatch
 from tests.conftest import APP_SECRET, TEST_DSN, VERIFY_TOKEN
 
 OWNER = "+919999999999"

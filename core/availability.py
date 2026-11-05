@@ -17,9 +17,9 @@ double-booking. Use `sync_bed_status` to keep it tidy.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
 
 from core.db import Database
 from core.errors import NotFound, ValidationError

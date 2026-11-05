@@ -8,7 +8,9 @@ only — never real customer records.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -27,12 +29,22 @@ TEST_DSN = os.environ.get(
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-TABLES = (
-    "ai_usage", "audit_log", "referrals", "partners", "messages", "conversations",
-    "invoice_lines", "invoices", "payments", "bed_holds", "booking_extras",
-    "bookings", "rate_plans", "monthly_plans", "extras", "faq_hits", "faq",
-    "enquiries", "guests", "beds", "rooms", "settings",
-)
+# Every table is read from the schema, not typed out here. A hand-kept list
+# silently goes stale the moment a table is added, and a table missing from the
+# truncate leaks rows from one test into the next. Deriving the list makes that
+# class of bug impossible.
+_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
+
+
+def _tables_from_schema() -> tuple[str, ...]:
+    sql = _SCHEMA_PATH.read_text()
+    names = re.findall(r"CREATE TABLE IF NOT EXISTS\s+([a-z_][a-z0-9_]*)", sql)
+    if not names:
+        raise RuntimeError(f"no tables found in {_SCHEMA_PATH}; the schema moved?")
+    return tuple(sorted(set(names)))
+
+
+TABLES = _tables_from_schema()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -43,15 +55,14 @@ def _database():
     except psycopg.OperationalError as exc:  # pragma: no cover
         pytest.skip(f"PostgreSQL is not available: {exc}")
 
-    with admin:
-        with admin.cursor() as cur:
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND pid <> pg_backend_pid()",
-                (TEST_DB_NAME,),
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"')
-            cur.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+    with admin, admin.cursor() as cur:
+        cur.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (TEST_DB_NAME,),
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"')
+        cur.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
     admin.close()
 
     Database(TEST_DSN).apply_schema()

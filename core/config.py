@@ -59,7 +59,7 @@ class Settings:
     staff_phones: tuple[str, ...] = ()
 
     @staticmethod
-    def from_env() -> "Settings":
+    def from_env() -> Settings:
         raw_staff = _env("STAFF_PHONES", "") or ""
         return Settings(
             database_url=_env("DATABASE_URL", required=True),

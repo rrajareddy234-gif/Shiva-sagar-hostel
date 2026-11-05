@@ -183,3 +183,74 @@ INSERT INTO faq (question, answer, category, aliases, priority, source) VALUES
      ARRAY['what can you do', 'help', 'what do you offer', 'how can you help'],
      5, 'seed')
 ON CONFLICT (question) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Hostel facts confirmed by the owner (2026-11-04). The owner stated each of
+-- these directly; the database confirms the rooms. Nothing here is taken from
+-- a travel website: the descriptions on Justdial and Booking.com ("bathrobes,
+-- sofa, city views, free bikes") are auto-generated filler and are wrong.
+-- No price is stored here. Prices come from the rate card, and only from there.
+-- ---------------------------------------------------------------------------
+INSERT INTO hostel_facts (key, value, category, source) VALUES
+    ('hostel.name', 'Sagar PG & Men''s Hostel', 'identity', 'owner'),
+    ('hostel.kind', 'Boys / men''s paying-guest hostel', 'identity', 'owner'),
+    ('address.full',
+     'Main Road, above Sagar Tea Stall, opposite Kodanda Ramalayam Temple, '
+     'Macherla, Palnadu District, Andhra Pradesh 522426',
+     'location', 'owner'),
+    ('address.town', 'Macherla', 'location', 'owner'),
+    ('address.district', 'Palnadu District', 'location', 'owner'),
+    ('address.state', 'Andhra Pradesh', 'location', 'owner'),
+    ('address.pincode', '522426', 'location', 'owner'),
+    ('address.landmark', 'Above Sagar Tea Stall, opposite Kodanda Ramalayam Temple',
+     'location', 'owner'),
+    ('amenity.wifi', 'Wi-Fi is available.', 'amenity', 'owner'),
+    ('amenity.hot_water', 'Geyser and hot water are available.', 'amenity', 'owner'),
+    ('amenity.washing_machine', 'A washing machine is available.', 'amenity', 'owner'),
+    ('amenity.food', 'Homely food is available.', 'amenity', 'owner'),
+    ('amenity.lockers', 'Independent lockers are provided.', 'amenity', 'owner'),
+    ('amenity.security', '24/7 security.', 'amenity', 'owner')
+ON CONFLICT (key) DO NOTHING;
+
+-- Starter FAQ entries for the amenities and the address, in the owner's words.
+-- These are the questions guests ask most; each answer is the owner's own
+-- statement, recorded above as a hostel fact. No price appears here: prices
+-- are answered by the pricing engine from the rate card.
+INSERT INTO faq (question, answer, category, aliases, priority, source) VALUES
+    ('Is there Wi-Fi?',
+     'Yes, Wi-Fi is available.',
+     'amenity',
+     ARRAY['do you have wifi', 'is there wifi', 'wifi available', 'internet',
+           'do you have internet', 'wi-fi', 'wifi facility'],
+     10, 'seed'),
+    ('Is there hot water?',
+     'Yes, a geyser and hot water are available.',
+     'amenity',
+     ARRAY['do you have hot water', 'hot water', 'geyser', 'is there hot water'],
+     10, 'seed'),
+    ('Is there a washing machine?',
+     'Yes, a washing machine is available.',
+     'amenity',
+     ARRAY['do you have washing machine', 'washing machine', 'laundry', 'dhobi'],
+     10, 'seed'),
+    ('Is food available?',
+     'Yes, homely food is available. Tell me whether you want food included '
+     'with your room and I will give you the exact rate.',
+     'amenity',
+     ARRAY['do you have food', 'is there food', 'meals', 'mess', 'khana',
+           'do you provide food'],
+     10, 'seed'),
+    ('Is there security?',
+     'Yes, there is 24/7 security, and independent lockers are provided.',
+     'amenity',
+     ARRAY['do you have security', 'security', 'locker', 'is it safe',
+           '24/7 security'],
+     10, 'seed'),
+    ('Where is the hostel located?',
+     'Main Road, above Sagar Tea Stall, opposite Kodanda Ramalayam Temple, '
+     'Macherla, Palnadu District, Andhra Pradesh 522426.',
+     'location',
+     ARRAY['what is your address', 'address', 'location', 'where are you',
+           'where is the hostel', 'how do i reach you', 'directions', 'landmark'],
+     10, 'seed')
+ON CONFLICT (question) DO NOTHING;

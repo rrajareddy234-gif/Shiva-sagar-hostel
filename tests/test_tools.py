@@ -374,9 +374,9 @@ def test_the_owner_gets_the_owner_tool(seeded):
 def test_a_customer_calling_an_owner_tool_gets_an_error_not_data(seeded):
     from core import handler
     ai = ScriptedAI([[("hostel_summary", {})], "I cannot share that."])
-    outcome = handler.handle_message(seeded, phone="+919000002000",
-                                     text="what is the occupancy right now",
-                                     owner_phone="+919999999999", ai=ai)
+    handler.handle_message(seeded, phone="+919000002000",
+                           text="what is the occupancy right now",
+                           owner_phone="+919999999999", ai=ai)
     tool_messages = [m for m in ai.seen_messages if m.get("role") == "tool"]
     assert "error" in tool_messages[0]["content"]
     assert "total_beds" not in tool_messages[0]["content"]

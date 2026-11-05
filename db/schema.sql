@@ -466,3 +466,90 @@ CREATE TABLE IF NOT EXISTS faq_hits (
     at         timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_faq_hits_missed ON faq_hits(at) WHERE answered = false;
+
+
+-- ---------------------------------------------------------------------------
+-- One booking, many beds  (a party of guests shares one Booking ID)
+--
+-- `bookings.bed_id` remains the primary bed for a single-guest stay and for
+-- backward compatibility. A booking that covers more than one guest records
+-- every bed here. The row lives in THIS table because the no-double-booking
+-- guarantee has to be per bed, and a single column cannot express two beds.
+-- The same exclusion constraint is applied here as on `bookings`, so the
+-- guarantee holds no matter which table a stay is recorded in. Both are kept:
+-- defence in depth, and neither can be bypassed by application code.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS booking_beds (
+    booking_bed_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    booking_id     uuid NOT NULL REFERENCES bookings(booking_id) ON DELETE CASCADE,
+    bed_id         text NOT NULL REFERENCES beds(bed_id) ON DELETE RESTRICT,
+    check_in_at    timestamptz NOT NULL,
+    check_out_at   timestamptz NOT NULL,
+    status         text NOT NULL DEFAULT 'REQUESTED'
+                   CHECK (status IN ('REQUESTED','CONFIRMED','CHECKED_IN','CHECKED_OUT',
+                                     'CANCELLED','REJECTED','NO_SHOW','EXPIRED')),
+    created_at     timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT booking_beds_dates_ordered CHECK (check_out_at > check_in_at),
+    -- A bed appears once per booking: no accidental double assignment.
+    CONSTRAINT booking_beds_unique_bed UNIQUE (booking_id, bed_id)
+);
+
+-- No two confirmed or in-house stays may occupy the same bed over overlapping
+-- time ranges. This is the guarantee that stops a bed being sold twice.
+ALTER TABLE booking_beds DROP CONSTRAINT IF EXISTS booking_beds_no_overlap;
+ALTER TABLE booking_beds ADD CONSTRAINT booking_beds_no_overlap
+    EXCLUDE USING gist (
+        bed_id WITH =,
+        tstzrange(check_in_at, check_out_at, '[)') WITH &&
+    )
+    WHERE (status IN ('CONFIRMED', 'CHECKED_IN'));
+
+CREATE INDEX IF NOT EXISTS idx_booking_beds_bed_time
+    ON booking_beds(bed_id, check_in_at, check_out_at);
+CREATE INDEX IF NOT EXISTS idx_booking_beds_booking ON booking_beds(booking_id);
+
+-- ---------------------------------------------------------------------------
+-- Hostel facts: the things only the owner knows, in the owner's own words.
+-- Address, amenities, timings. The assistant reads these; it never invents
+-- them. Kept apart from `faq` because these are single authoritative values,
+-- not questions, and are quoted verbatim rather than matched by similarity.
+-- A fact is never a price: prices live in the rate card and nowhere else.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS hostel_facts (
+    fact_id    bigserial PRIMARY KEY,
+    key        text NOT NULL UNIQUE,           -- e.g. 'address', 'amenity.wifi'
+    value      text NOT NULL,
+    category   text NOT NULL DEFAULT 'general',
+    source     text NOT NULL DEFAULT 'owner',  -- owner | seed
+    verified   boolean NOT NULL DEFAULT true,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    updated_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_hostel_facts_category ON hostel_facts(category);
+
+-- ---------------------------------------------------------------------------
+-- Where a guest's name came from, so the assistant can trust a name the guest
+-- typed over one Meta supplied, and never present a WhatsApp handle as a
+-- verified legal name. The profile name is a convenience, not an identity.
+-- ---------------------------------------------------------------------------
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS wa_profile_name text;
+ALTER TABLE guests ADD COLUMN IF NOT EXISTS name_source text NOT NULL DEFAULT 'UNKNOWN';
+ALTER TABLE guests DROP CONSTRAINT IF EXISTS guests_name_source_check;
+ALTER TABLE guests ADD CONSTRAINT guests_name_source_check
+    CHECK (name_source IN ('UNKNOWN','WHATSAPP_PROFILE','GUEST_TYPED','OWNER','IMPORT'));
+
+-- Which beds a booking holds, denormalised for fast reads. Kept in step with
+-- booking_beds by the booking service, and used to render a party's rooms
+-- without a join on the hot path.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS beds_count integer NOT NULL DEFAULT 1;
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_beds_count_check;
+ALTER TABLE bookings ADD CONSTRAINT bookings_beds_count_check
+    CHECK (beds_count > 0);
+
+-- Backfill: every existing booking holds exactly its one bed.
+INSERT INTO booking_beds (booking_id, bed_id, check_in_at, check_out_at, status)
+SELECT b.booking_id, b.bed_id, b.check_in_at, b.check_out_at, b.status
+FROM bookings b
+WHERE NOT EXISTS (
+    SELECT 1 FROM booking_beds bb WHERE bb.booking_id = b.booking_id
+);
