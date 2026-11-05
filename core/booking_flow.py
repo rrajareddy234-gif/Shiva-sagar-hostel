@@ -425,7 +425,7 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
     event = {
         "type": "booking_requested",
         "reference": request.reference,
-        "bed_ids": [b for b in beds[:guests]],
+        "bed_ids": list(beds[:guests]),
         "guests": guests,
         "check_in": start_at.date().isoformat(),
         "check_out": end_at.date().isoformat(),
