@@ -81,6 +81,14 @@ def _translate(exc: Exception) -> Exception:
     diag = getattr(exc, "diag", None)
     constraint = getattr(diag, "constraint_name", None) or ""
 
+    # Two guests racing for the last bed can deadlock while both check the
+    # no-overlap constraint. The database protects the bed either way, so this
+    # is a "try again", not a failure -- left untranslated it reached the guest
+    # as a raw database error and their request was silently dropped.
+    if isinstance(exc, (psycopg.errors.DeadlockDetected,
+                        psycopg.errors.SerializationFailure)):
+        return BookingConflict("that bed was taken just now; please try again")
+
     if isinstance(exc, psycopg.errors.ExclusionViolation):
         if constraint == "bookings_no_overlap":
             return BedUnavailable("that bed is already booked for those dates")

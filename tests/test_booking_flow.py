@@ -210,3 +210,39 @@ def test_a_stale_room_tap_for_the_wrong_step_does_not_skip_ahead(db):
 
 def _has_booking(db):
     return db.query_one("SELECT count(*) n FROM bookings")["n"] > 0
+
+
+def test_a_lost_race_is_retried_on_another_free_bed(db, monkeypatch):
+    """A guest who loses the race by a hair still gets a booking.
+
+    The first create_request call is made to fail the way a losing race does.
+    The flow must retry on whatever is now free, not send the guest back to the
+    start with nothing.
+    """
+    from core import booking as booking_mod
+    from core.errors import BedUnavailable
+
+    real = booking_mod.create_request
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise BedUnavailable("that bed is already held for those dates")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(booking_mod, "create_request", flaky)
+
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:1")
+    _step(db, bid="bk:guests:1")
+    _step(db, bid="bk:room:AC")
+    _step(db, bid="bk:food:0")
+    _step(db, bid="bk:terms:FULL")
+    _step(db, text="Race Guest")
+    outcome = _step(db, bid="bk:submit")
+
+    assert calls["n"] == 2, "the flow should have retried once"
+    assert "sent to the owner" in outcome.reply
+    assert _has_booking(db)

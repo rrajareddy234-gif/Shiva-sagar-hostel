@@ -13,7 +13,13 @@ from decimal import Decimal
 import pytest
 
 from core import availability, booking
-from core.errors import BedUnavailable, InvalidTransition, NotFound, ValidationError
+from core.errors import (
+    BedUnavailable,
+    BookingConflict,
+    InvalidTransition,
+    NotFound,
+    ValidationError,
+)
 
 pytestmark = pytest.mark.usefixtures("seeded")
 
@@ -136,6 +142,26 @@ def test_second_request_for_a_held_bed_is_refused(db):
     _request(db, phone="+919000000102")
     with pytest.raises(BedUnavailable, match="held"):
         _request(db, phone="+919000000103")
+
+
+def test_a_deadlock_is_reported_as_a_conflict_not_a_raw_database_error(db):
+    """Two guests racing for the last bed can deadlock on the no-overlap rule.
+
+    The database still protects the bed, but an untranslated deadlock reached
+    the guest as a raw error and their request was dropped. It must surface as a
+    retryable domain error so the booking flow can recover.
+    """
+    import psycopg
+
+    from core.db import _translate
+
+    deadlock = psycopg.errors.DeadlockDetected("deadlock detected")
+    translated = _translate(deadlock)
+    assert isinstance(translated, BookingConflict)
+    assert "try again" in translated.message.lower()
+
+    serial = psycopg.errors.SerializationFailure("could not serialize access")
+    assert isinstance(_translate(serial), BookingConflict)
 
 
 def test_approving_a_taken_bed_is_refused(db):

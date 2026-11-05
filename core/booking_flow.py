@@ -17,7 +17,7 @@ from datetime import datetime, timedelta
 from core import availability, billing, booking, hostel_facts, inbox, pricing
 from core.channel.adapter import Button, Prompt
 from core.db import Database
-from core.errors import DomainError
+from core.errors import BedUnavailable, BookingConflict, DomainError
 
 log = logging.getLogger(__name__)
 
@@ -404,6 +404,27 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
             food_included=state.get("food"), mode="daily", stay_mode="NIGHT",
             payment_terms=state.get("terms") or "ADVANCE", guests_count=guests,
             source="WHATSAPP", name_source=state.get("name_source") or "GUEST_TYPED")
+    except (BookingConflict, BedUnavailable):
+        # Someone else won the race for the same bed by a hair. The guest did
+        # nothing wrong and their details are still in hand, so try once more on
+        # whatever is now free rather than making them start over.
+        beds = availability.available_beds(db, start_at, end_at, room_type=room_type)
+        if len(beds) < guests:
+            _clear(db, phone)
+            return FlowResult(
+                f"Sorry, the last {ROOM_LABEL.get(room_type, room_type)} bed was "
+                "just taken. Please try different dates.")
+        try:
+            request = booking.create_request(
+                db, phone=phone, full_name=name, gender=None,
+                bed_ids=beds[:guests], check_in_at=start_at, check_out_at=end_at,
+                food_included=state.get("food"), mode="daily", stay_mode="NIGHT",
+                payment_terms=state.get("terms") or "ADVANCE", guests_count=guests,
+                source="WHATSAPP",
+                name_source=state.get("name_source") or "GUEST_TYPED")
+        except DomainError as exc:
+            _clear(db, phone)
+            return FlowResult(f"I couldn't create that request: {exc.message}")
     except DomainError as exc:
         _clear(db, phone)
         return FlowResult(f"I couldn't create that request: {exc.message}")
