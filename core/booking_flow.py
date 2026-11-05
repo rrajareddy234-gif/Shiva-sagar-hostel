@@ -242,6 +242,8 @@ def _ask_name(db: Database, phone: str) -> FlowResult:
 
 def _review(db: Database, phone: str, state: dict) -> FlowResult:
     """Show exactly what will be requested, then let the guest submit."""
+    if any(not state.get(k) for k in _REQUIRED):
+        return _restart(db, phone)
     start_at, end_at = _window(state)
     room_type = state["room_type"]
     food = state.get("food")
@@ -296,6 +298,14 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
     if not state.get("step"):
         # A stale tap after the flow ended: start again from the top.
         return start(db, phone=phone)
+
+    # A tap is only meaningful once the answers it depends on exist. A stale or
+    # out-of-order tap (a button from an older message, a double tap) would
+    # otherwise walk the flow forward past a question that was never answered,
+    # leaving a required field unset and crashing at the review step.
+    needed = _PREREQ.get(verb)
+    if needed and any(not state.get(k) for k in needed):
+        return _restart(db, phone)
 
     if verb == "date":
         today = datetime.now().astimezone().date()
@@ -440,6 +450,18 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
 # --- helpers ---------------------------------------------------------------
 
 _REQUIRED = ("check_in", "nights", "guests", "room_type")
+
+# What each tap step depends on. A step whose answers are missing means the
+# guest arrived there out of order, so the flow restarts rather than guessing.
+_PREREQ: dict[str, tuple[str, ...]] = {
+    "nights": ("check_in",),
+    "guests": ("check_in", "nights"),
+    "room": ("check_in", "nights", "guests"),
+    "food": ("check_in", "nights", "guests", "room_type"),
+    "terms": ("check_in", "nights", "guests", "room_type"),
+    "name": ("check_in", "nights", "guests", "room_type"),
+    "submit": _REQUIRED,
+}
 
 
 def _window(state: dict) -> tuple[datetime, datetime]:

@@ -174,3 +174,39 @@ def test_cancel_abandons_the_flow(db):
     outcome = _step(db, text="cancel")
     assert not booking_flow.is_active(db, GUEST)
     assert "cancel" in outcome.reply.lower()
+
+
+# --- out-of-order taps -----------------------------------------------------
+
+def test_a_tap_that_skips_a_question_restarts_instead_of_crashing(db):
+    """A button from an older message must not walk past an unanswered step.
+
+    Without the ordering guard the flow reached review with no room type and
+    raised KeyError, so the guest got the generic error fallback and no booking.
+    """
+    _step(db, bid="menu:book")
+    outcome = _step(db, bid="bk:food:1")   # food tapped before date/nights/etc.
+    assert "start again" in outcome.reply.lower()
+    assert booking_flow.is_active(db, GUEST)
+
+
+def test_submit_with_an_incomplete_flow_restarts_instead_of_crashing(db):
+    _step(db, bid="menu:book")
+    outcome = _step(db, bid="bk:submit")
+    assert "start again" in outcome.reply.lower()
+    assert not _has_booking(db)
+
+
+def test_a_stale_room_tap_for_the_wrong_step_does_not_skip_ahead(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    # A room tap arrives while the flow is still waiting for the night count.
+    outcome = _step(db, bid="bk:room:AC")
+    assert outcome is not None
+    assert not _has_booking(db)
+    # The flow is still usable: the guest can carry on answering.
+    assert booking_flow.is_active(db, GUEST)
+
+
+def _has_booking(db):
+    return db.query_one("SELECT count(*) n FROM bookings")["n"] > 0
