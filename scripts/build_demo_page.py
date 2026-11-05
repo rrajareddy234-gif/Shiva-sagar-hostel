@@ -42,7 +42,17 @@ GUEST_SCRIPT = [
     "[Food & Amenities]",
     "[Location & Directions]",
     "[Guest Reviews]",
+    "[My Bookings]",
     "[Book a Room]",
+    "[Tomorrow]",
+    "[2 nights]",
+    "[2 guests]",
+    "[AC]",
+    "[With food]",
+    "[Advance]",
+    "Ravi Kumar",
+    "[Submit]",
+    "[My Bookings]",
     "[Talk to Staff]",
     "is there wifi?",
     "where are you located",
@@ -405,8 +415,8 @@ LANDING = """<!DOCTYPE html>
   </a>
 
   <a class="big" href="menu.html">
-    <span class="t">📱 The 7-choice menu design</span>
-    <span class="d">The full WhatsApp booking picture — your seven menu choices,
+    <span class="t">📱 The menu design</span>
+    <span class="d">The full WhatsApp booking picture — your menu choices,
     the bill with the working shown, and the two payment paths.</span>
   </a>
 
