@@ -44,10 +44,27 @@ docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
 docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/seed.sql
 
-python -m pytest            # 389 tests
+python -m pytest            # 600 tests
 cp .env.example .env        # then fill in the values
 uvicorn api.main:app --reload
 ```
+
+## Try it without WhatsApp
+
+`scripts/chat.py` drives the real code path — the same router, pricing engine and
+booking flow the webhook uses — and prints the replies instead of sending them.
+It runs against a throwaway database seeded from `db/seed.sql`, so it can never
+touch real guests or bookings.
+
+```bash
+python scripts/chat.py
+```
+
+Then type as a guest would: `hi`, `what are your prices`, or
+`I want to book from 1 December for 2 nights`. Type a label in brackets to tap a
+button (`[AC]`, `[With food]`) — the simulator sends the button's id, exactly as
+WhatsApp does. `/owner` switches to the owner's number for owner commands,
+`/reset` clears the scratch database, `/quit` leaves.
 
 Do not use `docker run` for the database. A container created that way has no
 volume, so its data is lost the moment the container is recreated.

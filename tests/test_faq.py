@@ -84,6 +84,32 @@ def test_an_inactive_entry_is_not_used(stocked):
 
 def test_an_empty_message_matches_nothing(stocked):
     assert faq.match(stocked, "") is None
+
+
+@pytest.mark.parametrize("text", [
+    "[With food]",          # a button label the guest tapped
+    "[AC]",
+    "wifi (free?)",
+    "check-in \\ backslash",
+    "a+b*c?",
+    "hot water [24x7]",
+])
+def test_a_short_message_with_regex_characters_does_not_crash(stocked, text):
+    """Guest text is data, never a regex.
+
+    A tapped button arrives as a short message. `[With food]` was interpolated
+    into a regex unescaped, and Postgres rejected the whole expression, so the
+    guest got the error fallback instead of an answer. Whatever a guest types
+    must be answered or ignored, never raised.
+    """
+    result = faq.match(stocked, text)
+    assert result is None or result.answer
+
+
+def test_a_word_is_matched_whole_not_as_a_substring(stocked):
+    # "wifi" must match "wifi", but "wif" must not pull up the wifi entry.
+    assert faq.match(stocked, "wifi") is not None
+    assert faq.match(stocked, "wif") is None
     assert faq.match(stocked, "  ") is None
     assert faq.match(stocked, None) is None
 

@@ -396,3 +396,27 @@ New: `deploy/_pg.sh` (shared DB access across compose / container / local),
 compares row counts, never touches live data, exits non-zero on failure).
 Verified end to end on 2026-11-05: drill passed on a good dump and failed
 correctly on a corrupt one. `docs/OPERATIONS.md` has the cron lines.
+
+## Chat simulator, and the bug it found (2026-11-05)
+`scripts/chat.py` drives the real dispatch path from the terminal — same
+router, same pricing engine, same booking flow — printing replies instead of
+sending them. It builds a throwaway database `sagarpg_demo` from `db/schema.sql`
+and `db/seed.sql`, so it can never touch real data. It is the fastest way to
+exercise a guest conversation. Type a label in brackets (`[AC]`) to simulate a
+tap; the simulator maps the label to the button's **id**, because that is what
+WhatsApp delivers and sending the label would test a path the app never takes.
+
+Writing it immediately found a real bug:
+
+- **`core/faq.py` `_keyword_match` interpolated guest text into a Postgres
+  regex unescaped.** A tapped button arrives as a short message, so
+  `[With food]` became the word `[with`, which is a regex character class, and
+  Postgres raised `invalid regular expression`. The guest got the error
+  fallback instead of an answer, and the owner got an "app is broken" alert.
+  Fixed by `re.escape`-ing each word and passing finished patterns. Guarded by
+  `test_a_short_message_with_regex_characters_does_not_crash`. **Rule: guest
+  text is data, never a pattern — escape it before it reaches any regex.**
+
+Note: the simulator's own channel must hand out unique outbound message ids
+across send kinds. `out.N` / `btn.N` sharing a counter collides on
+`messages.wa_message_id`.

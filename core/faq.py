@@ -15,6 +15,7 @@ new entries, so the system gets cheaper the longer it runs.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 
 from core.db import Database
@@ -102,6 +103,13 @@ def _keyword_match(db: Database, asked: str) -> Match | None:
     if not words or len(asked.split()) > MAX_KEYWORD_WORDS:
         return None
 
+    # The word is a guest's, and a guest may type anything: "[", "(", "\".
+    # Interpolated into a regex those are metacharacters, and Postgres rejects
+    # the whole expression, so a message as ordinary as "[With food]" would
+    # error instead of being answered. Escape each word here and pass the
+    # finished pattern, so no guest text is ever read as regex syntax.
+    patterns = [r"\m" + re.escape(word) + r"\M" for word in words]
+
     row = db.query_one(
         """
         SELECT f.faq_id, f.question, f.answer
@@ -112,14 +120,14 @@ def _keyword_match(db: Database, asked: str) -> Match | None:
                   ARRAY[f.question] || f.aliases
               ) AS haystack
               WHERE EXISTS (
-                  SELECT 1 FROM unnest(%(words)s::text[]) AS needle
-                  WHERE haystack ~* ('\\m' || needle || '\\M')
+                  SELECT 1 FROM unnest(%(patterns)s::text[]) AS needle
+                  WHERE haystack ~* needle
               )
           )
         ORDER BY f.priority DESC, f.faq_id
         LIMIT 1
         """,
-        {"words": words},
+        {"patterns": patterns},
     )
     if not row:
         return None
