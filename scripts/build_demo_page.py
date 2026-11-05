@@ -35,14 +35,15 @@ OWNER_PHONE = "+918688397996"
 # with that label, exactly as WhatsApp delivers it.
 GUEST_SCRIPT = [
     "hi",
-    "[Prices]",
+    "[Rooms & Prices]",
     "[AC]",
     "[With food]",
-    "[Availability]",
-    "[Facilities]",
-    "[Address]",
-    "[Book a bed]",
-    "[Talk to owner]",
+    "[Check Availability]",
+    "[Food & Amenities]",
+    "[Location & Directions]",
+    "[Guest Reviews]",
+    "[Book a Room]",
+    "[Talk to Staff]",
     "is there wifi?",
     "where are you located",
 ]
@@ -141,6 +142,20 @@ def _run_script(db, channel, settings, ai, phone: str, script: list[str],
     return turns
 
 
+def _seed_sample_reviews(db) -> None:
+    """Two clearly-labelled sample reviews, so the demo's Guest Reviews tap has
+    something to show. They live only in the throwaway demo database; the real
+    hostel starts with none, and the page says so plainly until the owner adds
+    their own."""
+    from core import reviews
+    for name, stars, body in (
+        ("Sample guest 1", 5, "Rooms are clean and the food is homely. [sample]"),
+        ("Sample guest 2", 4, "Quiet at night and the owner is helpful. [sample]"),
+    ):
+        reviews.add(db, guest_name=name, body=body, actor="demo", rating=stars,
+                    source="owner")
+
+
 def build_page(out_path: Path) -> Path:
     load_dotenv()
     if not os.environ.get("DATABASE_URL"):
@@ -162,6 +177,8 @@ def build_page(out_path: Path) -> Path:
     ai = None
     db = Database(dsn)
     channel = CaptureChannel()
+
+    _seed_sample_reviews(db)
 
     guest = _run_script(db, channel, settings, ai, GUEST_PHONE, GUEST_SCRIPT, "guest")
     owner = _run_script(db, channel, settings, ai, OWNER_PHONE, OWNER_SCRIPT, "owner")

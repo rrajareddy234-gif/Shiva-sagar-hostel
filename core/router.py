@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, booking, faq, hostel_facts, inbox, payments, pricing
+from core import availability, booking, faq, hostel_facts, inbox, payments, pricing, reviews
 from core.channel.adapter import Button, Prompt
 from core.db import Database
 
@@ -238,21 +238,23 @@ _MENU = "menu:"
 
 # The menu's own buttons never carry a figure, and the sub-answers reuse the
 # price flow, so the rate card stays the only source of a price.
-# Six options, so WhatsApp shows them as a list rather than three buttons.
+# Seven options, so WhatsApp shows them as a list rather than three buttons.
+# The titles are the owner's own words, in the owner's order.
 _MENU_TITLES = (
-    ("menu:price", "Prices", "Rates for AC, Non-AC and dorm"),
-    ("menu:availability", "Availability", "Which beds are free"),
-    ("menu:facilities", "Facilities", "Food, Wi-Fi, water, security"),
-    ("menu:location", "Address", "Where the hostel is"),
-    ("menu:book", "Book a bed", "Send a booking request"),
-    ("menu:talk", "Talk to owner", "The owner will reply"),
+    ("menu:price", "Rooms & Prices", "AC, non-AC and dorm rates"),
+    ("menu:availability", "Check Availability", "Which beds are free"),
+    ("menu:location", "Location & Directions", "Where the hostel is"),
+    ("menu:facilities", "Food & Amenities", "Food, Wi-Fi, water, security"),
+    ("menu:reviews", "Guest Reviews", "What other guests say"),
+    ("menu:book", "Book a Room", "Send a booking request"),
+    ("menu:talk", "Talk to Staff", "We will reply here"),
 )
 
 
 def _greeting_reply(db: Database, phone: str | None = None) -> Reply:
     """Greet with tappable options, falling back to the help text.
 
-    Six choices, so they are offered as a WhatsApp list: three buttons is the
+    Seven choices, so they are offered as a WhatsApp list: three buttons is the
     most a plain button message allows. The body still carries the help text,
     so a channel without lists, or a guest who prefers typing, is not stuck.
 
@@ -301,6 +303,8 @@ def _menu_button(db: Database, button_id: str) -> Reply | None:
         return Reply(_facilities(db, None, None), handled=True, intent="facilities")
     if what == "location":
         return Reply(_location(db), handled=True, intent="location")
+    if what == "reviews":
+        return Reply(reviews.render_for_guest(db), handled=True, intent="reviews")
     if what == "book":
         return _booking_prompt(db)
     if what == "talk":

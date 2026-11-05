@@ -553,3 +553,28 @@ FROM bookings b
 WHERE NOT EXISTS (
     SELECT 1 FROM booking_beds bb WHERE bb.booking_id = b.booking_id
 );
+
+-- ---------------------------------------------------------------------------
+-- Guest reviews, in the guests' own words and the owner's keeping.
+--
+-- The menu offers "Guest Reviews", so the assistant needs somewhere to read
+-- them from. A review is only ever one the owner entered: the assistant quotes
+-- what is stored and never invents a rating or a sentence. When there are none,
+-- the guest is told so plainly rather than shown a blank card or a made-up
+-- compliment. A review carries no price: a figure here could be quoted as
+-- truth, and prices come from the rate card and nowhere else.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS guest_reviews (
+    review_id  bigserial PRIMARY KEY,
+    guest_name text NOT NULL,
+    rating     smallint,                        -- 1..5, or NULL when not given
+    body       text NOT NULL,
+    stayed_on  date,                            -- when they stayed, if known
+    source     text NOT NULL DEFAULT 'owner',   -- owner | guest
+    published  boolean NOT NULL DEFAULT true,   -- false hides it from guests
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT guest_reviews_rating_check
+        CHECK (rating IS NULL OR (rating BETWEEN 1 AND 5))
+);
+CREATE INDEX IF NOT EXISTS idx_guest_reviews_published
+    ON guest_reviews(published, created_at DESC);
