@@ -57,6 +57,20 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
     if ai is None:
         ai = build_ai(settings)
 
+    # Bring the database up to the schema before serving anything. The schema is
+    # written to be re-runnable, and the additive `ALTER TABLE ... ADD COLUMN IF
+    # NOT EXISTS` lines at the end are how a column added in code reaches an
+    # existing database. Skipping this is how a deployment restored from a backup
+    # taken before a column existed ends up with every webhook returning 500 on
+    # an `UndefinedColumn`. A failure here is logged loudly but does not stop the
+    # app: a webhook that answers 500 makes Meta retry and eventually disable the
+    # subscription, whereas a running app can be repaired.
+    try:
+        db.apply_schema()
+        log.info("database schema is up to date")
+    except Exception as exc:
+        log.error("could not apply the database schema: %s", exc)
+
     app.state.settings = settings
     app.state.db = db
     app.state.channel = channel

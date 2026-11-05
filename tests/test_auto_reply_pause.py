@@ -241,6 +241,31 @@ def test_health_reports_auto_reply_state(db):
     assert off["auto_reply"] == "paused"
 
 
+# --- the app repairs a stale schema at startup ------------------------------
+
+def test_startup_adds_a_column_a_restored_database_is_missing(db):
+    """A database restored from an older backup must still work.
+
+    The failure this guards: `guests` had no `name_source`, so every inbound
+    message raised `UndefinedColumn`, the webhook answered 500, and Meta retried
+    and eventually disabled the subscription. No guest ever got a reply. The app
+    now applies the schema at startup, so an additive column reaches the
+    database on its own.
+    """
+    db.execute("ALTER TABLE guests DROP COLUMN IF EXISTS name_source")
+    assert db.query_one(
+        "SELECT count(*) n FROM information_schema.columns "
+        "WHERE table_name = 'guests' AND column_name = 'name_source'")["n"] == 0
+
+    # Building the app is what a restart does.
+    _client(_settings(auto_reply=True), FakeChannel())
+
+    assert db.query_one(
+        "SELECT count(*) n FROM information_schema.columns "
+        "WHERE table_name = 'guests' AND column_name = 'name_source'")["n"] == 1, \
+        "the app must bring the schema up to date on startup"
+
+
 def test_health_reflects_a_change_made_in_the_app(db):
     """The health line follows the live switch, not just the `.env` default.
 

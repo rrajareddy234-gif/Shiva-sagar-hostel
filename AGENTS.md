@@ -528,3 +528,33 @@ live state, so it follows a change made anywhere without a restart. The
 dashboard is routed through Caddy (`handle /dashboard*`); it was previously not
 published at all. Tests: `tests/test_auto_reply_pause.py`,
 `tests/test_auto_reply_controls.py`.
+
+## A restored database can be older than the code (2026-11-05)
+
+The preview workspace was recycled and `start_app.sh` restored the newest backup
+(`backups/sagarpg-20261104-141301.sql`). That dump predates the `name_source` and
+`wa_profile_name` columns on `guests`, which the code writes on every inbound
+message. Every webhook then answered **500 `UndefinedColumn`**, Meta retried, and
+**no guest got a reply at all** — the symptom was "WhatsApp replies were not
+coming", not an error the owner could see.
+
+`db/schema.sql` already defines those columns, but the schema was only ever
+applied when the database was *empty* (startup script) or by hand
+(`scripts/chat.py`). A restore leaves a populated, stale database, which is
+exactly the case neither path covered.
+
+**Fix:** `create_app` now calls `db.apply_schema()` at startup. The schema is
+written to be re-runnable, and the additive `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS` statements at the end are how a column added in code reaches an existing
+database. A failure is logged loudly but does not stop the app — a webhook that
+answers 500 is worse than a running app that can be repaired.
+
+Guarded by `test_startup_adds_a_column_a_restored_database_is_missing`, which
+drops the column and asserts that building the app restores it. Verified against
+the running app: dropping `name_source` and restarting logged
+`database schema is up to date` and put the column back.
+
+**Rule for the future:** a restore is not "done" when the rows come back; it is
+done when the schema matches the code. Any column the code writes must be
+reaching existing databases through `db/schema.sql`, not only through the
+empty-database path.
