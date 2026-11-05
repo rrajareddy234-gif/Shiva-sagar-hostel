@@ -459,3 +459,23 @@ the same ones as `hostel_facts`: a review is **never invented** (none stored is
 answered honestly) and **never a price** (a review mentioning an amount is
 refused, because a figure there could be quoted back as one). Only `published`
 reviews reach a guest, so the owner can hide one without deleting it.
+
+## Concurrency: the last bed and the double tap
+
+Two guests can want the last bed at the same instant, and a guest can tap a
+button from an older message. Both used to end in a lost booking.
+
+- **Racing for a bed.** Two concurrent `create_request` calls can deadlock while
+  both check the `holds_no_overlap` exclusion constraint. The database still
+  protects the bed (exactly one hold wins), but an untranslated deadlock reached
+  the guest as a generic error. `core/db._translate` now maps
+  `DeadlockDetected`/`SerializationFailure` to `BookingConflict`, and
+  `booking_flow._submit` retries once on whatever bed is now free. A lost race
+  is a "try again", never a silent drop.
+- **Out-of-order taps.** `booking_flow._PREREQ` declares what each tap step
+  depends on. A tap whose earlier answers are missing restarts the flow instead
+  of walking to review with a required field unset (`KeyError`). `_review` also
+  re-checks `_REQUIRED`.
+
+Real race reproduction: two threads calling `booking.create_request` for one bed
+behind a `threading.Barrier`. Assert exactly one hold lands.
