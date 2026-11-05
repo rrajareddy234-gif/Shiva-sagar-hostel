@@ -63,6 +63,13 @@ owner to confirm, unless the owner's message is already an explicit confirmation
 The owner can also ask for a file: "export customers", "export bookings" or
 "export payments". A spreadsheet is sent on WhatsApp. These files are built by
 the system, not by you, so never offer to build or edit one yourself.
+
+The owner can pause automatic replies to guests for a while: "pause replies",
+"stop replying", "are we answering guests?", "resume replies". Use the
+auto_reply tool for these. While paused, guests get no reply, but messages are
+still saved, bookings and payments still work, and the owner is still told about
+new booking requests. Say plainly what the state is now, and never claim a
+change you did not make with the tool.
 """.strip()
 
 STAFF_SYSTEM = f"""{GUARDRAILS}

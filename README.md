@@ -97,3 +97,26 @@ WhatsApp -> Meta -> webhook -> verify signature -> dedupe -> store
 ```
 
 Most questions never reach a model, which is what keeps the running cost low.
+
+## Pausing automatic replies
+
+The owner can make the system go quiet for a while without taking anything down.
+Messages are still received and saved, bookings, availability and payments keep
+working, and the owner is still told about new booking requests. Only the
+automatic reply to the guest stops.
+
+Three ways, in order of ease:
+
+- **Text the hostel number**: `pause replies` / `resume replies` /
+  `auto reply status`. Plain English works too ("stop replying for now"). Only
+  the owner's number can change it.
+- **The dashboard**: a Pause/Resume button at the top of
+  `/dashboard`, behind the owner's password.
+- **The server**, as a fallback: `AUTO_REPLY_ENABLED=false` in `.env`, then
+  restart the app.
+
+The choice is stored in the database, so it survives a restart and takes effect
+at once — no restart, no file editing. `/health` reports `auto_reply` as
+`enabled` or `paused`, following a change made anywhere. `AUTO_REPLY_ENABLED` in
+`.env` is only the starting value, used before the owner has ever chosen. See
+`docs/OPERATIONS.md`.

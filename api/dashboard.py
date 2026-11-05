@@ -117,6 +117,32 @@ def _back(notice: str, failed: bool) -> Response:
     return RedirectResponse(url, status_code=303)
 
 
+@router.post("/dashboard/auto-reply")
+async def dashboard_auto_reply(request: Request) -> Response:
+    """Pause or resume automatic replies to guests, from a tap on the page.
+
+    The same password gate as the rest of the page. The switch is stored in the
+    database, so it survives a restart and takes effect at once, with no `.env`
+    edit and no SSH. The webhook and the Meta connection are untouched: while
+    paused the system still receives, saves and acts on every message.
+    """
+    if not _authorised(request):
+        return RedirectResponse("/dashboard", status_code=303)
+
+    from core import auto_reply
+
+    fields = parse_qs((await request.body()).decode())
+    action = (fields.get("action") or [""])[0]
+    if action == "pause":
+        auto_reply.set_paused(request.app.state.db, True, actor="owner-dashboard")
+        return _back("Automatic replies are paused. Guests get no reply until you "
+                     "resume. Messages, bookings and payments keep working.", False)
+    if action == "resume":
+        auto_reply.set_paused(request.app.state.db, False, actor="owner-dashboard")
+        return _back("Automatic replies are on again.", False)
+    return _back("Unknown action.", True)
+
+
 @router.get("/dashboard/logout")
 def dashboard_logout() -> Response:
     response = RedirectResponse("/dashboard", status_code=303)

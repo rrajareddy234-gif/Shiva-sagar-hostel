@@ -61,6 +61,18 @@ tr:last-child td { border-bottom: 0; }
           border-radius: 10px; margin-bottom: 16px; font-size: 14px; }
 .notice.bad { background: #fdecea; border-left-color: #c0392b; }
 a.logout { float: right; font-size: 13px; color: #5b6270; }
+.control { background:#fff; border-radius:12px; padding:14px 16px; margin-bottom:16px;
+           display:flex; align-items:center; justify-content:space-between; gap:12px;
+           flex-wrap:wrap; box-shadow:0 1px 3px rgba(0,0,0,.08); }
+.control .state { font-size:15px; font-weight:600; }
+.control .state.on { color:#1a7f37; }
+.control .state.paused { color:#c0392b; }
+.control .hint { font-size:13px; color:#5b6270; margin-top:2px; }
+.control form { margin:0; }
+.control button { width:auto; padding:10px 16px; border:0; border-radius:10px;
+                  font-size:14px; font-weight:600; color:#fff; cursor:pointer; }
+.control button.pause { background:#c0392b; }
+.control button.resume { background:#1a7f37; }
 @media (min-width: 700px) { .grid { grid-template-columns: repeat(4, 1fr); } }
 """
 
@@ -77,6 +89,8 @@ _PAGE = """<!doctype html>
 <div class="sub">{updated}</div>
 
 {notice}
+
+{control}
 
 <div class="grid">
   <div class="card"><div class="n">{beds_free} / {beds_total}</div>
@@ -154,6 +168,33 @@ def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
+_CONTROL_ON = """<div class="control">
+  <div>
+    <div class="state on">Automatic replies: ON</div>
+    <div class="hint">Guests are answered automatically. Pausing stops replies
+    to guests only. Messages are still saved, bookings and payments still work,
+    and you are still told about new booking requests.</div>
+  </div>
+  <form method="post" action="/dashboard/auto-reply">
+    <input type="hidden" name="action" value="pause">
+    <button class="pause" type="submit">Pause replies</button>
+  </form>
+</div>"""
+
+_CONTROL_PAUSED = """<div class="control">
+  <div>
+    <div class="state paused">Automatic replies: PAUSED</div>
+    <div class="hint">Guests are not being answered automatically. Messages are
+    still saved, bookings and payments still work, and you are still told about
+    new booking requests.</div>
+  </div>
+  <form method="post" action="/dashboard/auto-reply">
+    <input type="hidden" name="action" value="resume">
+    <button class="resume" type="submit">Resume replies</button>
+  </form>
+</div>"""
+
+
 def render(db, *, now: datetime | None = None, search: str | None = None,
            notice: str = "", failed: bool = False) -> str:
     """The whole page as one HTML string."""
@@ -177,6 +218,10 @@ def render(db, *, now: datetime | None = None, search: str | None = None,
     if search and not guests:
         count = f"No guest matches {search!r}"
 
+    from core import auto_reply
+    paused = auto_reply.is_paused(db)
+    control = _CONTROL_PAUSED if paused else _CONTROL_ON
+
     rows = "".join(
         _ROW.format(name=_esc(g.name), phone=_esc(g.phone), booking=_esc(g.booking),
                     status=_esc(g.status), bed=_esc(g.bed), room=_esc(g.room),
@@ -191,6 +236,7 @@ def render(db, *, now: datetime | None = None, search: str | None = None,
         rows=rows,
         pending_block=pending_block,
         notice=notice_block,
+        control=control,
         count=count,
         **{k: _esc(v) for k, v in numbers.items()},
     )

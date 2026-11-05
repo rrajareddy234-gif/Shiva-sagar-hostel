@@ -13,7 +13,7 @@ from __future__ import annotations
 import logging
 
 from ai.adapter import AIClient
-from core import alerts, handler, inbox
+from core import alerts, handler, inbox, security
 from core.channel.adapter import ChannelAdapter, InboundMessage, Prompt
 from core.config import Settings
 from core.db import Database
@@ -22,6 +22,22 @@ from core.export import DataFile
 log = logging.getLogger(__name__)
 
 HISTORY_TURNS = 12
+
+
+def auto_replies_go_out(db: Database, settings: Settings, from_phone: str) -> bool:
+    """Should this sender get a reply right now?
+
+    False only for a guest while the pause is on. The owner and staff are always
+    answered: the owner needs to be able to text "resume replies", and a staff
+    member needs to keep working. Reading the switch from the database means the
+    dashboard button and the WhatsApp command take effect immediately, with no
+    restart.
+    """
+    role = security.role_for(from_phone, settings.owner_phone, set(settings.staff_phones))
+    if role in (security.OWNER, security.STAFF):
+        return True
+    from core import auto_reply
+    return not auto_reply.is_paused(db, default_enabled=settings.auto_reply_enabled)
 
 
 def build_ai(settings: Settings) -> AIClient | None:
@@ -64,13 +80,14 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
 
     Returns True when the message was handled, so the caller can mark it done.
 
-    When `settings.auto_reply_enabled` is false, the guest is not sent an
-    automatic reply. Everything else still happens: the message is stored by the
-    caller, the handler runs, a booking is created, the owner is alerted, and
-    the message is marked processed. Only the outbound reply is held back, so
-    the pause is silent from the guest's side and reversible.
+    When automatic replies are paused, only *guests* are left unanswered. The
+    owner and staff are still answered, which is what makes the pause
+    controllable: the owner texts "resume replies" to switch it back on, and
+    that reply has to reach them. Everything else still happens for every
+    message -- it is stored, handled, bookings are created and the owner is
+    alerted -- so a pause never loses a booking or a message.
     """
-    auto = settings.auto_reply_enabled
+    auto = auto_replies_go_out(db, settings, message.from_phone)
 
     # A tap is a text message the guest did not have to type. It carries the
     # button id, so it is handled exactly like typed text.

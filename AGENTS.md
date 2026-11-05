@@ -483,23 +483,48 @@ behind a `threading.Barrier`. Assert exactly one hold lands.
 ## The auto-reply pause
 
 `AUTO_REPLY_ENABLED` (default `true`) is the one switch that makes the system go
-quiet without taking anything down. The gate lives in `core/dispatcher.dispatch`,
-the single funnel where a reply is decided and sent — not in the webhook. That
-placement is the whole design: receiving, storing, deduping, handling, booking
-creation and owner alerts all still happen; only the outbound reply to the guest
-is skipped.
+quiet without taking anything down. The gate lives in
+`core.dispatcher.auto_replies_go_out`, called from `dispatch` — the single funnel
+where a reply is decided and sent — not in the webhook. That placement is the
+whole design: receiving, storing, deduping, handling, booking creation and owner
+alerts all still happen; only the outbound reply to the guest is skipped.
+
+**Where the state lives.** Two sources, with a deliberate rule:
+
+- The `settings` table (key `auto_reply_enabled`) holds the owner's **live
+  choice**, written by the dashboard button or the WhatsApp command. It survives
+  a restart and needs no server access.
+- `AUTO_REPLY_ENABLED` in `.env` is the **default and safety net**, used when no
+  row exists or the database cannot be read. A fresh deployment behaves exactly
+  as before.
+
+A row, if present, wins. All the logic is in `core/auto_reply.py`.
+
+**Three control paths, one state.** All three call
+`core.auto_reply.set_paused`, so they cannot disagree:
+
+- `core/commands.py` — typed owner commands (`pause replies`, `resume replies`,
+  `auto reply status`, `owner help`), plus the parser entries.
+- `api/dashboard.py` — `POST /dashboard/auto-reply`, behind the password.
+- `core/tools.py` — the owner-only `auto_reply` tool, for the owner's own words
+  ("stop replying for now"), with `ai/prompts.py` telling the model to use it.
+
+Every change is audited via `booking._audit`.
 
 Two consequences worth keeping in mind when changing this area:
 
-- **Owner alerts are not guest replies.** `alerts.*` and the `/jobs/notify-owner`
-  endpoint send to the owner, so they keep working while paused. A booking
-  request that arrives during a pause must still reach the owner or it sits
-  unseen. Do not gate them on `auto_reply_enabled`.
-- **A paused message is still marked processed.** It is handled, just not
+- **Owner and staff are never gated.** `auto_replies_go_out` returns True for
+  them. If the owner were silenced too, "resume replies" would be sent into a
+  void and the only way out would be the server. This is what makes the pause
+  controllable from WhatsApp.
+- **A paused guest message is still marked processed.** It is handled, just not
   answered, so it must not show up as "stuck" in the health check's
   unprocessed-message count.
 
 `_env_bool` in `core/config.py` accepts 1/true/yes/on and 0/false/no/off, and
 falls back to the default on anything else, so a typo cannot silently flip the
-switch. `/health` reports `"auto_reply": "enabled" | "paused"` so the state is
-visible without reading `.env`. Tests: `tests/test_auto_reply_pause.py`.
+switch. `/health` reports `"auto_reply": "enabled" | "paused"` by reading the
+live state, so it follows a change made anywhere without a restart. The
+dashboard is routed through Caddy (`handle /dashboard*`); it was previously not
+published at all. Tests: `tests/test_auto_reply_pause.py`,
+`tests/test_auto_reply_controls.py`.

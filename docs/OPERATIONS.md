@@ -130,7 +130,7 @@ that would be sent back to the guest is held back.
 
 | Keeps working | Held back |
 |---|---|
-| Incoming messages received and logged | Automatic reply to the guest |
+| Incoming messages received and saved | Automatic reply to the guest |
 | Booking requests created | Button prompts to the guest |
 | Bed availability and holds | |
 | Payments and records | |
@@ -138,45 +138,68 @@ that would be sent back to the guest is held back.
 | Meta webhook and verification | |
 
 A booking request that arrives while paused is **still sent to you**, so nothing
-is lost. The guest simply hears nothing back until you resume. While paused the
-system also will not reply to your own WhatsApp commands — use the dashboard
-instead.
+is lost. The guest simply hears nothing back until you resume. You (the owner)
+and your staff are still answered — that is what lets you switch it back on.
 
-**To pause**
+### The easy way: text the hostel number
+
+Send any of these from your own phone. The system understands them in plain
+English too.
+
+| What you send | What happens |
+|---|---|
+| `pause replies` | Stops automatic replies to guests |
+| `resume replies` | Starts them again |
+| `auto reply status` | Tells you if it is on or paused |
+| `owner help` | Lists every owner command |
+
+You can also just say it your way — *"stop replying for now"*, *"are we
+answering guests?"*, *"start replying again"* — and the assistant will do it.
+Only your number can change this; a guest cannot.
+
+### The easy way: the dashboard
+
+1. Open `https://your-domain/dashboard` in any browser.
+2. Log in with your dashboard password.
+3. At the top of the page you will see **Automatic replies: ON** or **PAUSED**.
+4. Tap **Pause replies** or **Resume replies**.
+
+The change takes effect at once. No restart, no file editing.
+
+### The fallback: the server
+
+Use this only if the dashboard and WhatsApp are both unreachable.
 
 1. On the server, open the settings file:
    ```bash
    nano /opt/sagar/.env
    ```
-2. Find the line `AUTO_REPLY_ENABLED=true` and change it to:
-   ```
-   AUTO_REPLY_ENABLED=false
-   ```
-3. Save the file, then restart the app so it reads the new value:
+2. Find the line `AUTO_REPLY_ENABLED=true` and change it to `false` (pause) or
+   back to `true` (resume).
+3. Save, then restart the app so it reads the new value:
    ```bash
    cd /opt/sagar
    docker compose -f deploy/docker-compose.yml up -d app
    ```
-4. Confirm the pause is on:
-   ```bash
-   curl https://your-domain/health
-   ```
-   The reply now shows `"auto_reply":"paused"`. If it still says `"enabled"`,
-   the restart did not pick up the change — check the file was saved.
 
-**To resume**
+### Checking which mode you are in
 
-Repeat the steps, setting the line back to:
+The health check always says, and it follows a change made anywhere:
+```bash
+curl https://your-domain/health
 ```
-AUTO_REPLY_ENABLED=true
-```
-and restart the app the same way. Confirm with `/health`, which shows
-`"auto_reply":"enabled"`.
+- `"auto_reply":"enabled"` — guests are answered.
+- `"auto_reply":"paused"` — guests are not answered.
 
-**If you forget you paused it**
+The dashboard shows the same thing in words at the top of the page. If you
+forget you paused it, these two are the answer.
 
-The health check is the answer. `"auto_reply":"paused"` means guests are not
-being answered. Make a habit of checking `/health` after any change.
+### Where the setting lives
+
+Your pause/resume choice is stored in the database, so it survives a restart and
+needs no server access. `AUTO_REPLY_ENABLED` in `.env` is only the **starting**
+value, used before you have ever chosen, or if the database cannot be read. Every
+change is recorded in the audit log with who made it.
 
 ## The AI is not working
 

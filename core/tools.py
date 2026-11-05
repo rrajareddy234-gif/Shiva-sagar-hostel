@@ -341,6 +341,35 @@ def _owner_summary(ctx: ToolContext, args: dict) -> dict:
     }
 
 
+def _auto_reply(ctx: ToolContext, args: dict) -> dict:
+    """Read or change the automatic-reply pause. Owner only.
+
+    The model may reach for this when the owner says something the exact
+    commands did not catch -- "stop replying for a bit", "are we answering
+    guests?". Changing it needs the owner's role, which is checked before any
+    tool runs, so a guest phrasing it the same way cannot switch it.
+    """
+    from core import auto_reply
+
+    action = (args.get("action") or "status").lower()
+    if action == "pause":
+        auto_reply.set_paused(ctx.db, True, actor=f"owner-ai:{ctx.phone}")
+        paused = True
+    elif action == "resume":
+        auto_reply.set_paused(ctx.db, False, actor=f"owner-ai:{ctx.phone}")
+        paused = False
+    else:
+        paused = auto_reply.is_paused(ctx.db)
+    return {
+        "paused": paused,
+        "status": auto_reply.status_line(ctx.db),
+        "note": ("While paused, guests get no automatic reply. Messages are "
+                 "still saved, bookings and payments still work, and the owner "
+                 "is still told about new booking requests. The owner and staff "
+                 "are still answered."),
+    }
+
+
 # --- billing tools ---------------------------------------------------------
 
 def _my_bill(ctx: ToolContext, args: dict) -> dict:
@@ -637,6 +666,25 @@ TOOLS: list[Tool] = [
         "Live occupancy figures. Owner only.",
         {"type": "object", "properties": {}},
         _owner_summary,
+        owner_only=True,
+    ),
+    Tool(
+        "auto_reply",
+        "Read or change the automatic WhatsApp replies. Owner only. Use "
+        "action='pause' to stop replying to guests for a while, action='resume' "
+        "to start again, or action='status' to check. While paused, messages are "
+        "still saved and bookings still work; only the guest reply stops.",
+        {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": ["status", "pause", "resume"],
+                    "description": "status (default), pause, or resume",
+                },
+            },
+        },
+        _auto_reply,
         owner_only=True,
     ),
     Tool(

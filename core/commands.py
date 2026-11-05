@@ -139,6 +139,38 @@ def parse_command(text: str) -> dict | None:
     """Recognise an owner command in plain English. None if it is not one."""
     lowered = (text or "").lower().strip()
 
+    # The auto-reply switch, checked first: these are the two commands the owner
+    # reaches for most, and "resume replies" must never be read as anything else.
+    # The bare-word forms are deliberately limited to the unambiguous words
+    # (pause, mute, resume) -- a lone "stop" is left alone because it is also a
+    # way to cancel a staged command.
+    if re.search(r"\b(pause|stop|mute|suspend|disable|turn\s+off)\b\s+(the\s+)?"
+                 r"(auto[\s-]?repl\w*|repl\w*|answer\w*|respond\w*|messages?|bot)\b",
+                 lowered) or re.fullmatch(
+                     r"\s*(pause|mute)\s*(the\s*)?(bot|auto[\s-]?repl\w*|repl\w*)?"
+                     r"\s*[.!]?\s*", lowered):
+        return {"action": "pause_replies"}
+
+    if re.search(r"\b(resume|unpause|un[\s-]?mute|enable|start|continue|turn\s+on)\b\s+"
+                 r"(the\s+)?(auto[\s-]?repl\w*|repl\w*|answer\w*|respond\w*|"
+                 r"messages?|bot)\b", lowered) or re.fullmatch(
+                     r"\s*(resume|unpause|un[\s-]?mute)\s*(the\s*)?"
+                     r"(bot|auto[\s-]?repl\w*|repl\w*)?\s*[.!]?\s*", lowered):
+        return {"action": "resume_replies"}
+
+    _replyish = (r"auto[\s-]?repl\w*|repl\w*|answering|respond\w*|messages?|bot")
+    _statusish = (r"status|paused|enabled|disabled|active|working|going|stopped|"
+                  r"live|on|off")
+    if (re.search(rf"\b({_replyish})\b", lowered)
+            and re.search(rf"\b({_statusish})\b", lowered)):
+        return {"action": "auto_reply_status"}
+    if (re.search(r"\b(are we|are you|is the bot|is it)\b", lowered)
+            and re.search(r"\b(answer|repl|respond|paus)\w*", lowered)):
+        return {"action": "auto_reply_status"}
+
+    if re.fullmatch(r"\s*(owner\s+)?(help|commands?|menu)\s*[.!?]*\s*", lowered):
+        return {"action": "owner_help"}
+
     match = re.search(r"\bapprove\b\s*(?:booking|request)?\s*([A-Za-z0-9-]+)?", lowered)
     if match and "approve" in lowered:
         return {"action": "approve_booking",
@@ -304,6 +336,35 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
     try:
         if action == "export_data":
             return _export(db, str(command.get("what") or "customers"))
+
+        if action == "pause_replies":
+            from core import auto_reply
+            auto_reply.set_paused(db, True, actor=actor)
+            return CommandResult(
+                text="Automatic replies are PAUSED. I will keep saving every "
+                     "message, bookings and payments still work, and I will still "
+                     "tell you about new booking requests. Guests get no reply "
+                     "until you send 'resume replies'.",
+                applied=True, action=action)
+
+        if action == "resume_replies":
+            from core import auto_reply
+            auto_reply.set_paused(db, False, actor=actor)
+            return CommandResult(
+                text="Automatic replies are ON again. Guests are answered as "
+                     "normal.",
+                applied=True, action=action)
+
+        if action == "auto_reply_status":
+            from core import auto_reply
+            return CommandResult(
+                text=f"Automatic replies: {auto_reply.status_line(db)}\n"
+                     f"Send 'pause replies' or 'resume replies' to change it.",
+                applied=True, action=action)
+
+        if action == "owner_help":
+            from core import auto_reply
+            return CommandResult(text=auto_reply.LONG_HELP, applied=True, action=action)
 
         if action == "approve_booking":
             row = _resolve_booking(db, command.get("reference"))

@@ -80,9 +80,11 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
     def health() -> dict:
         try:
             db.query_one("SELECT 1 AS ok")
+            from core import auto_reply
+            paused = auto_reply.is_paused(
+                db, default_enabled=settings.auto_reply_enabled)
             return {"status": "ok", "database": "ok", "channel": channel.name,
-                    "auto_reply": ("enabled" if settings.auto_reply_enabled
-                                   else "paused")}
+                    "auto_reply": "paused" if paused else "enabled"}
         except Exception as exc:  # pragma: no cover - depends on live database
             log.error("health check failed: %s", exc)
             return JSONResponse({"status": "degraded", "database": "error"}, status_code=503)

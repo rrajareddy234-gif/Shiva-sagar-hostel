@@ -239,3 +239,43 @@ def test_health_reports_auto_reply_state(db):
     off = _client(_settings(auto_reply=False), FakeChannel()).get("/health").json()
     assert on["auto_reply"] == "enabled"
     assert off["auto_reply"] == "paused"
+
+
+def test_health_reflects_a_change_made_in_the_app(db):
+    """The health line follows the live switch, not just the `.env` default.
+
+    The `.env` says enabled here, but the owner paused from the app, so the
+    health check must say paused -- otherwise it would tell the owner the wrong
+    thing after a change made from the dashboard or a text.
+    """
+    from core import auto_reply
+
+    auto_reply.set_paused(db, True, actor="test")
+    body = _client(_settings(auto_reply=True), FakeChannel()).get("/health").json()
+    assert body["auto_reply"] == "paused"
+
+    auto_reply.set_paused(db, False, actor="test")
+    body = _client(_settings(auto_reply=True), FakeChannel()).get("/health").json()
+    assert body["auto_reply"] == "enabled"
+
+
+# --- the owner stays answered while guests are paused -----------------------
+
+def test_the_owner_is_still_answered_while_paused(db):
+    """The pause must be controllable: the owner has to be able to text back.
+
+    If the owner were silenced too, "resume replies" would be sent into a void
+    and the only way out would be the server. So the owner is always answered.
+    """
+    channel = FakeChannel()
+    message = InboundMessage(provider_message_id="wamid.OWNER-PAUSE",
+                             from_phone=OWNER, text="auto reply status",
+                             message_type="text")
+    stored = inbox.store_inbound(db, message)
+
+    dispatch(db, channel, _settings(auto_reply=False), message, ai=None,
+             message_id=stored.message_id)
+
+    assert channel.sent, "the owner must still get a reply while paused"
+    assert any(phone == OWNER for phone, _ in channel.sent)
+
