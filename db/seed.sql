@@ -157,3 +157,29 @@ INSERT INTO settings (key, value) VALUES
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 COMMIT;
+
+-- ---------------------------------------------------------------------------
+-- Starter FAQ: ONLY facts verified from this codebase.
+-- Rooms, food and the dormitory description come from the schema and the
+-- router's own wording. Nothing here is invented: times, wifi, parking,
+-- laundry and the address are deliberately absent because the code does not
+-- know them. The owner adds those with `python scripts/faq_admin.py add`.
+-- Money is never stored here: a price in stored text goes stale. Prices and
+-- the advance are answered by the pricing engine, which reads the rate card.
+-- ---------------------------------------------------------------------------
+INSERT INTO faq (question, answer, category, aliases, priority, source) VALUES
+    ('What kind of rooms do you have?',
+     'We have AC rooms, Non-AC rooms, and a dormitory with mat spaces (no cots). '
+     'Tell me whether you want AC and food and I will give you the exact rate.',
+     'rooms',
+     ARRAY['what rooms are available', 'do you have ac rooms', 'room types',
+           'what rooms do you have', 'do you have dormitory', 'ac or non ac'],
+     10, 'seed'),
+    ('What can you help me with?',
+     'I can tell you about room availability, rates and booking a bed at '
+     'Sagar PG Hostel. Tell me your check-in date, how many nights, and '
+     'whether you want AC and food.',
+     'general',
+     ARRAY['what can you do', 'help', 'what do you offer', 'how can you help'],
+     5, 'seed')
+ON CONFLICT (question) DO NOTHING;

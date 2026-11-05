@@ -28,8 +28,9 @@ TEST_DSN = os.environ.get(
 IST = timezone(timedelta(hours=5, minutes=30))
 
 TABLES = (
-    "audit_log", "referrals", "partners", "messages", "conversations",
-    "payments", "bed_holds", "bookings", "rate_plans", "monthly_plans", "extras",
+    "ai_usage", "audit_log", "referrals", "partners", "messages", "conversations",
+    "invoice_lines", "invoices", "payments", "bed_holds", "booking_extras",
+    "bookings", "rate_plans", "monthly_plans", "extras", "faq_hits", "faq",
     "enquiries", "guests", "beds", "rooms", "settings",
 )
 

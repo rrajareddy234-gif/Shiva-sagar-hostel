@@ -335,3 +335,38 @@ deploy/docker-compose.yml) plus an external uptime monitor.
 repo is PUBLIC, so that password was world-readable, and the page shows every
 guest's name, phone and booking. An unset `DASHBOARD_PASSWORD` now generates a
 random one per run and logs it. Never reintroduce a fixed default here.
+
+## FAQ layer: the cheapest AI call is the one never made (2026-11-04)
+Most guest messages are rewordings of a few dozen questions the owner has
+answered many times. `core/faq.py` stores those answers once and matches new
+questions by trigram similarity, inside PostgreSQL, with no model and no API.
+It runs on the database already in use, so there is nothing extra to host.
+
+There is no pretrained "hostel" model to download; this is the practical
+substitute. Self-hosting a free LLM was rejected: it costs a server to run and
+is worse at the free-text job than the current model, so it would cost more to
+save less.
+
+Order of answering in `router.route`: exact rules first (price, availability,
+buttons), then the FAQ, then the AI. The FAQ is also tried before the generic
+facilities list, so an owner-authored answer beats the boilerplate. Unrelated
+questions still reach the AI -- a confident wrong answer is worse than a call.
+
+- `faq` holds the question, the owner's answer, and `aliases` for the phrasings
+  guests actually use ("khana", "when can i check in"). A trigram cannot know
+  these, so they are stored explicitly.
+- `faq_hits` records every ask and whether it was answered. The misses are the
+  worklist: `python scripts/faq_admin.py misses`, or the owner asks the bot
+  "what is on the faq list". Each entry added is one fewer paid call.
+- Threshold `DEFAULT_THRESHOLD = 0.55` in `core/faq.py` is calibrated by
+  `tests/test_faq.py`: rewordings score well above, near-misses well below.
+- Never store a price here. A stored figure goes stale and would contradict the
+  pricing engine, which reads the rate card. Seeded entries are facts only.
+
+Two bugs found while building this, both worth remembering:
+- Writing through `db.query_one` silently loses the write: that helper closes
+  its connection without committing. Use `db.transaction()` for writes. This is
+  the same trap noted under "Extras prices settled".
+- `tests/conftest.py` `TABLES` was missing several newer tables (invoices,
+  booking_extras, ai_usage, and now faq). A missing table means data leaks
+  between tests. When adding a table, add it there too.

@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from core import availability, booking, inbox, payments, pricing
+from core import availability, booking, faq, inbox, payments, pricing
 from core.channel.adapter import Button, Prompt
 from core.db import Database
 
@@ -103,7 +103,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
 
     intent = classify(text)
 
-    if intent in ("empty", "unknown"):
+    if intent == "empty":
         return Reply("", handled=False, needs_ai=True, intent=intent)
 
     if intent == "greeting":
@@ -114,7 +114,12 @@ def route(db: Database, text: str | None, *, role: str = "customer",
                      intent=intent)
 
     if intent == "facilities":
-        return Reply(_facilities(db, room_type, food_included), handled=True, intent=intent)
+        # A stored answer is specific ("yes, there is wifi, password is X"),
+        # where the generic list below only says what rooms exist. Try it first
+        # so an owner-authored answer wins; fall back to the list when the
+        # owner has not written one yet.
+        return _faq_reply(db, text) or Reply(
+            _facilities(db, room_type, food_included), handled=True, intent=intent)
 
     if intent == "price":
         return _price_reply(db, text, room_type, food_included)
@@ -123,7 +128,19 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         return Reply(_availability(db, text, now, room_type, nights), handled=True,
                      intent=intent)
 
-    return Reply("", handled=False, needs_ai=True, intent=intent)
+    # Anything the exact rules did not claim -- including 'unknown' -- gets one
+    # cheaper chance first: the stored FAQ. A question the owner has already
+    # answered costs nothing to answer again. Recorded either way, so the
+    # misses become the list of what to store next.
+    return _faq_reply(db, text) or Reply("", handled=False, needs_ai=True, intent=intent)
+
+
+def _faq_reply(db: Database, text: str | None) -> Reply | None:
+    """The stored answer as a Reply, or None when nothing is close enough."""
+    stored = faq.answer_and_record(db, text)
+    if stored:
+        return Reply(stored, handled=True, intent="faq")
+    return None
 
 
 # --- deterministic answers -------------------------------------------------
@@ -562,6 +579,23 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
             lines.append(f"- {row['full_name'] or row['phone']}, bed {row['bed_id']}, "
                          f"until {row['check_out_at']:%d %b}")
         return Reply("\n".join(lines), handled=True, intent="owner_in_house")
+
+    # "what are people asking that you cannot answer" -- the FAQ worklist. Each
+    # entry added is one fewer paid AI call, so this is a money question.
+    # Deliberately not keyed on "unanswered", which already means unanswered
+    # enquiries to the owner.
+    if re.search(r"\b(faq|missed questions?|"
+                 r"what are people asking|questions? to (add|store))\b", lowered):
+        rows = faq.recent_misses(db, limit=15)
+        if not rows:
+            return Reply("Nothing is waiting to be added to the FAQ. Every "
+                         "question so far has been covered.", handled=True,
+                         intent="owner_faq_misses")
+        lines = [f"{len(rows)} question(s) the FAQ could not answer:"]
+        for row in rows:
+            lines.append(f"- {row['asked']} (asked {row['times']}x)")
+        lines.append("Tell me to add one and I will store your answer.")
+        return Reply("\n".join(lines), handled=True, intent="owner_faq_misses")
 
     # "show me the full hostel status" and similar. This is the one question the
     # owner asks most often, so it must not cost an AI call.

@@ -429,3 +429,40 @@ CREATE TABLE IF NOT EXISTS ai_usage (
     at           timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_ai_usage_at ON ai_usage(at);
+
+-- ---------------------------------------------------------------------------
+-- Frequently asked questions, answered without an AI call
+-- The cheapest AI call is the one never made. A question the owner has already
+-- answered in their own words is served straight from here, so the model is
+-- reserved for what is genuinely new. Aliases hold the phrasings guests
+-- actually use, because a trigram match cannot know that "khana" means "food".
+-- ---------------------------------------------------------------------------
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE TABLE IF NOT EXISTS faq (
+    faq_id      bigserial PRIMARY KEY,
+    question    text NOT NULL,                  -- the canonical question
+    answer      text NOT NULL,                  -- the owner's own words
+    category    text NOT NULL DEFAULT 'general',
+    aliases     text[] NOT NULL DEFAULT '{}',   -- other ways guests ask it
+    priority    integer NOT NULL DEFAULT 0,     -- higher wins a tie
+    active      boolean NOT NULL DEFAULT true,
+    source      text NOT NULL DEFAULT 'owner',  -- owner | seed
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (question)
+);
+CREATE INDEX IF NOT EXISTS idx_faq_trgm ON faq USING gin (question gin_trgm_ops);
+
+-- What guests actually asked, and whether the FAQ could answer it. A row with
+-- no faq_id is a question we could not answer cheaply: the list the owner
+-- should turn into new entries.
+CREATE TABLE IF NOT EXISTS faq_hits (
+    hit_id     bigserial PRIMARY KEY,
+    asked      text NOT NULL,
+    faq_id     bigint REFERENCES faq(faq_id) ON DELETE SET NULL,
+    score      real,
+    answered   boolean NOT NULL DEFAULT false,
+    at         timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_faq_hits_missed ON faq_hits(at) WHERE answered = false;
