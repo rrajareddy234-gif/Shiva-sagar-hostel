@@ -37,6 +37,22 @@ def _env(name: str, default: str | None = None, required: bool = False) -> str |
     return value
 
 
+# Words accepted for a boolean setting. A value that is not one of these is
+# treated as unset, so a typo leaves the safer default in place rather than
+# silently flipping it.
+_TRUE_WORDS = {"1", "true", "yes", "on"}
+_FALSE_WORDS = {"0", "false", "no", "off"}
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    if raw in _TRUE_WORDS:
+        return True
+    if raw in _FALSE_WORDS:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
@@ -57,6 +73,12 @@ class Settings:
     ai_base_url: str | None
     ai_timeout: int = 90
     staff_phones: tuple[str, ...] = ()
+    # A temporary pause on outbound WhatsApp replies. True by default: the
+    # system behaves exactly as before unless the owner turns it off. While
+    # false, incoming messages are still received, logged and handled, and
+    # bookings, availability and payments are untouched -- only the automatic
+    # reply to the guest is held back.
+    auto_reply_enabled: bool = True
 
     @staticmethod
     def from_env() -> Settings:
@@ -76,6 +98,7 @@ class Settings:
             ai_base_url=_env("AI_BASE_URL"),
             ai_timeout=int(_env("AI_TIMEOUT", "90") or 90),
             staff_phones=tuple(p.strip() for p in raw_staff.split(",") if p.strip()),
+            auto_reply_enabled=_env_bool("AUTO_REPLY_ENABLED", True),
         )
 
     def channel_credentials(self) -> dict:

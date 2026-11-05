@@ -479,3 +479,27 @@ button from an older message. Both used to end in a lost booking.
 
 Real race reproduction: two threads calling `booking.create_request` for one bed
 behind a `threading.Barrier`. Assert exactly one hold lands.
+
+## The auto-reply pause
+
+`AUTO_REPLY_ENABLED` (default `true`) is the one switch that makes the system go
+quiet without taking anything down. The gate lives in `core/dispatcher.dispatch`,
+the single funnel where a reply is decided and sent — not in the webhook. That
+placement is the whole design: receiving, storing, deduping, handling, booking
+creation and owner alerts all still happen; only the outbound reply to the guest
+is skipped.
+
+Two consequences worth keeping in mind when changing this area:
+
+- **Owner alerts are not guest replies.** `alerts.*` and the `/jobs/notify-owner`
+  endpoint send to the owner, so they keep working while paused. A booking
+  request that arrives during a pause must still reach the owner or it sits
+  unseen. Do not gate them on `auto_reply_enabled`.
+- **A paused message is still marked processed.** It is handled, just not
+  answered, so it must not show up as "stuck" in the health check's
+  unprocessed-message count.
+
+`_env_bool` in `core/config.py` accepts 1/true/yes/on and 0/false/no/off, and
+falls back to the default on anything else, so a typo cannot silently flip the
+switch. `/health` reports `"auto_reply": "enabled" | "paused"` so the state is
+visible without reading `.env`. Tests: `tests/test_auto_reply_pause.py`.

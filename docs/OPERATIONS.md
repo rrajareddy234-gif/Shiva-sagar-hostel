@@ -118,6 +118,66 @@ reply?"*
 If the message shows as received but unprocessed, the reply failed to send. The
 health check reports this after 15 minutes.
 
+## Pausing and resuming automatic replies
+
+Sometimes you want the system to go quiet for a while — a holiday, a family
+emergency, or a flood of junk messages. You can pause the automatic replies
+without taking anything down. The system keeps receiving and recording every
+message, and bookings, availability and payments keep working. Only the reply
+that would be sent back to the guest is held back.
+
+**What a pause does and does not do**
+
+| Keeps working | Held back |
+|---|---|
+| Incoming messages received and logged | Automatic reply to the guest |
+| Booking requests created | Button prompts to the guest |
+| Bed availability and holds | |
+| Payments and records | |
+| Notifications to you (the owner) | |
+| Meta webhook and verification | |
+
+A booking request that arrives while paused is **still sent to you**, so nothing
+is lost. The guest simply hears nothing back until you resume. While paused the
+system also will not reply to your own WhatsApp commands — use the dashboard
+instead.
+
+**To pause**
+
+1. On the server, open the settings file:
+   ```bash
+   nano /opt/sagar/.env
+   ```
+2. Find the line `AUTO_REPLY_ENABLED=true` and change it to:
+   ```
+   AUTO_REPLY_ENABLED=false
+   ```
+3. Save the file, then restart the app so it reads the new value:
+   ```bash
+   cd /opt/sagar
+   docker compose -f deploy/docker-compose.yml up -d app
+   ```
+4. Confirm the pause is on:
+   ```bash
+   curl https://your-domain/health
+   ```
+   The reply now shows `"auto_reply":"paused"`. If it still says `"enabled"`,
+   the restart did not pick up the change — check the file was saved.
+
+**To resume**
+
+Repeat the steps, setting the line back to:
+```
+AUTO_REPLY_ENABLED=true
+```
+and restart the app the same way. Confirm with `/health`, which shows
+`"auto_reply":"enabled"`.
+
+**If you forget you paused it**
+
+The health check is the answer. `"auto_reply":"paused"` means guests are not
+being answered. Make a habit of checking `/health` after any change.
+
 ## The AI is not working
 
 The system does not depend on it. Common questions are answered by plain code, so

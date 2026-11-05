@@ -63,15 +63,27 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     """Handle one inbound message and send the reply.
 
     Returns True when the message was handled, so the caller can mark it done.
+
+    When `settings.auto_reply_enabled` is false, the guest is not sent an
+    automatic reply. Everything else still happens: the message is stored by the
+    caller, the handler runs, a booking is created, the owner is alerted, and
+    the message is marked processed. Only the outbound reply is held back, so
+    the pause is silent from the guest's side and reversible.
     """
+    auto = settings.auto_reply_enabled
+
     # A tap is a text message the guest did not have to type. It carries the
     # button id, so it is handled exactly like typed text.
     if not message.button_id and (message.message_type != "text"
                                   or not (message.text or "").strip()):
         # Media and other message types are acknowledged but not yet understood.
-        _reply(db, channel, message.from_phone,
-               "Thanks for your message. Please send it as text so I can help, "
-               "or tell me your check-in date and how many nights you need.")
+        if auto:
+            _reply(db, channel, message.from_phone,
+                   "Thanks for your message. Please send it as text so I can help, "
+                   "or tell me your check-in date and how many nights you need.")
+        else:
+            log.info("auto-reply paused; media from %s stored without a reply",
+                     message.from_phone)
         if message_id:
             inbox.mark_processed(db, message_id)
         return True
@@ -85,9 +97,10 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
             staff_phones=settings.staff_phones)
     except Exception as exc:
         log.exception("handling failed for %s: %s", message.from_phone, exc)
-        _reply(db, channel, message.from_phone,
-               "Sorry, something went wrong on my side. The owner has been alerted "
-               "and will get back to you.")
+        if auto:
+            _reply(db, channel, message.from_phone,
+                   "Sorry, something went wrong on my side. The owner has been alerted "
+                   "and will get back to you.")
         if message_id:
             inbox.mark_processed(db, message_id)
         return True
@@ -95,6 +108,10 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     # An outage is silent from the guest's side, so the owner is told about it
     # here, where the outcome and the channel are both in hand. Both calls are
     # best-effort: a failed alert must not stop the guest's reply going out.
+    #
+    # These go to the owner, not the guest, so a pause on automatic replies does
+    # not silence them: a booking request that arrived during a pause must still
+    # reach the owner, or it would sit unseen.
     if outcome.escalate:
         alerts.note_failure(db, channel=channel, owner_phone=settings.owner_phone,
                             reason="AI unavailable")
@@ -110,6 +127,13 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
                 db, channel=channel, owner_phone=settings.owner_phone,
                 reference=event["reference"],
                 summary=_request_summary(event))
+
+    if not auto:
+        log.info("auto-reply paused; stored and handled %s from %s without replying",
+                 message.message_type, message.from_phone)
+        if message_id:
+            inbox.mark_processed(db, message_id)
+        return True
 
     sent = _reply(db, channel, message.from_phone, outcome.reply,
                   prompt=outcome.prompt, file=outcome.file)
