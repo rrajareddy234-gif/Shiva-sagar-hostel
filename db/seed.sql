@@ -204,6 +204,8 @@ INSERT INTO hostel_facts (key, value, category, source) VALUES
     ('address.pincode', '522426', 'location', 'owner'),
     ('address.landmark', 'Above Sagar Tea Stall, opposite Kodanda Ramalayam Temple',
      'location', 'owner'),
+    ('address.map_link', 'https://maps.app.goo.gl/S7voZ2PEDLVyHfdZ7',
+     'location', 'owner'),
     ('amenity.wifi', 'Wi-Fi is available.', 'amenity', 'owner'),
     ('amenity.hot_water', 'Geyser and hot water are available.', 'amenity', 'owner'),
     ('amenity.washing_machine', 'A washing machine is available.', 'amenity', 'owner'),

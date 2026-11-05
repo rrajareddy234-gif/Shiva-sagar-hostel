@@ -160,6 +160,28 @@ def test_address_questions_are_answered_by_code(db, text):
     assert router.classify(text) == "location"
 
 
+def test_the_location_reply_includes_the_owner_map_link(db):
+    """The owner's own share link is repeated, so the pin is always right."""
+    from core import hostel_facts
+    hostel_facts.set_fact(db, key="address.full", value="Main Road, Macherla",
+                          actor="owner", category="location")
+    hostel_facts.set_fact(db, key="address.map_link",
+                          value="https://maps.app.goo.gl/S7voZ2PEDLVyHfdZ7",
+                          actor="owner", category="location")
+    reply = router.route(db, "where is the hostel")
+    assert "https://maps.app.goo.gl/S7voZ2PEDLVyHfdZ7" in reply.text
+
+
+def test_a_removed_map_link_is_never_invented(db):
+    """With no link recorded, the reply must not invent one."""
+    from core import hostel_facts
+    hostel_facts.set_fact(db, key="address.full", value="Main Road, Macherla",
+                          actor="owner", category="location")
+    reply = router.route(db, "where is the hostel")
+    assert "maps" not in reply.text.lower()
+    assert hostel_facts.map_link(db) is None
+
+
 # --- the escape hatch ------------------------------------------------------
 
 def test_a_greeting_abandons_the_flow_and_shows_the_menu(db):
@@ -246,3 +268,130 @@ def test_a_lost_race_is_retried_on_another_free_bed(db, monkeypatch):
     assert calls["n"] == 2, "the flow should have retried once"
     assert "sent to the owner" in outcome.reply
     assert _has_booking(db)
+
+
+# --- a typed value is read back before it is used --------------------------
+#
+# A number typed by hand is easy to get wrong, and a wrong night count sends a
+# wrong bill. So typed answers are confirmed first; tapped ones are not.
+
+def test_typed_nights_are_confirmed_before_use(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    outcome = _step(db, text="3")
+    assert "3 nights" in outcome.reply
+    assert "correct" in outcome.reply.lower()
+    # The value is not yet committed.
+    from core import booking_flow
+    assert booking_flow._load(db, GUEST).get("nights") is None
+
+
+def test_confirming_typed_nights_moves_on(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, text="3")
+    outcome = _step(db, bid="bk:cf:yes")
+    assert "guest" in outcome.reply.lower()
+    from core import booking_flow
+    assert booking_flow._load(db, GUEST)["nights"] == 3
+
+
+def test_saying_change_re_asks_the_same_question(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, text="3")
+    outcome = _step(db, bid="bk:cf:no")
+    assert "nights" in outcome.reply.lower()
+    from core import booking_flow
+    assert booking_flow._load(db, GUEST).get("nights") is None
+
+
+def test_replying_with_a_number_at_the_confirm_step_corrects_it(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, text="3")
+    outcome = _step(db, text="5")
+    assert "5 nights" in outcome.reply
+    assert "correct" in outcome.reply.lower()
+
+
+def test_typed_guests_are_confirmed_before_use(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:2")
+    outcome = _step(db, text="2")
+    assert "2 guests" in outcome.reply
+    assert "correct" in outcome.reply.lower()
+
+
+def test_typed_room_is_confirmed_before_use(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:guests:1")
+    outcome = _step(db, text="ac")
+    assert "AC" in outcome.reply
+    assert "correct" in outcome.reply.lower()
+    from core import booking_flow
+    assert booking_flow._load(db, GUEST).get("room_type") is None
+
+
+def test_tapped_answers_are_never_re_asked(db):
+    """A tap is already an explicit choice, so no confirmation appears."""
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    outcome = _step(db, bid="bk:nights:2")
+    assert "guest" in outcome.reply.lower()
+    assert "correct" not in outcome.reply.lower()
+
+
+def test_a_typed_date_is_confirmed(db):
+    _step(db, bid="menu:book")
+    outcome = _step(db, text="2026-12-20")
+    assert "2026-12-20" not in outcome.reply  # shown readably, not raw ISO
+    assert "20 December 2026" in outcome.reply
+    assert "correct" in outcome.reply.lower()
+
+
+# --- a full room type is shown, but its tap is refused ---------------------
+#
+# WhatsApp buttons cannot be truly disabled, so a full room type is labelled
+# "(full)" and the tap is answered with a reason instead of a silent restart.
+
+def _fill_room_type(db, room_type, *, phone="+919000000777"):
+    from datetime import datetime, timedelta
+
+    from core import availability
+    start = datetime.now().astimezone().replace(
+        hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+    end = start + timedelta(days=2)
+    beds = [b.bed_id for b in availability.list_bed_availability(db, start, end)
+            if b.room_type == room_type]
+    request = booking_flow.booking.create_request(
+        db, phone=phone, full_name="Fill Guest", gender=None, bed_ids=beds,
+        check_in_at=start, check_out_at=end, food_included=False,
+        guests_count=len(beds), payment_terms="FULL")
+    booking_flow.booking.approve(db, request.booking_id, actor="owner")
+    return start, end
+
+
+def test_a_full_room_type_is_labelled_full(db):
+    _fill_room_type(db, "DORM")
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:2")
+    outcome = _step(db, bid="bk:guests:1")
+    titles = [b.title for b in (outcome.prompt.buttons or outcome.prompt.rows)]
+    assert "Dormitory (full)" in titles
+
+
+def test_tapping_a_full_room_type_explains_why(db):
+    _fill_room_type(db, "DORM")
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:guests:1")
+    outcome = _step(db, bid="bk:room:DORM")
+    assert "full" in outcome.reply.lower()
+    assert "full" in " ".join(
+        b.title for b in (outcome.prompt.buttons or outcome.prompt.rows)).lower()

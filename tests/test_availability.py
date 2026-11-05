@@ -234,3 +234,38 @@ def test_sync_bed_status_does_not_override_maintenance(db, tomorrow):
     availability.sync_bed_status(db)
     row = db.query_one("SELECT status FROM beds WHERE bed_id = '1NA-B1'")
     assert row["status"] == "MAINTENANCE"
+
+
+# --- a party's beds are all counted, not just the first --------------------
+#
+# A guest can book several beds in one request. The booking row names one bed,
+# and booking_beds names them all. Availability must read booking_beds, or a
+# party of five shows four beds as free and they get sold twice.
+
+def test_every_bed_in_a_party_is_counted_as_taken(db, tomorrow):
+    end = tomorrow + timedelta(days=2)
+    party = ["DORM-M1", "DORM-M2", "DORM-M3"]
+    request = booking.create_request(
+        db, phone="+919000000123", full_name="Party Guest", gender=None,
+        bed_ids=party, check_in_at=tomorrow, check_out_at=end,
+        food_included=False, guests_count=len(party), payment_terms="FULL")
+    booking.approve(db, request.booking_id, actor="owner")
+
+    beds = {b.bed_id: b for b in
+            availability.list_bed_availability(db, tomorrow, end)}
+    for bed_id in party:
+        assert not beds[bed_id].available, f"{bed_id} should be taken"
+
+
+def test_a_full_room_type_is_reported_full_after_a_party_booking(db, tomorrow):
+    end = tomorrow + timedelta(days=2)
+    dorm = [b.bed_id for b in availability.list_bed_availability(db, tomorrow, end)
+            if b.room_type == "DORM"]
+    request = booking.create_request(
+        db, phone="+919000000124", full_name="Party Guest", gender=None,
+        bed_ids=dorm, check_in_at=tomorrow, check_out_at=end,
+        food_included=False, guests_count=len(dorm), payment_terms="FULL")
+    booking.approve(db, request.booking_id, actor="owner")
+
+    summary = availability.availability_summary(db, tomorrow, end)
+    assert summary["by_room_type"]["DORM"]["available_beds"] == 0

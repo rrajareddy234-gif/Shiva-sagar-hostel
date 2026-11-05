@@ -113,13 +113,16 @@ def handle(db: Database, *, phone: str, text: str | None = None,
         return FlowResult("Please send your full name as you would like it on the booking.",
                           prompt=None)
 
+    if state.get("step") == _CONFIRM_STEP:
+        return _answer_confirm(db, phone=phone, state=state, text=text)
+
     if state.get("step") == "date":
         parsed = _parse_date(text)
         if parsed:
-            state["check_in"] = parsed.date().isoformat()
-            state["step"] = "nights"
-            _save(db, phone, state)
-            return _ask_nights(db)
+            return _confirm_typed(db, phone=phone, state=state, field="check_in",
+                                  value=parsed.date().isoformat(),
+                                  next_step="nights",
+                                  label=parsed.date().strftime("%d %B %Y"))
         return FlowResult("I couldn't read that date. Please send it as "
                           "2026-11-20, or tap Today or Tomorrow.")
 
@@ -127,25 +130,21 @@ def handle(db: Database, *, phone: str, text: str | None = None,
         n = _clamp(_first_number(text), 1, NIGHTS_MAX)
         if n is None:
             return _ask_nights(db)
-        state["nights"] = n
-        state["step"] = "guests"
-        _save(db, phone, state)
-        return _ask_guests(db)
+        return _confirm_typed(db, phone=phone, state=state, field="nights", value=n,
+                              next_step="guests", label=_nights_label(n))
 
     if state.get("step") == "guests":
         n = _clamp(_first_number(text), 1, GUESTS_MAX)
         if n is None:
             return _ask_guests(db)
-        state["guests"] = n
-        state["step"] = "room"
-        _save(db, phone, state)
-        return _ask_room(db)
+        return _confirm_typed(db, phone=phone, state=state, field="guests", value=n,
+                              next_step="room", label=_guests_label(n))
 
     if state.get("step") == "room":
         picked = _room_from_text(db, text)
         if picked:
-            return _tap(db, phone=phone, button_id=f"{_NS}room:{picked}")
-        return _ask_room(db)
+            return _select_room(db, phone=phone, state=state, value=picked, typed=True)
+        return _ask_room(db, state)
 
     if state.get("step") == "food":
         lowered = (text or "").lower()
@@ -201,19 +200,46 @@ def _ask_guests(db: Database) -> FlowResult:
                       rows=rows, button_text="Pick guests"))
 
 
-def _ask_room(db: Database) -> FlowResult:
+def _ask_room(db: Database, state: dict | None = None) -> FlowResult:
     rooms = _room_types(db)
     if not rooms:
         return FlowResult("I don't have room rates set up yet, so I can't take a "
                           "booking. I've asked the owner to add them.")
-    buttons = tuple(Button(f"{_NS}room:{rt}", ROOM_LABEL.get(rt, rt)) for rt in rooms)
+    # A room type with no free bed for the guest's dates is shown, but marked
+    # full, so the guest learns the hostel is busy rather than wondering why a
+    # room they were told about has vanished. The tap is refused, not ignored.
+    full = _full_room_types(db, state)
+    buttons = tuple(
+        Button(f"{_NS}room:{rt}",
+               (f"{ROOM_LABEL.get(rt, rt)} (full)" if rt in full
+                else ROOM_LABEL.get(rt, rt)))
+        for rt in rooms)
+    body = "Which room type would you like?"
+    if full:
+        body += (" Rooms marked (full) have no bed free for your dates. Pick "
+                 "another, or send different dates.")
     if len(buttons) <= 3:
-        return FlowResult("Which room type would you like?",
-                          prompt=Prompt(body="Which room type would you like?",
-                                        buttons=buttons))
-    return FlowResult("Which room type would you like?",
-                      prompt=Prompt(body="Which room type would you like?",
-                                    rows=buttons, button_text="Pick a room"))
+        return FlowResult(body, prompt=Prompt(body=body, buttons=buttons))
+    return FlowResult(body, prompt=Prompt(body=body, rows=buttons,
+                                          button_text="Pick a room"))
+
+
+def _full_room_types(db: Database, state: dict | None) -> set[str]:
+    """Room types with no free bed for the guest's dates. Empty if unknown.
+
+    Without dates the question cannot be answered, and guessing would mark a
+    room full that is not; so nothing is marked until the dates are known.
+    """
+    if not state or not state.get("check_in") or not state.get("nights"):
+        return set()
+    try:
+        start_at, end_at = _window(state)
+    except (KeyError, ValueError):
+        return set()
+    summary = availability.availability_summary(db, start_at, end_at)
+    return {room_type
+            for room_type, counts in summary["by_room_type"].items()
+            if counts["available_beds"] == 0}
 
 
 def _ask_food(db: Database, room_type: str) -> FlowResult | None:
@@ -235,6 +261,159 @@ def _ask_terms(db: Database) -> FlowResult:
                   "at check-in. Full pays the whole amount now."),
             buttons=(Button(f"{_NS}terms:ADVANCE", "Reservation"),
                      Button(f"{_NS}terms:FULL", "Full amount"))))
+
+
+# --- confirming a value the guest typed ------------------------------------
+#
+# A number typed by hand is easy to fat-finger, and "5 nights" read as "3" sends
+# the guest a wrong bill. So a typed date, night count, guest count or room is
+# read back and confirmed before it is used. A tapped button is already an
+# explicit choice and is never re-asked.
+
+_CONFIRM_STEP = "confirm"
+
+
+def _nights_label(n: int) -> str:
+    return f"{n} night" + ("s" if n > 1 else "")
+
+
+def _guests_label(n: int) -> str:
+    return f"{n} guest" + ("s" if n > 1 else "")
+
+
+def _confirm_typed(db: Database, *, phone: str, state: dict, field: str,
+                   value, next_step: str, label: str) -> FlowResult:
+    """Read a typed answer back before moving on, with Yes / Change buttons."""
+    state["pending"] = {"field": field, "value": value, "next_step": next_step}
+    state["step"] = _CONFIRM_STEP
+    _save(db, phone, state)
+    return FlowResult(
+        f"I have {label}. Is that correct?",
+        prompt=Prompt(body=f"Just to confirm: {label}?",
+                      buttons=(Button(f"{_NS}cf:yes", "Yes, correct"),
+                               Button(f"{_NS}cf:no", "Change"))))
+
+
+def _answer_confirm(db: Database, *, phone: str, state: dict,
+                    text: str | None) -> FlowResult:
+    """Act on the guest's yes/no to a read-back value."""
+    pending = state.get("pending") or {}
+    field, value, next_step = (pending.get("field"), pending.get("value"),
+                               pending.get("next_step"))
+    lowered = (text or "").strip().lower()
+
+    if lowered in ("no", "n", "change", "edit", "wrong", "cancel") or \
+            any(w in lowered for w in ("no,", "not correct", "change", "wrong")):
+        return _redo_field(db, phone=phone, state=state, field=field)
+
+    if lowered in ("yes", "y", "ok", "okay", "correct", "confirm", "yep", "yeah"):
+        return _commit_typed(db, phone=phone, state=state, field=field,
+                             value=value, next_step=next_step)
+
+    # Anything else is treated as the corrected value itself, so a guest who
+    # simply replies "3" instead of tapping Change is still understood.
+    return _reinterpret(db, phone=phone, state=state, field=field, text=text)
+
+
+def _commit_typed(db: Database, *, phone: str, state: dict, field: str,
+                  value, next_step: str) -> FlowResult:
+    state.pop("pending", None)
+    if field is None:
+        return _restart(db, phone)
+    state[field] = value
+    state["step"] = next_step
+    _save(db, phone, state)
+    return _after_step(db, phone=phone, state=state, next_step=next_step)
+
+
+def _after_step(db: Database, *, phone: str, state: dict, next_step: str) -> FlowResult:
+    if next_step == "nights":
+        return _ask_nights(db)
+    if next_step == "guests":
+        return _ask_guests(db)
+    if next_step == "room":
+        return _ask_room(db, state)
+    if next_step == "food":
+        return _room_chosen(db, phone=phone, state=state)
+    return _restart(db, phone)
+
+
+def _redo_field(db: Database, *, phone: str, state: dict, field: str | None) -> FlowResult:
+    """Ask the same question again after the guest said the value was wrong."""
+    state.pop("pending", None)
+    if field == "check_in":
+        state["step"] = "date"
+        _save(db, phone, state)
+        return _ask_date(db)
+    if field == "nights":
+        state["step"] = "nights"
+        _save(db, phone, state)
+        return _ask_nights(db)
+    if field == "guests":
+        state["step"] = "guests"
+        _save(db, phone, state)
+        return _ask_guests(db)
+    if field == "room_type":
+        state.pop("room_type", None)
+        state["step"] = "room"
+        _save(db, phone, state)
+        return _ask_room(db, state)
+    return _restart(db, phone)
+
+
+def _reinterpret(db: Database, *, phone: str, state: dict, field: str | None,
+                 text: str | None) -> FlowResult:
+    """Read the guest's reply as a corrected value for the pending field."""
+    if field == "check_in":
+        parsed = _parse_date(text)
+        if parsed:
+            return _confirm_typed(db, phone=phone, state=state, field="check_in",
+                                  value=parsed.date().isoformat(), next_step="nights",
+                                  label=parsed.date().strftime("%d %B %Y"))
+    elif field == "nights":
+        n = _clamp(_first_number(text), 1, NIGHTS_MAX)
+        if n is not None:
+            return _confirm_typed(db, phone=phone, state=state, field="nights",
+                                  value=n, next_step="guests", label=_nights_label(n))
+    elif field == "guests":
+        n = _clamp(_first_number(text), 1, GUESTS_MAX)
+        if n is not None:
+            return _confirm_typed(db, phone=phone, state=state, field="guests",
+                                  value=n, next_step="room", label=_guests_label(n))
+    elif field == "room_type":
+        picked = _room_from_text(db, text)
+        if picked:
+            return _confirm_typed(db, phone=phone, state=state, field="room_type",
+                                  value=picked, next_step="food",
+                                  label=ROOM_LABEL.get(picked, picked))
+    return _redo_field(db, phone=phone, state=state, field=field)
+
+
+def _select_room(db: Database, *, phone: str, state: dict, value: str,
+                 typed: bool) -> FlowResult:
+    """Record a room choice. A typed one is read back first; a tap is not."""
+    if typed:
+        return _confirm_typed(db, phone=phone, state=state, field="room_type",
+                              value=value, next_step="food",
+                              label=ROOM_LABEL.get(value, value))
+    state["room_type"] = value
+    return _room_chosen(db, phone=phone, state=state)
+
+
+def _room_chosen(db: Database, *, phone: str, state: dict) -> FlowResult:
+    """The room type is settled: ask about food, or move on to payment terms."""
+    room_type = state.get("room_type")
+    if not room_type:
+        return _restart(db, phone)
+    options = _food_options(db, room_type)
+    if len(options) == 1:
+        state["food"] = options[0]
+        state["step"] = "terms"
+        _save(db, phone, state)
+        return _ask_terms(db)
+    state["step"] = "food"
+    _save(db, phone, state)
+    return _ask_food(db, room_type)
 
 
 def _ask_name(db: Database, phone: str) -> FlowResult:
@@ -301,6 +480,12 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
     state = _load(db, phone)
     verb, _, value = button_id[len(_NS):].partition(":")
 
+    if verb == "cf":
+        if not state.get("step") == _CONFIRM_STEP:
+            return _restart(db, phone)
+        return _answer_confirm(db, phone=phone, state=state,
+                               text="yes" if value == "yes" else "no")
+
     if verb == "cancel":
         _clear(db, phone)
         return FlowResult("No problem, I've cancelled that. Tap Book a Room when "
@@ -346,21 +531,20 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
         state["guests"] = n
         state["step"] = "room"
         _save(db, phone, state)
-        return _ask_room(db)
+        return _ask_room(db, state)
 
     if verb == "room":
         if value not in _room_types(db):
-            return _ask_room(db)
-        state["room_type"] = value
-        options = _food_options(db, value)
-        if len(options) == 1:
-            state["food"] = options[0]
-            state["step"] = "terms"
-            _save(db, phone, state)
-            return _ask_terms(db)
-        state["step"] = "food"
-        _save(db, phone, state)
-        return _ask_food(db, value)
+            return _ask_room(db, state)
+        if value in _full_room_types(db, state):
+            # The button was tappable, so the guest must be told why it did not
+            # work rather than dropped back on the same question.
+            return FlowResult(
+                f"Sorry, {ROOM_LABEL.get(value, value)} is full for your dates. "
+                f"Pick another room type, or send different dates and I will "
+                f"check again.",
+                prompt=_ask_room(db, state).prompt)
+        return _select_room(db, phone=phone, state=state, value=value, typed=False)
 
     if verb == "food":
         state["food"] = value == "1"

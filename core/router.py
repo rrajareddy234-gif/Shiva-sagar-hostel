@@ -567,6 +567,9 @@ def _location(db: Database) -> str:
     landmark = hostel_facts.get(db, "address.landmark")
     if landmark and landmark not in full:
         lines.append(f"Landmark: {landmark}")
+    link = hostel_facts.map_link(db)
+    if link:
+        lines.append(f"Open in Google Maps: {link}")
     return "\n".join(lines)
 
 

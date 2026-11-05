@@ -104,6 +104,16 @@ def address_block(db: Database) -> str | None:
     return full
 
 
+def map_link(db: Database) -> str | None:
+    """The owner's Google Maps link, or None when it is not recorded.
+
+    The link is the owner's own share link, so it always opens the right pin. It
+    is never built from coordinates here: a pin guessed from an address can send
+    a guest to the wrong street.
+    """
+    return get(db, "address.map_link")
+
+
 def amenities_block(db: Database) -> list[str]:
     """Every amenity the owner has recorded, as plain sentences."""
     return [row["value"] for row in by_category(db, "amenity")]
