@@ -60,7 +60,7 @@ _FACIL = re.compile(r"\b(food|meals|mess|wifi|wi-fi|water|ac|non[- ]?ac|"
                     r"laundry|parking|timing|rules|facilit\w*)\b", re.I)
 _HOURS = re.compile(r"\b(hour|hourly|per hour|few hours|short stay)\b", re.I)
 # "Where are you?", "address", "location", "how do I reach you", "directions".
-_LOCATION = re.compile(r"\b(address|location|located|where (are|is)|directions?|"
+_LOCATION = re.compile(r"\b(address|location|located|where\b|directions?|"
                        r"how (do i|to) (reach|come|get there)|landmark|map|"
                        r"ekkada|kahan)\b", re.I)
 _GREET = re.compile(r"^\s*(hi|hii+|hello|hey|namaste|good (morning|evening|afternoon))\b", re.I)
@@ -68,6 +68,12 @@ _GREET = re.compile(r"^\s*(hi|hii+|hello|hey|namaste|good (morning|evening|after
 # "help me book a bed" is still handled on its merits.
 _MENU_WORD = re.compile(r"^\s*(menu|help|options|start)\s*[.!?]*\s*$", re.I)
 _THANKS = re.compile(r"\b(thank|thanks|thank you|dhanyavad)\b", re.I)
+# "Book a Room" typed, and its close cousins. A booking must be caught here so
+# it never falls to the AI, which would only chat and never make the request.
+_BOOK = re.compile(r"\b(book|booking|reserve|reservation|"
+                   r"i want a room|need a room|room (kavali|kavale))\b", re.I)
+_BOOKINGS_WORD = re.compile(r"\b(my bookings?|my reservation|my stay|"
+                            r"booking status|status of my)\b", re.I)
 _NIGHTS = re.compile(r"(\d+)\s*(night|nights|day|days|din|roju)", re.I)
 _AC = re.compile(r"\bnon[- ]?ac\b", re.I)
 
@@ -84,6 +90,14 @@ def classify(text: str | None) -> str:
     # must not be read as an availability question.
     if _LOCATION.search(text):
         return "location"
+    # "My bookings" before "book": the phrase contains the word "book", and the
+    # guest asking for their own bookings does not want to start a new one.
+    if _BOOKINGS_WORD.search(text):
+        return "my_bookings"
+    # A typed booking request is claimed here, never left to the AI: the AI would
+    # chat about it and no request would ever reach the owner.
+    if _BOOK.search(text):
+        return "book"
     if _PRICE.search(text):
         return "price"
     # An availability question may mention "AC" or "food"; availability wins.
@@ -106,7 +120,8 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     the id is stable, where the label the guest saw is not.
     """
     if button_id:
-        tapped = _menu_button(db, button_id) or _price_button(db, button_id)
+        tapped = (_menu_button(db, button_id, phone=phone)
+                  or _price_button(db, button_id))
         if tapped is not None:
             return tapped
 
@@ -125,6 +140,20 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     if intent == "location":
         return Reply(_location(db), handled=True, intent=intent)
 
+    if intent == "my_bookings":
+        if not phone:
+            return Reply("", handled=False, needs_ai=True, intent=intent)
+        from core import booking_flow
+        return Reply(booking_flow.my_bookings_reply(db, phone), handled=True,
+                     intent=intent)
+
+    if intent == "book":
+        if not phone:
+            return _booking_prompt(db)
+        from core import booking_flow
+        flow = booking_flow.start(db, phone=phone)
+        return Reply(flow.reply, handled=True, intent=intent, prompt=flow.prompt)
+
     if intent == "facilities":
         # A stored answer is specific ("yes, there is wifi, password is X"),
         # where the generic list below only says what rooms exist. Try it first
@@ -138,7 +167,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
 
     if intent == "availability":
         return Reply(_availability(db, text, now, room_type, nights), handled=True,
-                     intent=intent)
+                     intent=intent, prompt=_book_prompt())
 
     # Anything the exact rules did not claim -- including 'unknown' -- gets one
     # cheaper chance first: the stored FAQ. A question the owner has already
@@ -247,6 +276,7 @@ _MENU_TITLES = (
     ("menu:facilities", "Food & Amenities", "Food, Wi-Fi, water, security"),
     ("menu:reviews", "Guest Reviews", "What other guests say"),
     ("menu:book", "Book a Room", "Send a booking request"),
+    ("menu:bookings", "My Bookings", "Your booking status"),
     ("menu:talk", "Talk to Staff", "We will reply here"),
 )
 
@@ -289,7 +319,8 @@ def _guest_first_name(db: Database, phone: str | None) -> str | None:
     return first
 
 
-def _menu_button(db: Database, button_id: str) -> Reply | None:
+def _menu_button(db: Database, button_id: str, *,
+                 phone: str | None = None) -> Reply | None:
     """Answer a menu tap. Returns None if the id is not ours."""
     if not button_id.startswith(_MENU):
         return None
@@ -298,7 +329,7 @@ def _menu_button(db: Database, button_id: str) -> Reply | None:
         return _price_reply(db, "", None, None)
     if what == "availability":
         return Reply(_availability(db, "", None, None, None), handled=True,
-                     intent="availability")
+                     intent="availability", prompt=_book_prompt())
     if what == "facilities":
         return Reply(_facilities(db, None, None), handled=True, intent="facilities")
     if what == "location":
@@ -306,7 +337,17 @@ def _menu_button(db: Database, button_id: str) -> Reply | None:
     if what == "reviews":
         return Reply(reviews.render_for_guest(db), handled=True, intent="reviews")
     if what == "book":
-        return _booking_prompt(db)
+        if not phone:
+            return _booking_prompt(db)
+        from core import booking_flow
+        flow = booking_flow.start(db, phone=phone)
+        return Reply(flow.reply, handled=True, intent="book", prompt=flow.prompt)
+    if what == "bookings":
+        if not phone:
+            return None
+        from core import booking_flow
+        return Reply(booking_flow.my_bookings_reply(db, phone), handled=True,
+                     intent="my_bookings")
     if what == "talk":
         return Reply(
             "Of course. Tell me what you need and I will pass it to the owner, "
@@ -456,6 +497,12 @@ def _price_button(db: Database, button_id: str) -> Reply | None:
             return None
         return _quote(db, room_type, food == "1")
     return None
+
+
+def _book_prompt() -> Prompt:
+    """One 'Book a Room' button, offered under the availability answer."""
+    return Prompt(body="Would you like to book a room?",
+                  buttons=(Button("menu:book", "Book a Room"),))
 
 
 def _availability(db: Database, text: str, now: datetime | None,

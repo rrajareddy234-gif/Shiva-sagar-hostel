@@ -66,13 +66,14 @@ def test_greeting_offers_a_menu_of_taps(db):
     """A bare "hi" should offer choices, not a paragraph to read."""
     reply = router.route(db, "hi")
     assert reply.prompt is not None
-    # Seven choices, so they are sent as a list, not three buttons.
+    # Eight choices, so they are sent as a list, not three buttons.
     assert [b.title for b in reply.prompt.rows] == [
         "Rooms & Prices", "Check Availability", "Location & Directions",
-        "Food & Amenities", "Guest Reviews", "Book a Room", "Talk to Staff"]
+        "Food & Amenities", "Guest Reviews", "Book a Room", "My Bookings",
+        "Talk to Staff"]
     assert [b.id for b in reply.prompt.rows] == [
         "menu:price", "menu:availability", "menu:location", "menu:facilities",
-        "menu:reviews", "menu:book", "menu:talk"]
+        "menu:reviews", "menu:book", "menu:bookings", "menu:talk"]
     assert reply.prompt.is_valid()
     # The help text is still the fallback body for a channel without buttons.
     assert "Sagar PG" in reply.text

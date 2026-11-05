@@ -82,6 +82,16 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
                            intent=staff_reply.intent, prompt=staff_reply.prompt)
 
     else:
+        # A booking in progress owns the conversation: the guest is answering our
+        # own questions, so the flow answers before the router or the AI. A
+        # submit here creates the request in code, which is what makes the owner
+        # notification reliable.
+        from core import booking_flow
+        flow = booking_flow.handle(db, phone=phone, text=text, button_id=button_id)
+        if flow is not None:
+            return Outcome(reply=flow.reply, handled_by="router", intent="book",
+                           prompt=flow.prompt, events=flow.events)
+
         customer_reply = router.route(db, text, role=role, button_id=button_id,
                                       phone=phone)
         if customer_reply.handled:

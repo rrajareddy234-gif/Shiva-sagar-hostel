@@ -130,13 +130,20 @@ def _request_summary(event: dict) -> str:
     beds = ", ".join(event.get("bed_ids") or [])
     guests = event.get("guests") or 1
     party = f"{guests} guest(s)" if guests != 1 else "1 guest"
+    terms = event.get("payment_terms") or "ADVANCE"
+    if terms == "FULL":
+        # The guest pays the whole amount up front, so there is no separate
+        # advance to show; an "Advance due: Rs 0" line would only confuse.
+        pay_line = f"Pay now (full): Rs {event.get('charges_total')}"
+    else:
+        pay_line = f"Advance due: Rs {event.get('advance_due')}"
     lines = [
         f"New booking request {event['reference']}",
         f"{event.get('guest_name') or 'Guest'} - {party}",
         f"Bed(s): {beds}",
         f"{event.get('check_in')} to {event.get('check_out')}",
         f"Total: Rs {event.get('charges_total')}",
-        f"Advance due: Rs {event.get('advance_due')}",
+        pay_line,
         "",
         "Approve or reject with a tap below.",
     ]

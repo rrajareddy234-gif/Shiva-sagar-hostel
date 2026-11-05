@@ -196,6 +196,22 @@ def set_conversation_state(db: Database, phone: str, state: dict) -> None:
     )
 
 
+def merge_conversation_state(db: Database, phone: str, patch: dict) -> None:
+    """Merge top-level keys into the stored state in one statement.
+
+    A read-then-write of the whole document loses a concurrent writer's key:
+    two taps arriving together both read the old state and the second write
+    drops the first. `||` merges inside the database, so each writer only ever
+    changes its own keys.
+    """
+    db.execute(
+        "INSERT INTO conversations (phone, state) VALUES (%s, %s::jsonb) "
+        "ON CONFLICT (phone) DO UPDATE SET "
+        "state = conversations.state || EXCLUDED.state, last_activity = now()",
+        (phone, _json(patch)),
+    )
+
+
 def _json(value) -> str:
     import json
     return json.dumps(value, default=str)

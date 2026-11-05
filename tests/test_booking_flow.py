@@ -1,0 +1,176 @@
+"""The tap-driven booking flow.
+
+The promise these tests defend: a guest who taps through a booking always makes
+a request, and the owner is always told about it -- with no AI involved at all.
+Every figure must come from the pricing engine, never from the flow.
+"""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from core import booking_flow, pricing, router
+from core.channel.adapter import InboundMessage
+from core.config import Settings
+from core.dispatcher import dispatch
+from core.handler import handle_message
+from tests.conftest import APP_SECRET, TEST_DSN, VERIFY_TOKEN
+
+OWNER = "+919999999999"
+GUEST = "+919000000901"
+
+pytestmark = pytest.mark.usefixtures("seeded")
+
+
+def _settings():
+    return Settings(
+        database_url=TEST_DSN, channel_provider="fake", owner_phone=OWNER,
+        timezone="Asia/Kolkata", meta_app_secret=APP_SECRET,
+        meta_access_token="t", meta_phone_number_id="1",
+        meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
+        ai_model="fake-1", ai_api_key="k", ai_base_url=None)
+
+
+def _step(db, *, bid=None, text="", phone=GUEST):
+    return handle_message(db, phone=phone, text=text, owner_phone=OWNER,
+                          ai=None, button_id=bid)
+
+
+def _tap_through(db, *, room="AC", food="1", terms="ADVANCE", name="Dummy Guest",
+                 phone=GUEST):
+    """Walk the whole flow by tapping, as a guest would."""
+    _step(db, bid="menu:book", phone=phone)
+    _step(db, bid="bk:date:tomorrow", phone=phone)
+    _step(db, bid="bk:nights:2", phone=phone)
+    _step(db, bid="bk:guests:1", phone=phone)
+    _step(db, bid=f"bk:room:{room}", phone=phone)
+    _step(db, bid=f"bk:food:{food}", phone=phone)
+    _step(db, bid=f"bk:terms:{terms}", phone=phone)
+    _step(db, text=name, phone=phone)
+    return _step(db, bid="bk:submit", phone=phone)
+
+
+# --- the core promise: a request is made and the owner is told -------------
+
+def test_tapping_through_creates_a_request_with_no_ai(db):
+    """The whole point: the flow makes the request without the AI."""
+    outcome = _tap_through(db)
+    assert [e["type"] for e in outcome.events] == ["booking_requested"]
+    assert outcome.events[0]["reference"].startswith("SPG-")
+
+
+def test_the_owner_gets_approve_reject_with_no_ai(db, channel):
+    """A full tap-through ends with an Approve/Reject prompt for the owner."""
+    for i, bid in enumerate(["menu:book", "bk:date:tomorrow", "bk:nights:1",
+                             "bk:guests:1", "bk:room:AC", "bk:food:1",
+                             "bk:terms:ADVANCE"]):
+        dispatch(db, channel, _settings(), InboundMessage(
+            provider_message_id=f"wamid.{i}", from_phone=GUEST,
+            message_type="interactive", text="", button_id=bid), ai=None)
+    dispatch(db, channel, _settings(), InboundMessage(
+        provider_message_id="wamid.name", from_phone=GUEST,
+        message_type="text", text="Dummy Guest"), ai=None)
+    dispatch(db, channel, _settings(), InboundMessage(
+        provider_message_id="wamid.submit", from_phone=GUEST,
+        message_type="interactive", text="", button_id="bk:submit"), ai=None)
+
+    owner_prompts = [p for phone, p in channel.prompts if phone == OWNER]
+    assert owner_prompts, "the owner was never told about the request"
+    titles = [b.title for b in owner_prompts[-1].buttons]
+    assert titles == ["Approve", "Reject"]
+
+
+def test_the_flow_works_even_when_the_ai_is_down(db):
+    """ai=None is the AI-down case; the request and the event still happen."""
+    outcome = _tap_through(db, phone="+919000000902")
+    assert outcome.events and outcome.events[0]["type"] == "booking_requested"
+
+
+# --- figures come from the engine, never the flow --------------------------
+
+def test_the_amount_shown_matches_the_pricing_engine(db):
+    outcome = _tap_through(db, room="AC", food="1", terms="FULL")
+    event = outcome.events[0]
+    start = booking_flow._window({"check_in": event["check_in"], "nights": 2})[0]
+    end = start.replace(hour=0) + __import__("datetime").timedelta(days=2)
+    q = pricing.quote(db, room_type="AC", food_included=True, start=start,
+                      end=end, mode="daily", stay_mode="NIGHT", guests=1)
+    assert Decimal(event["charges_total"]) == q.charges_total
+
+
+def test_the_review_shows_the_amount_before_submitting(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:guests:1")
+    _step(db, bid="bk:room:AC")
+    _step(db, bid="bk:food:1")
+    _step(db, bid="bk:terms:ADVANCE")
+    review = _step(db, text="Dummy Guest")
+    assert "Total: Rs" in review.reply
+    assert review.prompt is not None
+    assert [b.title for b in review.prompt.buttons] == ["Submit", "Start over", "Cancel"]
+
+
+def test_the_submit_message_carries_the_upi_id(db):
+    outcome = _tap_through(db, terms="ADVANCE")
+    assert booking_flow.DEFAULT_UPI in outcome.reply
+
+
+# --- entry points ----------------------------------------------------------
+
+def test_availability_answer_offers_a_book_button(db):
+    reply = router.route(db, "Availability", button_id="menu:availability")
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons] == ["menu:book"]
+
+
+def test_typed_book_a_room_starts_the_flow(db):
+    reply = router.route(db, "I want to book a room", phone=GUEST)
+    assert reply.handled is True
+    assert reply.intent == "book"
+    assert reply.prompt is not None
+
+
+def test_my_bookings_is_honest_when_empty(db):
+    reply = router.route(db, "my bookings", phone=GUEST)
+    assert reply.handled is True
+    assert "don't have any bookings" in reply.text
+
+
+def test_my_bookings_shows_only_this_guests_own(db):
+    _tap_through(db, phone=GUEST)
+    mine = router.route(db, "my bookings", phone=GUEST)
+    assert "SPG-" in mine.text
+    someone_else = router.route(db, "my bookings", phone="+919000000909")
+    assert "SPG-" not in someone_else.text
+
+
+# --- the address never goes past code --------------------------------------
+
+@pytest.mark.parametrize("text", [
+    "where exactly is sagar hostel",
+    "where",
+    "address please",
+    "what is the full address",
+])
+def test_address_questions_are_answered_by_code(db, text):
+    assert router.classify(text) == "location"
+
+
+# --- the escape hatch ------------------------------------------------------
+
+def test_a_greeting_abandons_the_flow_and_shows_the_menu(db):
+    _step(db, bid="menu:book")
+    outcome = _step(db, text="hi")
+    assert outcome.intent == "greeting"
+    assert not booking_flow.is_active(db, GUEST)
+
+
+def test_cancel_abandons_the_flow(db):
+    _step(db, bid="menu:book")
+    outcome = _step(db, text="cancel")
+    assert not booking_flow.is_active(db, GUEST)
+    assert "cancel" in outcome.reply.lower()
