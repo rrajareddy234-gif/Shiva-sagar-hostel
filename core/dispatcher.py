@@ -174,10 +174,10 @@ def _request_summary(event: dict) -> str:
     terms = event.get("payment_terms") or "ADVANCE"
     if terms == "FULL":
         # The guest pays the whole amount up front, so there is no separate
-        # advance to show; an "Advance due: Rs 0" line would only confuse.
+        # reservation to show; a "Reservation due: Rs 0" line would only confuse.
         pay_line = f"Pay now (full): Rs {event.get('charges_total')}"
     else:
-        pay_line = f"Advance due: Rs {event.get('advance_due')}"
+        pay_line = f"Reservation due: Rs {event.get('advance_due')}"
     lines = [
         f"New booking request {event['reference']}",
         f"{event.get('guest_name') or 'Guest'} - {party}",
@@ -193,10 +193,18 @@ def _request_summary(event: dict) -> str:
 
 def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
            prompt: Prompt | None = None, file: DataFile | None = None) -> bool:
-    """Send the reply, preferring tappable answers when the router offered them.
+    """Send the answer, then the tappable answers, when the router offered them.
 
-    A prompt is a nicety, never a requirement: if it cannot be sent, the guest
-    still gets the plain text. An invalid prompt is not attempted at all.
+    A prompt is a nicety, never a replacement for the answer. It used to be sent
+    *instead of* `text`, which silently dropped the answer: "we have 4 beds free,
+    - AC: 1 free, ..." became the bare question "Would you like to book a room?",
+    and the whole 798-character rate card became "Which room type would you
+    like?". The guest was left wondering what had happened.
+
+    So the body goes first and the prompt follows, as a second message. The one
+    exception is a prompt whose body *is* the answer -- the food question, "AC
+    room. With food or without?". There the prompt replaces the text, because
+    sending both would repeat the same sentence twice.
     """
     if file is not None:
         # The file carries the answer; the text is only a caption. If the file
@@ -211,25 +219,38 @@ def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
         text = ("I could not send the file just now. Please ask me again in a "
                 "moment. Nothing has changed in your records.")
 
-    if prompt is not None and prompt.is_valid():
-        result = channel.send_interactive(phone, prompt)
-        if result.ok:
-            inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
-            return True
-        if not result.retryable:
-            # Sending the text now would be a second message to the same guest
-            # while Meta is throttling this pair, which is counted against the
-            # same limit and deepens the block. Stop, and leave it for the guest
-            # to retry once the window passes.
-            log.error("could not send to %s, and a retry would worsen the "
-                      "throttle: %s", phone, result.error)
-            return False
-        log.warning("interactive send failed for %s, falling back to text: %s",
-                    phone, result.error)
+    usable = prompt is not None and prompt.is_valid()
+    carries_the_answer = usable and prompt.body.strip() == text.strip()
 
-    result = channel.send_text(phone, text)
-    if not result.ok:
-        log.error("could not send to %s: %s", phone, result.error)
-        return False
-    inbox.record_outbound(db, phone, text, result.provider_message_id)
+    if not carries_the_answer:
+        result = channel.send_text(phone, text)
+        if not result.ok:
+            log.error("could not send to %s: %s", phone, result.error)
+            return False
+        inbox.record_outbound(db, phone, text, result.provider_message_id)
+
+    if not usable:
+        return True
+
+    result = channel.send_interactive(phone, prompt)
+    if result.ok:
+        inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
+        return True
+    if not result.retryable:
+        # Sending anything else now would be another message to the same guest
+        # while Meta is throttling this pair, which is counted against the same
+        # limit and deepens the block.
+        log.error("could not send the buttons to %s, and a retry would worsen "
+                  "the throttle: %s", phone, result.error)
+        return True
+    log.warning("interactive send failed for %s: %s", phone, result.error)
+    if carries_the_answer:
+        # The prompt held the only copy of the answer, so the guest has heard
+        # nothing yet. Fall back to plain text; if that fails the message stays
+        # unprocessed and can be retried.
+        result = channel.send_text(phone, text)
+        if not result.ok:
+            log.error("could not send to %s: %s", phone, result.error)
+            return False
+        inbox.record_outbound(db, phone, text, result.provider_message_id)
     return True

@@ -587,3 +587,56 @@ Tests: `test_a_rate_limited_send_is_marked_not_retryable`,
 `test_a_throttled_plain_text_reply_is_attempted_once`. `FakeChannel` gained
 `throttle` and an `attempts` list, because a test that only inspects successful
 sends cannot tell "did not try" from "tried and failed".
+
+## A prompt is not the answer (2026-11-05)
+
+The owner reported two things: "check availability gives me a Book Room button
+instead of the vacancies", and "advance payment gives sumup, not the nights,
+guests or totals".
+
+Both were one bug. `_reply` sent the prompt **instead of** the reply text:
+
+```python
+if prompt is not None and prompt.is_valid():
+    result = channel.send_interactive(phone, prompt)   # text never sent
+```
+
+So the guest saw only the question. Measured, that is:
+
+| the guest asked | the router's answer | the guest saw |
+| --- | --- | --- |
+| `do you have a room free` | 156 chars: "We have 68 beds free... - AC: 17 free" | "Would you like to book a room?" |
+| `what are your prices` | 798 chars: the whole rate card | "Our rates are per bed. Which room type?" |
+
+The router had done its job every time. The answer was computed, then thrown
+away. That is why availability looked like a bare button and the payment step
+looked like it had "no details" -- the details were in the text that never went
+out.
+
+`_reply` now sends the body first, then the prompt. One exception: when the
+prompt body *is* the answer (the food question, "AC room. With food or
+without?"), the prompt replaces the text, because sending both repeats the
+sentence. If that prompt fails, the same words fall back to text, so the guest
+is never left with nothing.
+
+This doubles the outbound messages for replies that carry a prompt, which is
+worth watching against the Meta per-pair throttle above. The alternative was
+dropping the answer, which is worse.
+
+**Wording.** The guest-facing word for the non-refundable up-front amount is now
+**reservation**, not advance, and it is always labelled NOT refundable:
+
+- payment step: buttons `Reservation` / `Full amount`
+- review summary: rate, nights, guests, total, reservation, balance at check-in,
+  and "The reservation of Rs X is NOT refundable."
+- the bill: "(of which Rs X is the reservation)" and "The reservation is NOT
+  refundable."
+- `billing.advance_notice` says "minimum reservation" and "NOT refundable"
+
+The code, the `ADVANCE` button id, the `payment_terms` column and the
+`advance_due` field keep their names: renaming them would churn the database and
+the tool schema for no gain a guest can see. Only the words a guest reads
+changed.
+
+`scripts/build_demo_page.py` taps button labels, so its `[Advance]` became
+`[Reservation]`; the pages are generated, so they cannot drift.

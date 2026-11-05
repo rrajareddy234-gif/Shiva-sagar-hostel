@@ -80,8 +80,8 @@ def advance_notice(db: Database, guests_count: int) -> str:
     amount = advance_due(db, guests_count)
     people = int(guests_count or 1)
     party = "person" if people == 1 else "people"
-    return (f"To reserve your bed, pay a minimum advance of Rs {amount:,.0f} "
-            f"({people} {party}). This advance is not refundable. It counts "
+    return (f"To reserve your bed, pay a minimum reservation of Rs {amount:,.0f} "
+            f"({people} {party}). This reservation is NOT refundable. It counts "
             f"toward your bill, and you may pay the full amount instead if you "
             f"prefer.")
 
@@ -327,8 +327,9 @@ def render_invoice(invoice: Invoice) -> str:
     lines.append(f"Total: Rs {invoice.total:,.0f}")
     lines.append(f"Paid: Rs {invoice.paid:,.0f}")
     if invoice.non_refundable > 0:
-        lines.append(f"  (of which Rs {invoice.non_refundable:,.0f} advance is "
-                     f"not refundable)")
+        lines.append(f"  (of which Rs {invoice.non_refundable:,.0f} is the "
+                     f"reservation)")
+        lines.append("  The reservation is NOT refundable.")
     lines.append(f"Balance due: Rs {invoice.balance_due:,.0f}")
     if invoice.settled:
         lines.append("")

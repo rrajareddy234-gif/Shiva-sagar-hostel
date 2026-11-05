@@ -18,6 +18,7 @@ from core import availability, billing, booking, hostel_facts, inbox, pricing
 from core.channel.adapter import Button, Prompt
 from core.db import Database
 from core.errors import BedUnavailable, BookingConflict, DomainError
+from core.pricing import money
 
 log = logging.getLogger(__name__)
 
@@ -230,9 +231,9 @@ def _ask_terms(db: Database) -> FlowResult:
     return FlowResult(
         "How would you like to pay?",
         prompt=Prompt(
-            body=("Advance pays the minimum now and the rest at check-in. "
-                  "Full pays the whole amount now."),
-            buttons=(Button(f"{_NS}terms:ADVANCE", "Advance"),
+            body=("Reservation pays a minimum now to hold the bed, and the rest "
+                  "at check-in. Full pays the whole amount now."),
+            buttons=(Button(f"{_NS}terms:ADVANCE", "Reservation"),
                      Button(f"{_NS}terms:FULL", "Full amount"))))
 
 
@@ -259,16 +260,30 @@ def _review(db: Database, phone: str, state: dict) -> FlowResult:
 
     total = q.charges_total
     advance = billing.advance_due(db, guests) if terms == "ADVANCE" else total
+    balance = money(total - advance)
 
     lines = [
         "Please check your booking:",
         f"- Room: {ROOM_LABEL.get(room_type, room_type)}",
         f"- Food: {'included' if q.food_included else 'not included'}",
         f"- Check-in: {start_at.date().isoformat()}",
+        f"- Check-out: {end_at.date().isoformat()}",
         f"- Nights: {state['nights']}",
         f"- Guests: {guests}",
+        f"- Rate: {_rupees(q.unit_rate)} per bed per night",
         f"- Total: {_rupees(total)}",
-        f"- Pay now ({'advance' if terms == 'ADVANCE' else 'full'}): {_rupees(advance)}",
+    ]
+    if terms == "ADVANCE":
+        lines += [
+            f"- Reservation (pay now): {_rupees(advance)}",
+            f"- Balance at check-in: {_rupees(balance)}",
+            "",
+            f"The reservation of {_rupees(advance)} is NOT refundable. It is "
+            f"part of your total, not an extra charge.",
+        ]
+    else:
+        lines.append(f"- Pay now (full): {_rupees(total)}")
+    lines += [
         "",
         "Tap Submit and I will send this to the owner. The owner confirms the "
         "booking; nothing is held until they do.",
@@ -439,9 +454,17 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
 
     lines = [
         f"Request {request.reference} sent to the owner.",
+        f"Room: {ROOM_LABEL.get(state.get('room_type'), state.get('room_type'))}",
+        f"Dates: {start_at.date().isoformat()} to {end_at.date().isoformat()} "
+        f"({state.get('nights')} night(s))",
+        f"Guests: {guests}",
         f"Total: {_rupees(total)}",
-        (f"Pay now (advance): {_rupees(advance)}" if terms == "ADVANCE"
+        (f"Reservation (pay now): {_rupees(advance)}" if terms == "ADVANCE"
          else f"Pay now (full): {_rupees(total)}"),
+    ]
+    if terms == "ADVANCE":
+        lines.append(f"Balance at check-in: {_rupees(money(total - advance))}")
+    lines += [
         "",
         f"Pay to UPI: {upi}",
     ]
@@ -449,6 +472,13 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         lines.append(f"Scan the QR: {qr}")
     lines += [
         "Send your payment screenshot here after paying.",
+    ]
+    if terms == "ADVANCE":
+        lines += [
+            "",
+            f"The reservation of {_rupees(advance)} is NOT refundable.",
+        ]
+    lines += [
         "",
         "The owner will confirm shortly. Your bed is not held until they do.",
     ]

@@ -49,7 +49,7 @@ GUEST_SCRIPT = [
     "[2 guests]",
     "[AC]",
     "[With food]",
-    "[Advance]",
+    "[Reservation]",
     "Ravi Kumar",
     "[Submit]",
     "[My Bookings]",

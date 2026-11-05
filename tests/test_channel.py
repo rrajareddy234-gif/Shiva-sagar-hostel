@@ -362,12 +362,12 @@ def test_an_ordinary_failure_stays_retryable(adapter, monkeypatch):
     assert result.retryable is True
 
 
-def test_a_throttled_prompt_does_not_trigger_a_second_message(db, channel):
+def test_a_throttled_reply_is_attempted_once(db, channel):
     """One throttled send must not be followed by another.
 
-    Meta counts each message to the pair against the same limit, so the
-    interactive-then-text fallback turns one refusal into two more messages
-    while the guest is already blocked. The reply must stop instead.
+    Meta counts each message to the pair against the same limit, so a fallback
+    after a refusal turns one refusal into two messages while the guest is
+    already blocked. A throttled reply makes exactly one attempt and stops.
     """
     from core.channel.adapter import Button, Prompt
     from core.dispatcher import _reply
@@ -376,13 +376,49 @@ def test_a_throttled_prompt_does_not_trigger_a_second_message(db, channel):
     prompt = Prompt(body="Would you like to book a room?",
                     buttons=(Button("book", "Book"),))
 
-    sent = _reply(db, channel, "+919000009999", "Would you like to book a room?",
-                  prompt=prompt)
+    sent = _reply(db, channel, "+919000009999",
+                  "We have 4 beds free for 1 night.", prompt=prompt)
 
-    assert sent is False
-    assert channel.attempts == ["interactive"], (
-        "the prompt was tried, but the text fallback must not run while "
-        "throttled: a second message is counted against the same limit")
+    assert sent is False, "the guest heard nothing, so the message must be retried"
+    assert channel.attempts == ["text"], (
+        "exactly one attempt: a second message to a throttled pair is counted "
+        "against the same limit and deepens the block")
+
+
+def test_a_failed_prompt_falls_back_to_text_when_it_holds_the_answer(db, channel):
+    """The food question sends its body as the prompt. If the prompt fails, the
+    guest has heard nothing, so the same words go out as plain text."""
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.fail_interactive = True
+    body = "AC room. With food or without?"
+    prompt = Prompt(body=body, buttons=(Button("food:1", "With food"),
+                                        Button("food:0", "Without food")))
+
+    sent = _reply(db, channel, "+919000009999", body, prompt=prompt)
+
+    assert sent is True
+    assert channel.attempts == ["interactive", "text"], \
+        "the prompt is tried once, then the same words as plain text"
+    assert channel.sent == [("+919000009999", body)]
+
+
+def test_a_failed_prompt_does_not_repeat_an_answer_already_sent(db, channel):
+    """When the text carried the answer, a failed prompt is not re-sent."""
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.fail_interactive = True
+    prompt = Prompt(body="Would you like to book a room?",
+                    buttons=(Button("book", "Book"),))
+
+    sent = _reply(db, channel, "+919000009999",
+                  "We have 4 beds free for 1 night.", prompt=prompt)
+
+    assert sent is True
+    assert channel.attempts == ["text", "interactive"], \
+        "the answer went out; the prompt failed once and was not repeated"
 
 
 def test_a_throttled_plain_text_reply_is_attempted_once(db, channel):

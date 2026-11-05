@@ -54,7 +54,8 @@ def test_a_negative_advance_is_refused(db, seeded):
 def test_the_notice_says_it_is_not_refundable(db, seeded):
     notice = billing.advance_notice(db, 2)
     assert "200" in notice
-    assert "not refundable" in notice
+    assert "NOT refundable" in notice
+    assert "reservation" in notice.lower()
     assert "full amount" in notice
 
 

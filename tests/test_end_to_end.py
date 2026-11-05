@@ -96,10 +96,12 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
     """Enquiry, booking request, owner approval, payment, check-in, checkout."""
     from core import booking
 
-    # 1. The guest asks for prices. The router answers with taps, not a wall of
-    #    text, and no AI call is made.
+    # 1. The guest asks for prices. The router sends the rate card, then offers
+    #    the room types as buttons, and no AI call is made.
     send(client, "what are your prices?")
     assert "which room type" in last_prompt(channel, GUEST).lower()
+    assert "rs 300" in last_reply(channel, GUEST).lower(), \
+        "the rate card itself must reach the guest, not just the question"
     assert db.query_one(
         "SELECT count(*) AS n FROM ai_usage")["n"] == 0, "no AI call was needed"
 
@@ -228,8 +230,10 @@ def test_a_duplicate_webhook_delivery_replies_once(client, channel, db):
 
     replies = [s for s in channel.sent if s[0] == GUEST]
     prompts = [p for ph, p in channel.prompts if ph == GUEST]
-    assert len(replies) + len(prompts) == 1, \
-        "Meta retries deliveries; the guest must not get two replies"
+    # The rate card is sent once, and the prompt follows it once. Counting the
+    # two together would hide a duplicate.
+    assert len(replies) == 1, "Meta retries deliveries; the guest must not get two replies"
+    assert len(prompts) == 1, "the room-type prompt goes out exactly once"
 
 
 def test_an_outage_leaves_the_message_for_a_retry(client, db):

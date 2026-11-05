@@ -180,23 +180,30 @@ def test_a_price_question_gets_tappable_answers(client, db, channel):
 def test_the_reply_is_recorded_as_outbound(client, db, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
-    row = db.query_one("SELECT body, direction FROM messages WHERE direction = 'OUT'")
-    assert row["direction"] == "OUT"
-    assert "which room type" in row["body"].lower()
+    rows = db.query_all(
+        "SELECT body FROM messages WHERE direction = 'OUT' ORDER BY received_at")
+    assert len(rows) == 2, "the rate card and the room-type prompt are both stored"
+    bodies = "\n".join(r["body"] or "" for r in rows).lower()
+    assert "rs 300" in bodies, "the rate card reached the guest"
+    assert "which room type" in bodies, "the prompt followed it"
 
 
 def test_a_greeting_gets_a_reply(client, channel):
     body = _payload(text="hello")
     client.post("/webhook", content=body, headers=_signed(body))
+    # The greeting sends the help text, then offers the menu as a list.
+    assert len(channel.sent) == 1
     assert len(channel.prompts) == 1
-    assert len(channel.sent) == 0
 
 
 def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) + len(channel.prompts) == 1
+    # One reply, and at most one prompt alongside it: Meta retries deliveries,
+    # and the guest must not be answered twice.
+    assert len(channel.sent) == 1
+    assert len(channel.prompts) <= 1
 
 
 def test_a_failed_button_send_still_replies_with_text(db, seeded):
@@ -273,7 +280,11 @@ def test_several_rapid_messages_each_get_one_reply(client, db, channel):
     for i in range(4):
         body = _payload(message_id=f"wamid.RAPID{i}", text="what is the price?")
         client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) + len(channel.prompts) == 4
+    # One reply per message, and one prompt alongside each. A prompt is no
+    # longer a substitute for the reply, so counting the two together would
+    # hide a duplicate.
+    assert len(channel.sent) == 4
+    assert len(channel.prompts) == 4
 
 
 # --- transport hardening ---------------------------------------------------
