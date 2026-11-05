@@ -44,7 +44,7 @@ docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
 docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/seed.sql
 
-python -m pytest            # 600 tests
+python -m pytest            # 605 tests
 cp .env.example .env        # then fill in the values
 uvicorn api.main:app --reload
 ```

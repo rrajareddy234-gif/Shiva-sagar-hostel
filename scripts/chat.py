@@ -88,7 +88,7 @@ class ConsoleChannel(ChannelAdapter):
         _print_reply(prompt.body)
         options = prompt.rows or prompt.buttons
         if options:
-            self.last_options = {o.title: o.id for o in options}
+            self.last_options.update({o.title: o.id for o in options})
             line = "  ".join(f"[{o.title}]" for o in options)
             print(f"   {_dim(line)}")
             print(f"   {_dim('(tap: type the bracketed label, e.g. ' + '[' + options[0].title + ']' + ')')}")
