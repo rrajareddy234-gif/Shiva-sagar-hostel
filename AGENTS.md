@@ -706,3 +706,31 @@ showed the old location reply with no map link. Nothing failed; the page was
 simply old.
 
 Run the generator after any change a guest would see, before committing.
+
+## What a workspace recycle takes, and what it leaves (2026-11-05)
+
+Measured, not assumed. On 2026-11-05 the workspace recycled mid-conversation:
+the machine booted at 16:31 while the conversation had started at 10:14. Docker
+came back at 16:53 and the Python packages were reinstalled at 16:57 -- that is
+the window where `import psycopg` fails and the DB looks empty.
+
+The split is by mount, and it decides everything:
+
+| Path | Disk | Survives a recycle? |
+| --- | --- | --- |
+| `/workspace` (the repo, `.git`, commits) | `/dev/nvme0n2` ext4 | **yes** |
+| `/`, `/tmp`, `/home`, site-packages | overlay | no |
+| Docker daemon, the `sagarpg-pg` container | overlay | no |
+| Running processes (app, watchdog) | memory | no |
+
+So **code survives; anything running does not.** A watchdog, a keeper, or any
+other self-healing loop placed in `/tmp` dies with the workspace and cannot
+restart anything -- it is a guarantee that does not hold. The keeper script tried
+in `/tmp/sagar-keeper.sh` only helps while the workspace is alive; it is useless
+across a recycle.
+
+Recovery is `bash scripts/watch_app.sh`, which calls `start_app.sh` to bring back
+Docker, the packages, the database and the app, then starts the watchdog. It is
+safe to run repeatedly. Nothing here can bring itself back from a recycle: the
+durable answer is a real server (`deploy/docker-compose.yml` already sets
+`restart: unless-stopped`) plus an external uptime check.
