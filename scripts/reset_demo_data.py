@@ -26,15 +26,17 @@ from core.db import Database  # noqa: E402
 # People and money. Order matters: children before the guests they point at.
 DEMO_TABLES = (
     "booking_extras", "payments", "invoice_lines", "invoices", "bed_holds",
-    "bookings", "referrals", "partners", "guests",
+    "service_orders", "bookings", "referrals", "partners", "guests",
     "audit_log", "ai_usage",
 )
 
 # The owner's own setup, plus the record of real inbound contact. Never touched.
 # An enquiry is created from a real WhatsApp message, so it is kept alongside
-# the conversation and messages that produced it.
+# the conversation and messages that produced it. The services and promotions
+# are the owner's price list, so they stay with the rate card.
 KEEP_TABLES = ("rooms", "beds", "rate_plans", "monthly_plans", "extras",
-               "settings", "conversations", "messages", "enquiries")
+               "services", "promotions", "settings", "conversations",
+               "messages", "enquiries")
 
 
 def main() -> int:
