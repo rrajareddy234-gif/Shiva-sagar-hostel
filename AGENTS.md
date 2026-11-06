@@ -734,3 +734,41 @@ Docker, the packages, the database and the app, then starts the watchdog. It is
 safe to run repeatedly. Nothing here can bring itself back from a recycle: the
 durable answer is a real server (`deploy/docker-compose.yml` already sets
 `restart: unless-stopped`) plus an external uptime check.
+
+## The lean deployment: n8n is optional (2026-11-06)
+
+The repo ships **two** compose files. Both run the same app, database and HTTPS.
+
+| | `deploy/docker-compose.yml` | `deploy/docker-compose.lite.yml` |
+| --- | --- | --- |
+| Services | postgres, app, **n8n**, caddy | postgres, app, **scheduler**, caddy |
+| Memory | ~500 MB | ~110 MB (measured: app 62 MB, pg 106 MB) |
+| Logins | 2 (n8n + dashboard) | 1 (dashboard) |
+| Secret that must never change | 2 (incl. `N8N_ENCRYPTION_KEY`) | 1 |
+
+**The webhook never went through n8n.** `deploy/Caddyfile` sends `/webhook`
+straight to the app, which verifies the Meta signature itself. n8n handled the
+schedule only. That is why n8n can be removed without touching the WhatsApp
+path — `deploy/Caddyfile.lite` does exactly that and refuses unknown paths
+instead of proxying them.
+
+`deploy/scheduler.py` replaces it. Job due-ness is the pure function
+`due_jobs(now, last_runs)`, so `tests/test_scheduler.py` checks the timing
+without a clock. Message wording moved out of the workflows' JavaScript (covered
+by nothing) into `core/reports.py` (covered by `tests/test_reports.py`). The
+`/jobs` endpoints now return a `text` field, so the wording has one home.
+
+**Silence is deliberate.** `core/reports.py` returns `None` for a healthy
+system and an empty day. Messaging on a timer trains the owner to ignore the
+alerts, including the one that matters. A *failure*, though, always becomes a
+message: `Scheduler.fetch` parses a 503 body, because
+`/jobs/health-check` answers 503 *with* the problem text.
+
+Note for the recovery loop: `watch_app.sh` restores the app on port 12000, and
+the app only picks up edited Python after a restart — the watchdog does that
+within its 30 s interval, so an edit needs a restart before it is observable
+over HTTP.
+
+Lint: `ruff.toml` now carries a documented `deploy/scheduler.py` entry for
+S108/S310, following the existing audited-convention pattern used for
+`scripts/*`.
