@@ -99,22 +99,24 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
             return Outcome(reply=flow.reply, handled_by="router", intent="service",
                            prompt=flow.prompt, events=flow.events)
 
-        # A guest with a live booking is held on "wait for the owner" before the
-        # router or the AI can answer. This is what stops a duplicate request and
-        # stops the AI promising a bed the owner has not confirmed. A deliberate
-        # tap (My Bookings) is allowed through: it is a status request, and the
-        # router answers it from the same records.
-        if button_id is None:
-            held = sticky.reply_for(db, phone=phone, text=text)
-            if held is not None:
-                return Outcome(reply=held, handled_by="router",
-                               intent="booking_status")
-
         customer_reply = router.route(db, text, role=role, button_id=button_id,
                                       phone=phone)
         if customer_reply.handled:
             return Outcome(reply=customer_reply.text, handled_by="router",
                            intent=customer_reply.intent, prompt=customer_reply.prompt)
+
+        # The guest has a live request and the router had nothing to say about
+        # this message. Rather than let the AI promise a bed or invent an amount,
+        # hold them on the one true answer: the request is with the owner. A
+        # question the router *can* answer -- location, prices, Wi-Fi -- was
+        # answered above and never reaches here, so a waiting guest is never
+        # walled off from the rest of the hostel. A second booking request is
+        # refused inside the router, which is where a duplicate would be made.
+        if button_id is None:
+            held = sticky.reply_for(db, phone=phone, text=text)
+            if held is not None:
+                return Outcome(reply=held, handled_by="router",
+                               intent="booking_status")
 
     if ai is None:
         return Outcome(reply=_fallback(role), handled_by="fallback", escalate=True)

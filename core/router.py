@@ -20,7 +20,7 @@ from core.db import Database
 
 HELP = (
     "I can help with room availability, prices, and booking requests for "
-    "Sagar PG Hostel. Tell me your check-in date and how many nights you need, "
+    "Sagar PG Hostel. Tell me your check-in date and how many days you need, "
     "and whether you want AC and food."
 )
 
@@ -71,7 +71,15 @@ _THANKS = re.compile(r"\b(thank|thanks|thank you|dhanyavad)\b", re.I)
 # "Book a Room" typed, and its close cousins. A booking must be caught here so
 # it never falls to the AI, which would only chat and never make the request.
 _BOOK = re.compile(r"\b(book|booking|reserve|reservation|"
-                   r"i want a room|need a room|room (kavali|kavale))\b", re.I)
+                   r"i want .{0,12}room|need .{0,12}room|"
+                   r"room (kavali|kavale))\b", re.I)
+# A walk-in service: a wash-and-change, or a bed for a few hours. These are
+# priced from the rate card like any other stay, so they are claimed here rather
+# than left to the AI, which has no way to create the order.
+_SERVICE = re.compile(r"\b(fresh[- ]?up|freshen up|wash and change|"
+                      r"rest (for )?\d*\s*(hour|hr|hours|hrs)|"
+                      r"rest\b.*\b(hour|hr|hours|hrs)|short stay|"
+                      r"few hours)\b", re.I)
 _BOOKINGS_WORD = re.compile(r"\b(my bookings?|my reservation|my stay|"
                             r"booking status|status of my)\b", re.I)
 _NIGHTS = re.compile(r"(\d+)\s*(night|nights|day|days|din|roju)", re.I)
@@ -94,6 +102,10 @@ def classify(text: str | None) -> str:
     # guest asking for their own bookings does not want to start a new one.
     if _BOOKINGS_WORD.search(text):
         return "my_bookings"
+    # A walk-in service before "book": "rest for 3 hours" is a counter sale, not
+    # a room booking, and only the service flow can create the order.
+    if _SERVICE.search(text):
+        return "service"
     # A typed booking request is claimed here, never left to the AI: the AI would
     # chat about it and no request would ever reach the owner.
     if _BOOK.search(text):
@@ -155,8 +167,17 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         held = sticky.reply_for(db, phone=phone)
         if held is not None:
             return Reply(held, handled=True, intent=intent)
-        flow = booking_flow.start(db, phone=phone)
+        flow = booking_flow.start(db, phone=phone, text=text)
         return Reply(flow.reply, handled=True, intent=intent, prompt=flow.prompt)
+
+    if intent == "service":
+        if not phone:
+            return Reply("", handled=False, needs_ai=True, intent=intent)
+        from core import sticky
+        held = sticky.reply_for(db, phone=phone)
+        if held is not None:
+            return Reply(held, handled=True, intent="booking_status")
+        return _service_menu(db, phone)
 
     if intent == "facilities":
         # A stored answer is specific ("yes, there is wifi, password is X"),

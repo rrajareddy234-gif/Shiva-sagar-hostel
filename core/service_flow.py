@@ -280,8 +280,8 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         "",
         "Please WAIT for the final confirmation. The owner will first confirm "
         "your reservation and the payment, and only then is it confirmed.",
-        "Until then, whatever you send, I will only repeat this: wait for the "
-        "owner's final confirmation.",
+        "Until then, please do not send another request. You can still ask me "
+        "about prices, directions or facilities while you wait.",
     ]
     event = {
         "type": "service_requested",

@@ -102,8 +102,8 @@ Legend: **Guest** = what the visitor sends. **Bot** = the automatic reply.
 > Please WAIT for the final confirmation. The owner will first confirm your
 > reservation and the payment, and only then is your booking confirmed. Your bed
 > is not held until they do.
-> Until then, please do not send another booking request. Whatever you send now,
-> I will only repeat this: wait for the owner's final confirmation.
+> Until then, please do not send another booking request. You can still ask me
+> about prices, directions or facilities while you wait.
 
 > **Owner (your number):** New booking request SPG-2026-000123 from 90000 00555.
 > Non-AC, 2 nights, 1 guest, with food. Total Rs 500, reservation Rs 200.
@@ -113,8 +113,9 @@ Legend: **Guest** = what the visitor sends. **Bot** = the automatic reply.
 
 ## 2. The guest waits (and cannot double-book)
 
-After the request above, everything the guest sends gets the same honest answer,
-and no second request is created.
+While a request is with the owner, the guest cannot start a second one. Ordinary
+questions — prices, directions, facilities — are still answered, so a waiting
+guest is never left with nothing but the same line over and over.
 
 > **Guest:** is my room confirmed?
 
@@ -126,8 +127,8 @@ and no second request is created.
 >
 > If you have not paid yet, pay to UPI: 8688397996@postbank and send the
 > screenshot here.
-> Whatever else you send now, I can only repeat this: please wait for the owner's
-> confirmation.
+> I cannot start another booking until the owner decides on this one. You can
+> still ask me about prices, directions or facilities.
 
 > **Guest:** _[taps Book a Room again]_
 
@@ -201,8 +202,8 @@ and no second request is created.
 >
 > Please WAIT for the final confirmation. The owner will first confirm your
 > reservation and the payment, and only then is it confirmed.
-> Until then, whatever you send, I will only repeat this: wait for the owner's
-> final confirmation.
+> Until then, please do not send another request. You can still ask me about
+> prices, directions or facilities while you wait.
 
 ---
 
@@ -255,8 +256,8 @@ and no second request is created.
 >
 > Please WAIT for the final confirmation. The owner will first confirm your
 > reservation and the payment, and only then is it confirmed.
-> Until then, whatever you send, I will only repeat this: wait for the owner's
-> final confirmation.
+> Until then, please do not send another request. You can still ask me about
+> prices, directions or facilities while you wait.
 
 Note: the bed is shown as busy only for those three hours. After 1:00 PM the same
 bed can be sold for the night.

@@ -193,10 +193,117 @@ def handle(db: Database, *, phone: str, text: str | None = None,
     return None
 
 
-def start(db: Database, *, phone: str) -> FlowResult:
-    """Begin a booking: ask for the check-in date."""
-    _save(db, phone, {"step": "date"})
-    return _ask_date(db)
+def start(db: Database, *, phone: str, text: str | None = None) -> FlowResult:
+    """Begin a booking, using whatever the guest already told us.
+
+    A guest who opens with "book from 1 December for 2 nights, AC with food" has
+    answered three of our questions before we ask them. Reading those answers
+    here means we ask only for what is still missing, instead of ignoring the
+    message and starting from scratch.
+    """
+    state: dict = {}
+    if text:
+        _prefill(db, state, text)
+    state["step"] = "date"
+    _save(db, phone, state)
+    return _first_missing(db, phone=phone, state=state)
+
+
+def _prefill(db: Database, state: dict, text: str) -> None:
+    """Seed the flow from the guest's opening message. Never guesses."""
+    lowered = (text or "").lower()
+    check_in = _parse_date(text)
+    if check_in:
+        state["check_in"] = check_in.date().isoformat()
+
+    nights = _nights_from_text(text)
+    if nights and check_in:
+        state["check_out"] = (check_in + timedelta(days=nights)).date().isoformat()
+        # The unit the guest used settles the night/day question for us: "2
+        # nights" is a night stay, "3 days" is a day stay.
+        if re.search(r"\d+\s*(nights?|din|roju)", lowered) or \
+                re.search(r"\ba night\b|\bper night\b|\bnight stay\b", lowered):
+            state["stay_mode"] = "NIGHT"
+        elif re.search(r"\d+\s*days?", lowered) or re.search(r"\ba day\b", lowered):
+            state["stay_mode"] = "DAY"
+
+    room = _room_from_text(db, text)
+    if room:
+        state["room_type"] = room
+        options = _food_options(db, room)
+        if len(options) == 1:
+            state["food"] = options[0]
+
+    if "non" not in lowered:
+        if re.search(r"\bno food\b|\bwithout food\b", lowered):
+            state["food"] = False
+        elif re.search(r"\bwith food\b|\bfood\b|\bmeals\b", lowered):
+            state["food"] = True
+
+    guests = _guests_from_text(text)
+    if guests:
+        state["guests"] = guests
+
+    if re.search(r"\bday stay\b|\bfull day\b", lowered):
+        state["stay_mode"] = "DAY"
+    elif re.search(r"\bnight stay\b|\bper night\b", lowered):
+        state["stay_mode"] = "NIGHT"
+
+
+def _first_missing(db: Database, *, phone: str, state: dict) -> FlowResult:
+    """Ask for the earliest answer we still need, in the usual order."""
+    if not state.get("check_in"):
+        return _ask_date(db)
+    if not state.get("check_out"):
+        state["step"] = "checkout"
+        _save(db, phone, state)
+        return _ask_checkout(db, state)
+    if not state.get("stay_mode"):
+        state["step"] = "stay"
+        _save(db, phone, state)
+        return _ask_stay(db)
+    if not state.get("check_in_time"):
+        state["step"] = "times"
+        _save(db, phone, state)
+        return _ask_times(db, state)
+    if not state.get("guests"):
+        state["step"] = "guests"
+        _save(db, phone, state)
+        return _ask_guests(db)
+    if not state.get("room_type"):
+        state["step"] = "room"
+        _save(db, phone, state)
+        return _ask_room(db, state)
+    if state.get("food") is None:
+        state["step"] = "food"
+        _save(db, phone, state)
+        asked = _ask_food(db, state["room_type"])
+        if asked is not None:
+            return asked
+    state["step"] = "terms"
+    _save(db, phone, state)
+    return _ask_terms(db)
+
+
+def _nights_from_text(text: str | None) -> int | None:
+    """A stay length the guest wrote, in days. None when they did not say."""
+    lowered = (text or "").lower()
+    match = re.search(r"(\d+)\s*(nights?|days?|din|roju)", lowered)
+    if match:
+        return _clamp(match.group(1), 1, CHECKOUT_MAX_NIGHTS)
+    if re.search(r"\bone week\b|\b1 week\b|\ba week\b", lowered):
+        return 7
+    if re.search(r"\bmonth\b|\b1 month\b", lowered):
+        return 30
+    return None
+
+
+def _guests_from_text(text: str | None) -> int | None:
+    match = re.search(r"(\d+)\s*(guests?|people|persons?|members?|log|mandi)",
+                      (text or "").lower())
+    if match:
+        return _clamp(match.group(1), 1, GUESTS_MAX)
+    return None
 
 
 # --- steps -----------------------------------------------------------------
@@ -626,9 +733,9 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
             return _ask_date(db)
         day = today + timedelta(days=offset)
         state["check_in"] = day.isoformat()
-        state["step"] = "checkout"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_checkout(db, state)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "cout":
         check_in = _date_of(state.get("check_in"))
@@ -639,15 +746,15 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
             return _ask_checkout(db, state)
         day = check_in + timedelta(days=n)
         state["check_out"] = day.isoformat()
-        state["step"] = "stay"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_stay(db)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "stay":
         state["stay_mode"] = "DAY" if value == "DAY" else "NIGHT"
-        state["step"] = "times"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_times(db, state)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "times":
         check_in = _date_of(state.get("check_in"))
@@ -660,18 +767,18 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
             times = _parse_time_range(value, state) or _default_times(check_in, check_out)
         state["check_in_time"] = times["check_in_time"]
         state["check_out_time"] = times["check_out_time"]
-        state["step"] = "guests"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_guests(db)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "guests":
         n = _clamp(value, 1, GUESTS_MAX)
         if n is None:
             return _ask_guests(db)
         state["guests"] = n
-        state["step"] = "room"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_room(db, state)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "room":
         if value not in _room_types(db):
@@ -688,9 +795,9 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
 
     if verb == "food":
         state["food"] = value == "1"
-        state["step"] = "terms"
+        state.pop("step", None)
         _save(db, phone, state)
-        return _ask_terms(db)
+        return _first_missing(db, phone=phone, state=state)
 
     if verb == "terms":
         state["terms"] = "FULL" if value == "FULL" else "ADVANCE"
@@ -713,7 +820,36 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
             return _restart(db, phone)
         return _submit(db, phone=phone, state=state)
 
-    return FlowResult("I didn't understand that tap. Tap Book a Room to start again.")
+    return _reask(db, phone=phone, state=state)
+
+
+def _reask(db: Database, *, phone: str, state: dict) -> FlowResult:
+    """A tap we did not recognise: re-ask the question the guest is on.
+
+    A stray tap -- a stale button, a double tap, an id from an old message --
+    must not throw the booking away. The guest is asked the current question
+    again, so the flow carries on from where it was.
+    """
+    step = state.get("step")
+    if step == "checkout":
+        return _ask_checkout(db, state)
+    if step == "stay":
+        return _ask_stay(db)
+    if step == "times":
+        return _ask_times(db, state)
+    if step == "guests":
+        return _ask_guests(db)
+    if step == "room":
+        return _ask_room(db, state)
+    if step == "food":
+        return _ask_food(db, state["room_type"]) or _ask_terms(db)
+    if step == "terms":
+        return _ask_terms(db)
+    if step == "name":
+        return _ask_name(db, phone)
+    if step == _CONFIRM_STEP:
+        return _answer_confirm(db, phone=phone, state=state, text="")
+    return _ask_date(db)
 
 
 # --- submit ----------------------------------------------------------------
@@ -810,9 +946,8 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         "Please WAIT for the final confirmation. The owner will first confirm "
         "your reservation and the payment, and only then is your booking "
         "confirmed. Your bed is not held until they do.",
-        "Until then, please do not send another booking request. Whatever you "
-        "send now, I will only repeat this: wait for the owner's final "
-        "confirmation.",
+        "Until then, please do not send another booking request. You can still "
+        "ask me about prices, directions or facilities while you wait.",
     ]
 
     event = {
@@ -970,19 +1105,95 @@ def _known_name(db: Database, phone: str) -> str | None:
 
 
 def _parse_date(text: str | None) -> datetime | None:
+    """Read a date the way a guest writes one.
+
+    Handles "today" / "tomorrow" / "day after tomorrow" anywhere in the message,
+    an ISO or numeric date (2026-11-20, 20-11-2026, 20/11/2026) and a date with a
+    month name, either order ("1 December", "December 1", "1st Dec"). A
+    month-and-day with no year is read as the next time that date comes round, so
+    "1 December" in November means this year and in December means next year.
+    """
     value = (text or "").strip().lower()
     today = datetime.now().astimezone()
-    if value in ("today", "now"):
-        return today.replace(hour=0, minute=0, second=0, microsecond=0)
-    if value == "tomorrow":
-        return (today + timedelta(days=1)).replace(hour=0, minute=0, second=0,
-                                                   microsecond=0)
+    midnight = today.replace(hour=0, minute=0, second=0, microsecond=0)
+    if re.search(r"\bday after tomorrow\b|\bdayafter\b", value):
+        return midnight + timedelta(days=2)
+    if re.search(r"\btomorrow\b", value):
+        return midnight + timedelta(days=1)
+    if re.search(r"\btoday\b|\bnow\b|\btonight\b", value):
+        return midnight
     for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
         try:
             return datetime.strptime(value, fmt).replace(tzinfo=today.tzinfo)
         except ValueError:
             continue
+    found = _parse_numeric_date(value, today) or _parse_named_date(value, today)
+    if found:
+        return found.replace(tzinfo=today.tzinfo)
     return None
+
+
+# A numeric date sitting inside a longer sentence, as "book 3 days from
+# 2026-12-01" or "check in on 20/11/2026".
+_NUMERIC_DATE = re.compile(
+    r"\b(\d{4})-(\d{1,2})-(\d{1,2})\b"
+    r"|\b(\d{1,2})[-/](\d{1,2})[-/](\d{4})\b")
+
+
+def _parse_numeric_date(value: str, today: datetime) -> datetime | None:
+    match = _NUMERIC_DATE.search(value)
+    if not match:
+        return None
+    if match.group(1):
+        year, month, day = (int(match.group(1)), int(match.group(2)),
+                            int(match.group(3)))
+    else:
+        day, month, year = (int(match.group(4)), int(match.group(5)),
+                            int(match.group(6)))
+    try:
+        return datetime(year, month, day)
+    except ValueError:
+        return None
+
+
+_MONTHS = {
+    "jan": 1, "january": 1, "feb": 2, "february": 2, "mar": 3, "march": 3,
+    "apr": 4, "april": 4, "may": 5, "jun": 6, "june": 6, "jul": 7, "july": 7,
+    "aug": 8, "august": 8, "sep": 9, "sept": 9, "september": 9, "oct": 10,
+    "october": 10, "nov": 11, "november": 11, "dec": 12, "december": 12,
+}
+# Only real month names count as a month, so "from 1" is not read as month
+# "from". The alternation is built from _MONTHS, longest first so "sept" is
+# preferred over "sep".
+_MONTH_ALT = "|".join(sorted(_MONTHS, key=len, reverse=True))
+_NAMED_DATE = re.compile(
+    rf"\b(\d{{1,2}})\s*(?:st|nd|rd|th)?\s+({_MONTH_ALT})\b"     # 1 December
+    rf"|\b({_MONTH_ALT})\s+(\d{{1,2}})\s*(?:st|nd|rd|th)?\b",   # December 1
+    re.I)
+
+
+def _parse_named_date(value: str, today: datetime) -> datetime | None:
+    match = _NAMED_DATE.search(value)
+    if not match:
+        return None
+    if match.group(1):
+        day_text, month_text = match.group(1), match.group(2)
+    else:
+        day_text, month_text = match.group(4), match.group(3)
+    month = _MONTHS.get(month_text[:9].lower())
+    if not month:
+        return None
+    day = int(day_text)
+    try:
+        candidate = datetime(today.year, month, day)
+    except ValueError:
+        return None
+    if candidate.date() < today.date():
+        try:
+            candidate = candidate.replace(year=today.year + 1)
+        except ValueError:
+            return None
+    return candidate
 
 
 def _first_number(text: str | None) -> str | None:

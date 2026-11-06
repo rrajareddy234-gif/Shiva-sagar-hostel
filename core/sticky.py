@@ -76,8 +76,8 @@ def reply_for(db: Database, *, phone: str, text: str | None = None) -> str | Non
         tail,
         "",
         f"If you have not paid yet, pay to UPI: {upi} and send the screenshot here.",
-        "Whatever else you send now, I can only repeat this: please wait for the "
-        "owner's confirmation.",
+        "I cannot start another booking until the owner decides on this one. "
+        "You can still ask me about prices, directions or facilities.",
     ]
     return "\n".join(lines)
 
@@ -119,8 +119,8 @@ def _service_reply(db: Database, *, phone: str) -> str | None:
         tail,
         "",
         f"If you have not paid yet, pay to UPI: {upi} and send the screenshot here.",
-        "Whatever else you send now, I can only repeat this: please wait for the "
-        "owner's confirmation.",
+        "I cannot start another request until the owner decides on this one. "
+        "You can still ask me about prices, directions or facilities.",
     ])
 
 
