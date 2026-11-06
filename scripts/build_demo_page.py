@@ -53,6 +53,8 @@ TIMELINE = [
     ("guest", "[Book a Room]"),
     ("guest", "[Tomorrow]"),
     ("guest", "[2 nights]"),
+    ("guest", "[Night (dinner)]"),
+    ("guest", "[Skip]"),
     ("guest", "[2 guests]"),
     ("guest", "[AC]"),
     ("guest", "[With food]"),

@@ -78,3 +78,29 @@ def test_the_timeline_shows_both_people_and_both_decisions():
     assert "guest" in who and "owner" in who
     assert steps.index("[Approve]") < steps.index("[screenshot]") < steps.index("[Confirm]")
     assert "[screenshot]" in steps
+
+
+def test_the_demo_booking_script_reaches_the_bill_and_the_submit():
+    """The demo page must walk a booking all the way to the bill and the submit.
+
+    A stale script once skipped the night/day and time questions, so every tap
+    after "2 nights" landed on the wrong step and the page never showed the
+    bill, the Submit, or the owner's two decisions. These labels are the taps
+    the real flow offers, in order; if the flow changes, this fails loudly.
+    """
+    from scripts.build_demo_page import TIMELINE
+    steps = [m for _, m in TIMELINE]
+    # Scope to the booking block: the price section also taps AC and With food.
+    start = steps.index("[Book a Room]")
+    block = steps[start:]
+    required = ["[Book a Room]", "[Tomorrow]", "[2 nights]", "[Night (dinner)]",
+                "[Skip]", "[2 guests]", "[AC]", "[With food]", "[Reservation]",
+                "[Submit]"]
+    for label in required:
+        assert label in block, f"the demo script is missing {label}"
+    # The order must match the flow, or a tap lands on the wrong question.
+    order = [block.index(label) for label in required]
+    assert order == sorted(order), "the demo taps are out of flow order"
+    # And the two owner decisions must follow the submit.
+    assert steps.index("[Submit]") < steps.index("[Approve]")
+    assert steps.index("[Approve]") < steps.index("[screenshot]") < steps.index("[Confirm]")
