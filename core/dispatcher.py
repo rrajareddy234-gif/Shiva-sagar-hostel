@@ -11,6 +11,8 @@ plain fallback so they are never left without a reply.
 from __future__ import annotations
 
 import logging
+import os
+from datetime import UTC, datetime
 
 from ai.adapter import AIClient
 from core import alerts, handler, inbox, security
@@ -89,6 +91,16 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     """
     auto = auto_replies_go_out(db, settings, message.from_phone)
 
+    # A payment screenshot is an image with no text. It is not routed like a
+    # message: the guest has paid and is waiting, so it is filed, forwarded to
+    # the owner, and acknowledged. The bot never reads the image -- it cannot --
+    # the owner checks the money.
+    if message.media_id and message.message_type in ("image", "document"):
+        _handle_payment_proof(db, channel=channel, settings=settings, message=message)
+        if message_id:
+            inbox.mark_processed(db, message_id)
+        return True
+
     # A tap is a text message the guest did not have to type. It carries the
     # button id, so it is handled exactly like typed text.
     if not message.button_id and (message.message_type != "text"
@@ -144,6 +156,9 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
                 db, channel=channel, owner_phone=settings.owner_phone,
                 reference=event["reference"],
                 summary=_request_summary(event))
+        elif event.get("type") in ("booking_accepted", "booking_confirmed",
+                                   "booking_rejected"):
+            _notify_booking_event(db, channel=channel, settings=settings, event=event)
 
     if not auto:
         log.info("auto-reply paused; stored and handled %s from %s without replying",
@@ -160,6 +175,119 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     if message_id:
         inbox.mark_processed(db, message_id)
     return True
+
+
+def _handle_payment_proof(db: Database, *, channel: ChannelAdapter,
+                          settings: Settings, message) -> None:
+    """File a guest's payment screenshot and pass it to the owner to check.
+
+    Which booking it belongs to is the guest's most recent booking that is
+    waiting on payment. That is the only booking a screenshot can sensibly be
+    about, and guessing beyond it -- at an older booking, say -- would be worse
+    than asking. When there is no such booking the guest is told so.
+    """
+    from core import booking, booking_notices
+
+    row = db.query_one(
+        """
+        SELECT bk.* FROM bookings bk JOIN guests g ON g.guest_id = bk.guest_id
+        WHERE g.phone = %s AND bk.status = 'ACCEPTED'
+        ORDER BY bk.created_at DESC LIMIT 1
+        """,
+        (message.from_phone,))
+
+    if not row:
+        _reply(db, channel, message.from_phone,
+               "Thank you for the screenshot. I could not find a booking of yours "
+               "waiting for payment. Please send the booking reference, or make "
+               "your booking first.")
+        return
+
+    content = None
+    media_type = message.media_type or "image/jpeg"
+    try:
+        fetched = channel.fetch_media(message.media_id)
+        if fetched:
+            content, fetched_type = fetched
+            media_type = fetched_type or media_type
+    except Exception as exc:
+        log.warning("could not download proof for %s: %s", row["reference"], exc)
+
+    path = _store_proof(settings.payment_proof_dir, row["reference"], content, media_type)
+
+    try:
+        booking.mark_proof_sent(db, str(row["booking_id"]), proof_path=path)
+    except Exception as exc:
+        log.warning("could not mark proof sent for %s: %s", row["reference"], exc)
+        _reply(db, channel, message.from_phone,
+               "Thank you for the screenshot. Something went wrong saving it; "
+               "please send it again or contact the owner.")
+        return
+
+    updated = booking.get_booking(db, str(row["booking_id"]))
+    booking_notices.notify_proof_received(
+        db, updated, channel=channel, owner_phone=settings.owner_phone,
+        content=content, filename=f"{row['reference']}-payment{_suffix(media_type)}",
+        media_type=media_type)
+
+    # The owner is asked to check the money with a one-tap confirm.
+    alerts.notify_new_request(
+        db, channel=channel, owner_phone=settings.owner_phone,
+        reference=row["reference"],
+        summary=(f"{row['reference']}: the guest says they have paid and sent a "
+                 f"screenshot. Check the payment, then Confirm to finish the "
+                 f"booking."))
+
+
+def _suffix(media_type: str) -> str:
+    return {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+            "application/pdf": ".pdf"}.get(media_type, ".jpg")
+
+
+def _store_proof(directory: str, reference: str, content: bytes | None,
+                 media_type: str) -> str | None:
+    """Write the screenshot to disk. Returns the path, or None if unavailable.
+
+    A failure to store is not fatal: the booking is still marked as awaiting the
+    owner's check, and the image may have reached them through the chat anyway.
+    """
+    if not content:
+        return None
+    try:
+        os.makedirs(directory, exist_ok=True)
+        stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+        name = f"{reference}-{stamp}{_suffix(media_type)}"
+        path = os.path.join(directory, name)
+        with open(path, "wb") as handle:
+            handle.write(content)
+        return path
+    except Exception as exc:
+        log.warning("could not store payment proof for %s: %s", reference, exc)
+        return None
+
+
+def _notify_booking_event(db: Database, *, channel: ChannelAdapter,
+                          settings: Settings, event: dict) -> None:
+    """Tell the guest about an owner decision, and copy the owner by email.
+
+    Best effort: the owner's own reply has already been produced, and the
+    booking has already changed. A failure to reach WhatsApp or the mail server
+    must not undo either.
+    """
+    from core import booking, booking_notices
+    try:
+        row = booking.get_booking(db, event["booking_id"])
+    except Exception as exc:
+        log.warning("could not load booking %s to notify: %s", event.get("booking_id"), exc)
+        return
+    action = {"booking_accepted": "accepted", "booking_confirmed": "confirmed",
+              "booking_rejected": "rejected"}.get(event["type"])
+    if action is None:
+        return
+    try:
+        booking_notices.notify_decision(db, row, channel=channel, action=action)
+    except Exception as exc:
+        log.warning("could not notify about %s: %s", row.get("reference"), exc)
 
 
 def _request_summary(event: dict) -> str:

@@ -59,6 +59,10 @@ class CommandResult:
     # Tappable answers to offer with the reply, when the owner has a choice to
     # make. Used to let the owner approve or reject a booking with one tap.
     prompt: Prompt | None = None
+    # Side effects the caller must carry out, such as telling the guest their
+    # booking was accepted. The command layer has no channel, so it never sends
+    # these itself; the dispatcher does.
+    events: tuple[dict, ...] = ()
 
 
 # --- owner buttons ---------------------------------------------------------
@@ -368,20 +372,46 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
 
         if action == "approve_booking":
             row = _resolve_booking(db, command.get("reference"))
+            status = row["status"]
+            if status in ("REQUESTED",):
+                # The owner's first decision: accept, and ask the guest to pay.
+                accepted = booking.accept(db, str(row["booking_id"]), actor=actor,
+                                          reason="owner command")
+                return CommandResult(
+                    text=f"Booking {row['reference']} is ACCEPTED. The guest has "
+                         f"been told to pay the advance to the UPI ID, with the "
+                         f"payee name to check.\n"
+                         f"Once they send the payment screenshot, you will be "
+                         f"asked to confirm.",
+                    applied=True, action=action,
+                    events=({"type": "booking_accepted",
+                             "booking_id": str(accepted["booking_id"]),
+                             "reference": accepted["reference"]},))
+            # Second decision (or a guest paying cash, where the owner knows the
+            # money is fine): confirm the booking.
             booking.approve(db, str(row["booking_id"]), actor=actor,
                             override=bool(command.get("override")),
                             reason="owner command")
+            confirmed = booking.get_booking(db, str(row["booking_id"]))
             return CommandResult(
-                text=f"Booking {row['reference']} is confirmed. "
-                     f"The guest can be told their bed is held.",
-                applied=True, action=action)
+                text=f"Booking {row['reference']} is CONFIRMED. The guest has been "
+                     f"sent the final confirmation with every detail, and a copy "
+                     f"has been emailed to you.",
+                applied=True, action=action,
+                events=({"type": "booking_confirmed",
+                         "booking_id": str(confirmed["booking_id"]),
+                         "reference": confirmed["reference"]},))
 
         if action == "reject_booking":
             row = _resolve_booking(db, command.get("reference"))
             booking.reject(db, str(row["booking_id"]), actor=actor, reason="owner command")
             return CommandResult(
-                text=f"Booking {row['reference']} is rejected and the bed is free.",
-                applied=True, action=action)
+                text=f"Booking {row['reference']} is rejected and the bed is free. "
+                     f"The guest has been told.",
+                applied=True, action=action,
+                events=({"type": "booking_rejected",
+                         "booking_id": str(row["booking_id"]),
+                         "reference": row["reference"]},))
 
         if action == "cancel_booking":
             row = _resolve_booking(db, command.get("reference"))

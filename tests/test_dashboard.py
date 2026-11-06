@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from core import dashboard, export
+from core import booking, dashboard, export
 from tests.conftest import DASHBOARD_PASSWORD, IST
 
 pytestmark = pytest.mark.usefixtures("seeded")
@@ -190,6 +190,17 @@ def _waiting(db, *, name="Vikram Rao", phone="+919000000905", bed="6NA-B2"):
 def test_the_owner_can_approve_a_booking_from_the_page(db):
     request = _waiting(db)
     result = dashboard.approve_booking(db, request.reference, actor="owner-dashboard")
+    # The first approval accepts the booking and asks the guest to pay; the
+    # booking is still waiting on the owner, for the payment check.
+    assert result["status"] == "ACCEPTED"
+    assert dashboard.guests(db)[0].status == "ACCEPTED"
+
+
+def test_the_owner_confirms_from_the_page_after_the_payment(db):
+    request = _waiting(db)
+    dashboard.approve_booking(db, request.reference, actor="owner-dashboard")
+    booking.mark_proof_sent(db, request.booking_id, proof_path="/tmp/p.jpg")
+    result = dashboard.approve_booking(db, request.reference, actor="owner-dashboard")
     assert result["status"] == "CONFIRMED"
     assert dashboard.overview(db, _now())["pending"] == 0
     assert dashboard.guests(db)[0].status == "CONFIRMED"
@@ -206,7 +217,7 @@ def test_a_decision_is_recorded_in_the_audit_log(db):
     request = _waiting(db)
     dashboard.approve_booking(db, request.reference, actor="owner-dashboard")
     row = db.query_one(
-        "SELECT actor, action FROM audit_log WHERE action = 'booking_approved' "
+        "SELECT actor, action FROM audit_log WHERE action = 'booking_accepted' "
         "ORDER BY at DESC LIMIT 1")
     assert row["actor"] == "owner-dashboard"
 
@@ -219,10 +230,12 @@ def test_an_unknown_reference_is_refused_clearly(db):
 
 
 def test_a_bed_taken_while_waiting_is_not_silently_double_booked(db):
-    """The exclusion constraint and the approve check both hold on this path."""
+    """The exclusion constraint and the accept check both hold on this path."""
     from core.errors import BedUnavailable
 
     first = _waiting(db, name="Vikram Rao", phone="+919000000905", bed="6NA-B2")
+    dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
+    booking.mark_proof_sent(db, first.booking_id, proof_path="/tmp/p.jpg")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
 
     second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
@@ -232,10 +245,26 @@ def test_a_bed_taken_while_waiting_is_not_silently_double_booked(db):
 
 def test_the_buttons_only_appear_for_the_owner(client, db):
     _waiting(db)
-    assert "Approve" not in client.get("/dashboard").text
+    assert "Reject" not in client.get("/dashboard").text
     client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD})
     page = client.get("/dashboard").text
-    assert "Approve" in page and "Reject" in page
+    assert "Accept" in page and "Reject" in page
+
+
+def test_the_page_says_which_step_each_waiting_booking_is_at(client, db):
+    """A fresh request and a payment check must not look the same to the owner."""
+    fresh = _waiting(db, name="Fresh Guest", phone="+919000000911", bed="6NA-B1")
+    paid = _waiting(db, name="Paid Guest", phone="+919000000912", bed="6NA-B2")
+    dashboard.approve_booking(db, paid.reference, actor="owner-dashboard")
+    booking.mark_proof_sent(db, paid.booking_id, proof_path="/tmp/p.jpg")
+
+    client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD})
+    page = client.get("/dashboard").text
+    assert "New request - ask to pay" in page
+    assert "Payment sent - check it" in page
+    # The two rows offer the two different decisions, by name.
+    assert "Accept" in page and "Confirm" in page
+    assert fresh.reference in page and paid.reference in page
 
 
 def test_a_tap_without_the_password_changes_nothing(client, db):
@@ -249,18 +278,22 @@ def test_a_tap_without_the_password_changes_nothing(client, db):
     assert dashboard.overview(db, _now())["pending"] == 1
 
 
-def test_a_tap_from_the_owner_confirms_and_says_so(client, db):
+def test_a_tap_from_the_owner_accepts_and_says_so(client, db):
     request = _waiting(db)
     client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD})
     response = client.post("/dashboard/decide",
                            data={"reference": request.reference,
                                  "decision": "approve"}, follow_redirects=True)
-    assert "is confirmed" in response.text
+    assert "is accepted" in response.text
+    # Nothing is waiting on the owner now: the guest owes the payment. The
+    # booking comes back to the owner's list when the screenshot arrives.
     assert dashboard.overview(db, _now())["pending"] == 0
 
 
 def test_a_tap_on_a_bed_that_was_taken_shows_a_clear_message(client, db):
     first = _waiting(db, name="Vikram Rao", phone="+919000000905", bed="6NA-B2")
+    dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
+    booking.mark_proof_sent(db, first.booking_id, proof_path="/tmp/p.jpg")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
     second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
 

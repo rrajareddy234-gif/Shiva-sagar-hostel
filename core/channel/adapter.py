@@ -30,6 +30,10 @@ class InboundMessage:
     # nickname or a business name. It is stored as WHATSAPP_PROFILE so it can
     # never overwrite a name the guest typed or the owner entered.
     profile_name: str | None = None
+    # The provider's id for an attached image or document, so the caller can
+    # download it. Set for media messages; None for text.
+    media_id: str | None = None
+    media_type: str | None = None      # provider's mime type, e.g. image/jpeg
 
 
 @dataclass(frozen=True)
@@ -121,6 +125,15 @@ class ChannelAdapter(ABC):
         the same contract as send_interactive: a nicety, never a requirement.
         """
         return SendResult(ok=False, error="this channel cannot send documents")
+
+    def fetch_media(self, media_id: str) -> tuple[bytes, str] | None:
+        """Download an inbound image or document. None when unsupported.
+
+        The guest's payment screenshot is fetched through here so it can be
+        filed and forwarded to the owner. The bot never reads the bytes -- it
+        has no way to -- it only moves the image from the chat to the owner.
+        """
+        return None
 
     def verify_challenge(self, query: dict[str, str]) -> str | None:
         """Handle the GET webhook verification handshake.

@@ -79,6 +79,7 @@ class Job:
 JOBS: tuple[Job, ...] = (
     Job("health-check", "/jobs/health-check", every_minutes=10),
     Job("pending-requests", "/jobs/pending-requests", every_minutes=15),
+    Job("expire-holds", "/jobs/expire-holds", every_minutes=15),
     Job("unanswered-enquiries", "/jobs/unanswered-enquiries", every_minutes=30),
     Job("daily-report", "/jobs/daily-report", at="07:30"),
     Job("upcoming", "/jobs/upcoming", at="20:00"),

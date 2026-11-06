@@ -14,7 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from functools import lru_cache
 
-from core import availability, booking, payments
+from core import availability, booking, booking_notices, payments
 from core.db import Database
 from core.errors import NotFound
 
@@ -98,7 +98,14 @@ def overview(db: Database, now: datetime) -> dict:
 
 
 def pending_requests(db: Database) -> list[dict]:
-    """Bookings waiting for the owner, ready to show as a small list."""
+    """Bookings waiting for the owner, ready to show as a small list.
+
+    Each row says which of the two decisions it is waiting on: a fresh request
+    the owner has not accepted, or a guest who has sent payment and needs the
+    money checked. The two look identical otherwise, and the owner reading the
+    page has to know whether the tap will ask the guest to pay or confirm the
+    bed. `booking.pending_requests` carries the status for exactly this.
+    """
     rows = booking.pending_requests(db)
     return [
         {
@@ -109,6 +116,9 @@ def pending_requests(db: Database) -> list[dict]:
             "check_in": _day(r["check_in_at"]),
             "check_out": _day(r["check_out_at"]),
             "amount": _rupees(r["charges_total"] or 0),
+            "step": ("Payment sent - check it"
+                     if r["status"] == "PROOF_SENT" else "New request - ask to pay"),
+            "action": "Confirm" if r["status"] == "PROOF_SENT" else "Accept",
         }
         for r in rows
     ]
@@ -124,22 +134,47 @@ def _resolve(db: Database, reference: str) -> dict:
     return row
 
 
-def approve_booking(db: Database, reference: str, *, actor: str) -> dict:
-    """Confirm a waiting booking, exactly as the owner's WhatsApp command does.
+def approve_booking(db: Database, reference: str, *, actor: str,
+                    channel=None) -> dict:
+    """The owner's approval, in whichever step the booking is waiting at.
 
-    The safety checks are the same ones the chat runs: a bed that was taken
-    while the request waited is refused, and a bed that is not ready needs an
-    owner override. Nothing here bypasses them.
+    A request that has not been accepted is accepted first -- the guest is told
+    to pay, and this is the same decision the chat's Approve button makes. A
+    booking already waiting on a payment check is confirmed. The safety checks
+    are the same ones the chat runs: a bed taken while the request waited is
+    refused, and a bed that is not ready needs an owner override.
+
+    The guest is told either way, through the same notices the chat sends. A
+    decision taken on the page must reach the guest exactly as a typed command
+    does; without this the page would confirm bookings in silence.
     """
     row = _resolve(db, reference)
+    if row["status"] == "REQUESTED":
+        accepted = booking.accept(db, str(row["booking_id"]), actor=actor,
+                                  reason="owner dashboard")
+        booking_notices.notify_decision(db, accepted, channel=channel,
+                                        action="accepted")
+        return {"reference": accepted["reference"], "status": "ACCEPTED"}
     booking.approve(db, str(row["booking_id"]), actor=actor, reason="owner dashboard")
+    confirmed = booking.get_booking(db, str(row["booking_id"]))
+    booking_notices.notify_decision(db, confirmed, channel=channel,
+                                    action="confirmed")
     return {"reference": row["reference"], "status": "CONFIRMED"}
 
 
-def reject_booking(db: Database, reference: str, *, actor: str) -> dict:
-    """Reject a waiting booking, which frees its bed."""
+def reject_booking(db: Database, reference: str, *, actor: str,
+                   channel=None) -> dict:
+    """Reject a waiting booking, which frees its bed.
+
+    The guest is told, for the same reason: a guest who was asked to pay and
+    then hears nothing would keep waiting, and one who paid needs to know to
+    ask for a refund.
+    """
     row = _resolve(db, reference)
     booking.reject(db, str(row["booking_id"]), actor=actor, reason="owner dashboard")
+    rejected = booking.get_booking(db, str(row["booking_id"]))
+    booking_notices.notify_decision(db, rejected, channel=channel,
+                                    action="rejected")
     return {"reference": row["reference"], "status": "REJECTED"}
 
 

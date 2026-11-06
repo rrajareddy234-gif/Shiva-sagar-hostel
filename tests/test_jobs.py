@@ -207,3 +207,60 @@ def test_notify_owner_reports_a_send_failure(client, channel):
     channel.fail = True
     response = client.post("/jobs/notify-owner", json={"text": "hello"}, headers=AUTH)
     assert response.status_code == 502
+
+
+# --- expiring lapsed holds -------------------------------------------------
+
+def test_expire_holds_requires_a_token(client):
+    assert client.post("/jobs/expire-holds").status_code == 401
+
+
+def test_expire_holds_frees_a_bed_an_unpaid_acceptance_was_holding(client, db):
+    """The promise accept() makes: an unpaid acceptance lets the bed go."""
+    from datetime import datetime, timedelta
+
+    from core import booking
+    from tests.conftest import IST
+    owner = "+919999999999"
+    start = (datetime.now(IST) + timedelta(days=2)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
+    request = booking.create_request(
+        db, phone="+919000003333", full_name="Unpaid Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=2),
+        food_included=True)
+    booking.accept(db, request.booking_id, actor=owner)
+
+    # The payment window lapses, as it would after a day of silence. The hold's
+    # own rule is that it expires after it was created, so both move together.
+    db.execute("UPDATE bed_holds SET created_at = now() - interval '2 hours', "
+               "expires_at = now() - interval '1 hour' WHERE status = 'ACTIVE'")
+
+    body = client.post("/jobs/expire-holds", headers=AUTH).json()
+    assert body["holds_expired"] == 1
+    assert body["bookings_expired"] == 1
+    assert booking.get_booking(db, request.booking_id)["status"] == "EXPIRED"
+
+    # And the bed is genuinely free again: it can be requested by someone else.
+    from core import availability
+    assert availability.bed_is_available(db, "1NA-B1", start,
+                                         start + timedelta(days=2))
+
+
+def test_expire_holds_leaves_a_live_acceptance_alone(client, db):
+    """A guest still inside their payment window must not lose the bed."""
+    from datetime import datetime, timedelta
+
+    from core import booking
+    from tests.conftest import IST
+    owner = "+919999999999"
+    start = (datetime.now(IST) + timedelta(days=2)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
+    request = booking.create_request(
+        db, phone="+919000003334", full_name="Paying Guest", gender="MALE",
+        bed_id="1NA-B2", check_in_at=start, check_out_at=start + timedelta(days=2),
+        food_included=True)
+    booking.accept(db, request.booking_id, actor=owner)
+
+    body = client.post("/jobs/expire-holds", headers=AUTH).json()
+    assert body["bookings_expired"] == 0
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"

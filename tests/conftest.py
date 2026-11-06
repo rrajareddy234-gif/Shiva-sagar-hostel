@@ -217,6 +217,15 @@ class FakeChannel(ChannelAdapter):
         self.documents.append((to_phone, filename, content))
         return SendResult(ok=True, provider_message_id=f"doc.{len(self.documents)}")
 
+    # What a fetch_media call returns for the next inbound image. Tests set this
+    # to stand in for a real WhatsApp download.
+    media_bytes: bytes | None = b"\xff\xd8\xff\xe0fake-jpeg"
+
+    def fetch_media(self, media_id):
+        if self.media_bytes is None:
+            return None
+        return self.media_bytes, "image/jpeg"
+
 
 @pytest.fixture
 def channel() -> FakeChannel:

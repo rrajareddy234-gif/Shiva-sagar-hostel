@@ -175,6 +175,28 @@ def pending_requests(request: Request, x_job_token: str | None = Header(default=
     return payload
 
 
+@router.post("/expire-holds")
+def expire_holds(request: Request, x_job_token: str | None = Header(default=None)) -> dict:
+    """Release beds whose hold has lapsed, and expire the bookings that held them.
+
+    A bed is held while a guest is deciding and while they are paying. Neither
+    hold may last for ever: an owner who accepts a request and a guest who never
+    pays must not keep the bed off the market. This sweep is what makes that
+    true, and it is the reason `accept()` can promise that an unpaid acceptance
+    lets the bed go.
+
+    Two steps, in this order: the lapsed holds are marked EXPIRED, then the
+    REQUESTED and ACCEPTED bookings with no live hold left are marked EXPIRED.
+    Doing the holds first means the booking sweep sees the true state.
+    """
+    _authorise(x_job_token)
+    db: Database = request.app.state.db
+
+    holds = availability.expire_stale_holds(db)
+    bookings = booking.expire_lapsed_requests(db)
+    return {"holds_expired": holds, "bookings_expired": bookings}
+
+
 @router.post("/notify-owner")
 def notify_owner(request: Request, payload: dict,
                  x_job_token: str | None = Header(default=None)) -> dict:

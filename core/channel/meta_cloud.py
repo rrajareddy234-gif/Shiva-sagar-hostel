@@ -78,6 +78,8 @@ class MetaCloudAdapter(ChannelAdapter):
                     msg_type = msg.get("type", "unknown")
                     text = None
                     button_id = None
+                    media_id = None
+                    media_type = None
                     if msg_type == "text":
                         text = (msg.get("text") or {}).get("body")
                     elif msg_type == "interactive":
@@ -87,6 +89,14 @@ class MetaCloudAdapter(ChannelAdapter):
                         # the id, which cannot be mistyped or translated away.
                         button_id = reply.get("id")
                         text = reply.get("title") or button_id
+                    elif msg_type in ("image", "document"):
+                        # A payment screenshot usually arrives as an image, but
+                        # some phones send it as a document. Both carry an id to
+                        # download; keep the caption as text when there is one.
+                        attachment = msg.get(msg_type) or {}
+                        media_id = attachment.get("id")
+                        media_type = attachment.get("mime_type")
+                        text = attachment.get("caption")
                     out.append(InboundMessage(
                         provider_message_id=msg.get("id", ""),
                         from_phone=_normalise_phone(msg.get("from", "")),
@@ -96,6 +106,8 @@ class MetaCloudAdapter(ChannelAdapter):
                         raw=msg,
                         button_id=button_id,
                         profile_name=names.get(_digits(msg.get("from", ""))),
+                        media_id=media_id,
+                        media_type=media_type,
                     ))
         return out
 
@@ -188,6 +200,33 @@ class MetaCloudAdapter(ChannelAdapter):
             "type": "document",
             "document": document,
         })
+
+    def fetch_media(self, media_id: str) -> tuple[bytes, str] | None:
+        """Download an inbound image. Returns (bytes, media_type), or None.
+
+        Two calls: the media id resolves to a temporary URL, and the URL is then
+        fetched with the same bearer token. Both are needed -- the URL alone is
+        rejected. Used to pull the guest's payment screenshot out of the chat.
+        """
+        if not media_id:
+            return None
+        try:
+            meta_req = urllib.request.Request(
+                f"{GRAPH_BASE}/{media_id}",
+                headers={"Authorization": f"Bearer {self._access_token}"})
+            with urllib.request.urlopen(meta_req, timeout=30) as resp:
+                info = json.loads(resp.read().decode("utf-8"))
+            url = info.get("url")
+            media_type = info.get("mime_type") or "application/octet-stream"
+            if not url:
+                return None
+            fetch = urllib.request.Request(
+                url, headers={"Authorization": f"Bearer {self._access_token}"})
+            with urllib.request.urlopen(fetch, timeout=30) as resp:
+                return resp.read(), media_type
+        except Exception as exc:  # network, timeout, bad id
+            log.error("meta media fetch failed: %s", exc)
+            return None
 
     def _upload(self, filename: str, content: bytes, media_type: str) -> str | None:
         """Upload media and return its id, or None on any failure."""

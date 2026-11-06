@@ -73,6 +73,10 @@ class Settings:
     ai_base_url: str | None
     ai_timeout: int = 90
     staff_phones: tuple[str, ...] = ()
+    # Where a guest's payment screenshot is filed. The image is only ever moved
+    # from the chat to this directory and then to the owner; the bot does not
+    # read it. Kept out of the database so a large image cannot bloat a backup.
+    payment_proof_dir: str = "payment_proofs"
     # A temporary pause on outbound WhatsApp replies. True by default: the
     # system behaves exactly as before unless the owner turns it off. While
     # false, incoming messages are still received, logged and handled, and
@@ -98,6 +102,7 @@ class Settings:
             ai_base_url=_env("AI_BASE_URL"),
             ai_timeout=int(_env("AI_TIMEOUT", "90") or 90),
             staff_phones=tuple(p.strip() for p in raw_staff.split(",") if p.strip()),
+            payment_proof_dir=_env("PAYMENT_PROOF_DIR", "payment_proofs"),
             auto_reply_enabled=_env_bool("AUTO_REPLY_ENABLED", True),
         )
 

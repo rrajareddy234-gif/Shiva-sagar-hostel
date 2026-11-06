@@ -578,3 +578,49 @@ CREATE TABLE IF NOT EXISTS guest_reviews (
 );
 CREATE INDEX IF NOT EXISTS idx_guest_reviews_published
     ON guest_reviews(published, created_at DESC);
+
+-- ---------------------------------------------------------------------------
+-- Two more steps in the booking's life, so the owner approves twice.
+--
+-- A request used to jump straight from REQUESTED to CONFIRMED. In practice the
+-- owner wants two decisions: first "yes, take this booking and ask them to
+-- pay", then "yes, I have seen the payment". Those are different decisions
+-- taken at different times, and the guest must hear about both. Encoding them
+-- as statuses means the second approval can never be mistaken for the first,
+-- and a booking can never be confirmed without the owner having looked at the
+-- money.
+--
+--   REQUESTED   the guest asked; the owner has not decided
+--   ACCEPTED    the owner said yes; the guest is asked to pay
+--   PROOF_SENT  the guest says they paid; the owner must check
+--   CONFIRMED   the owner checked the money and confirmed the booking
+--
+-- The no-double-booking exclusion still only counts CONFIRMED and CHECKED_IN:
+-- an ACCEPTED booking holds its bed through `bed_holds`, exactly as a
+-- REQUESTED one did, so widening the status list does not widen the guarantee.
+-- ---------------------------------------------------------------------------
+ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_status_check;
+ALTER TABLE bookings ADD CONSTRAINT bookings_status_check
+    CHECK (status IN ('REQUESTED','ACCEPTED','PROOF_SENT','CONFIRMED','CHECKED_IN',
+                      'CHECKED_OUT','CANCELLED','REJECTED','NO_SHOW','EXPIRED'));
+
+ALTER TABLE booking_beds DROP CONSTRAINT IF EXISTS booking_beds_status_check;
+ALTER TABLE booking_beds ADD CONSTRAINT booking_beds_status_check
+    CHECK (status IN ('REQUESTED','ACCEPTED','PROOF_SENT','CONFIRMED','CHECKED_IN',
+                      'CHECKED_OUT','CANCELLED','REJECTED','NO_SHOW','EXPIRED'));
+
+-- When the owner accepted, and when they finally confirmed after seeing the
+-- money. Both are stamped so the two approvals can be told apart in the audit.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS accepted_by text;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS accepted_at timestamptz;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS final_confirmed_at timestamptz;
+
+-- Where the guest's payment screenshot was stored, when they sent one. The
+-- image itself lives on disk under PAYMENT_PROOF_DIR; this is the path. The
+-- bot never reads the image -- it cannot -- it only files it and hands it to
+-- the owner, who is the one who checks the money.
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_proof_path text;
+ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_proof_at timestamptz;
+
+CREATE INDEX IF NOT EXISTS idx_bookings_awaiting_owner
+    ON bookings(status) WHERE status IN ('REQUESTED','PROOF_SENT');

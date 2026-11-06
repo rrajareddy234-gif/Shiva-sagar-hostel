@@ -103,6 +103,24 @@ def test_approve_is_applied_after_confirmation(db):
                     owner_phone=OWNER)
     result = commands.handle(db, phone=OWNER, text="YES", owner_phone=OWNER)
     assert result.applied is True
+    # The first approval accepts the booking and asks the guest to pay; it does
+    # not confirm it. Confirmation is the owner's second decision, after the
+    # payment is checked.
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"
+
+
+def test_the_second_approval_confirms_the_booking(db):
+    request = _request(db)
+    commands.handle(db, phone=OWNER, text=f"approve booking {request.reference}",
+                    owner_phone=OWNER)
+    commands.handle(db, phone=OWNER, text="YES", owner_phone=OWNER)
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"
+
+    booking.mark_proof_sent(db, request.booking_id, proof_path="/tmp/p.jpg")
+    commands.handle(db, phone=OWNER, text=f"approve booking {request.reference}",
+                    owner_phone=OWNER)
+    result = commands.handle(db, phone=OWNER, text="YES", owner_phone=OWNER)
+    assert result.applied is True
     assert booking.get_booking(db, request.booking_id)["status"] == "CONFIRMED"
 
 
@@ -133,7 +151,7 @@ def test_a_new_command_replaces_a_staged_one(db):
     commands.handle(db, phone=OWNER, text=f"approve booking {second.reference}",
                     owner_phone=OWNER)
     commands.handle(db, phone=OWNER, text="YES", owner_phone=OWNER)
-    assert booking.get_booking(db, second.booking_id)["status"] == "CONFIRMED"
+    assert booking.get_booking(db, second.booking_id)["status"] == "ACCEPTED"
     assert booking.get_booking(db, first.booking_id)["status"] == "REQUESTED"
 
 
@@ -143,7 +161,7 @@ def test_approve_without_a_reference_when_only_one_is_pending(db):
                              owner_phone=OWNER)
     assert "Reply YES" in result.text
     commands.handle(db, phone=OWNER, text="yes", owner_phone=OWNER)
-    assert booking.get_booking(db, request.booking_id)["status"] == "CONFIRMED"
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"
 
 
 def test_approve_without_a_reference_when_several_are_pending(db):
@@ -357,7 +375,26 @@ def test_the_owner_approves_with_a_tap(db):
     assert result.applied is True
     row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
                        (request.booking_id,))
+    # The first tap accepts and asks the guest to pay; a second tap, once the
+    # payment has been checked, confirms.
+    assert row["status"] == "ACCEPTED"
+    assert result.events and result.events[0]["type"] == "booking_accepted"
+
+
+def test_the_second_tap_confirms_after_the_payment_is_checked(db):
+    request = _request(db)
+    commands.handle_button(db, phone=OWNER,
+                           button_id=f"own:approve:{request.reference}",
+                           owner_phone=OWNER)
+    booking.mark_proof_sent(db, request.booking_id, proof_path="/tmp/p.jpg")
+    result = commands.handle_button(db, phone=OWNER,
+                                    button_id=f"own:approve:{request.reference}",
+                                    owner_phone=OWNER)
+    assert result.applied is True
+    row = db.query_one("SELECT status FROM bookings WHERE booking_id = %s",
+                       (request.booking_id,))
     assert row["status"] == "CONFIRMED"
+    assert result.events and result.events[0]["type"] == "booking_confirmed"
 
 
 def test_the_owner_rejects_with_a_tap(db):

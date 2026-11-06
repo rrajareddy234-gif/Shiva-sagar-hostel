@@ -28,8 +28,20 @@ from core.pricing import money
 
 DEFAULT_HOLD_MINUTES = 120
 
+# How long a guest gets to pay once the owner accepts. A day, so a request
+# accepted late at night is not lost before the guest wakes up. The bed is held
+# for exactly this long and no longer: an unpaid acceptance must not block a bed.
+PAYMENT_WINDOW_MINUTES = 24 * 60
+
 ALLOWED_TRANSITIONS = {
-    "REQUESTED": {"CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"},
+    # The owner decides twice. First they accept the request, which is what
+    # tells the guest to pay. Then, once they have seen the payment, they
+    # confirm. A single-step REQUESTED -> CONFIRMED is still allowed for the
+    # owner who already knows the money is fine (a guest paying cash in
+    # person); it is audited like any other transition.
+    "REQUESTED": {"ACCEPTED", "CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"},
+    "ACCEPTED": {"PROOF_SENT", "CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"},
+    "PROOF_SENT": {"CONFIRMED", "REJECTED", "CANCELLED", "EXPIRED"},
     "CONFIRMED": {"CHECKED_IN", "CANCELLED", "NO_SHOW"},
     "CHECKED_IN": {"CHECKED_OUT"},
     "CHECKED_OUT": set(),
@@ -292,6 +304,118 @@ def booking_beds(db: Database, booking_id: str) -> list[str]:
     return [row["bed_id"]] if row else []
 
 
+def _assert_no_confirmed_overlap(cur, booking_id: str, beds: list[str],
+                                 check_in_at, check_out_at) -> None:
+    """Refuse if any bed in the party is already confirmed to someone else.
+
+    This is the soft, friendly half of the no-double-booking rule: the database
+    exclusion constraint is the hard half. Checked before an owner accepts a
+    booking as well as before they confirm it, because a guest must never be
+    asked to pay for a bed that is already someone else's.
+    """
+    for one_bed in beds:
+        cur.execute(
+            """
+            SELECT 1 FROM booking_beds
+            WHERE bed_id = %s
+              AND status = ANY(ARRAY['CONFIRMED','CHECKED_IN'])
+              AND booking_id <> %s
+              AND tstzrange(check_in_at, check_out_at, '[)')
+                  && tstzrange(%s, %s, '[)')
+            LIMIT 1
+            """,
+            (one_bed, booking_id, check_in_at, check_out_at),
+        )
+        if cur.fetchone():
+            raise BedUnavailable(
+                f"bed {one_bed} was taken while the request was pending")
+
+
+def accept(db: Database, booking_id: str, *, actor: str, reason: str | None = None,
+           payment_window_minutes: int = PAYMENT_WINDOW_MINUTES) -> dict:
+    """The owner's first decision: take this booking, and ask the guest to pay.
+
+    This does NOT confirm the booking and does NOT claim the bed in the
+    no-double-booking sense. It moves the request to ACCEPTED and extends the
+    bed hold so the guest has a real window to pay in. If they never pay, the
+    hold lapses and `expire_lapsed_requests` frees the bed -- so accepting a
+    booking can never quietly block a bed forever.
+
+    `payment_window_minutes` is the time the guest gets to pay. It defaults to
+    a day, because a guest who is told "pay now" at midnight should not lose
+    the bed before morning.
+    """
+    if payment_window_minutes <= 0:
+        raise ValidationError("the payment window must be at least a minute")
+    with db.transaction() as cur:
+        cur.execute("SELECT * FROM bookings WHERE booking_id = %s FOR UPDATE", (booking_id,))
+        booking = cur.fetchone()
+        if not booking:
+            raise NotFound(f"booking {booking_id} not found")
+        _require_transition(booking["status"], "ACCEPTED")
+
+        # Never ask a guest to pay for a bed that is already confirmed to
+        # someone else. Better to tell the owner now than to take money and
+        # disappoint the guest at confirmation.
+        beds = booking_beds(db, booking_id) or [booking["bed_id"]]
+        _assert_no_confirmed_overlap(cur, booking_id, beds,
+                                     booking["check_in_at"], booking["check_out_at"])
+
+        cur.execute(
+            "UPDATE bookings SET status = 'ACCEPTED', accepted_by = %s, "
+            "accepted_at = now() WHERE booking_id = %s",
+            (actor, booking_id),
+        )
+        cur.execute(
+            "UPDATE booking_beds SET status = 'ACCEPTED' WHERE booking_id = %s "
+            "AND status = 'REQUESTED'",
+            (booking_id,),
+        )
+        # Give the guest time to pay before the bed is released again.
+        cur.execute(
+            "UPDATE bed_holds SET expires_at = now() + (%s || ' minutes')::interval "
+            "WHERE bed_id = ANY(%s) AND status = 'ACTIVE' "
+            "AND tstzrange(start_at, end_at, '[)') && tstzrange(%s, %s, '[)')",
+            (int(payment_window_minutes), booking_beds(db, booking_id),
+             booking["check_in_at"], booking["check_out_at"]),
+        )
+        _audit(cur, actor, "booking_accepted", "booking", booking_id,
+               {"status": booking["status"]},
+               {"status": "ACCEPTED", "reason": reason,
+                "payment_window_minutes": int(payment_window_minutes)})
+    return get_booking(db, booking_id)
+
+
+def mark_proof_sent(db: Database, booking_id: str, *, proof_path: str | None = None,
+                    actor: str = "guest") -> dict:
+    """The guest says they have paid and sent a screenshot.
+
+    The image itself is filed on disk by the caller; this records that it
+    arrived and where it is. The bot does not read the image and does not
+    decide whether the payment is real -- that is the owner's second approval.
+    """
+    with db.transaction() as cur:
+        cur.execute("SELECT * FROM bookings WHERE booking_id = %s FOR UPDATE", (booking_id,))
+        booking = cur.fetchone()
+        if not booking:
+            raise NotFound(f"booking {booking_id} not found")
+        _require_transition(booking["status"], "PROOF_SENT")
+        cur.execute(
+            "UPDATE bookings SET status = 'PROOF_SENT', payment_proof_path = %s, "
+            "payment_proof_at = now() WHERE booking_id = %s",
+            (proof_path, booking_id),
+        )
+        cur.execute(
+            "UPDATE booking_beds SET status = 'PROOF_SENT' WHERE booking_id = %s "
+            "AND status = 'ACCEPTED'",
+            (booking_id,),
+        )
+        _audit(cur, actor, "booking_proof_sent", "booking", booking_id,
+               {"status": booking["status"]},
+               {"status": "PROOF_SENT", "proof_path": proof_path})
+    return get_booking(db, booking_id)
+
+
 def approve(db: Database, booking_id: str, *, actor: str, override: bool = False,
             reason: str | None = None) -> dict:
     """Owner approval.
@@ -318,22 +442,6 @@ def approve(db: Database, booking_id: str, *, actor: str, override: bool = False
         beds = [r["bed_id"] for r in cur.fetchall()] or [booking["bed_id"]]
 
         for one_bed in beds:
-            cur.execute(
-                """
-                SELECT 1 FROM booking_beds
-                WHERE bed_id = %s
-                  AND status = ANY(ARRAY['CONFIRMED','CHECKED_IN'])
-                  AND booking_id <> %s
-                  AND tstzrange(check_in_at, check_out_at, '[)')
-                      && tstzrange(%s, %s, '[)')
-                LIMIT 1
-                """,
-                (one_bed, booking_id, booking["check_in_at"], booking["check_out_at"]),
-            )
-            if cur.fetchone():
-                raise BedUnavailable(
-                    f"bed {one_bed} was taken while the request was pending")
-
             cur.execute("SELECT status FROM beds WHERE bed_id = %s", (one_bed,))
             bed = cur.fetchone()
             if bed and bed["status"] in ("CLEANING", "MAINTENANCE", "UNAVAILABLE") \
@@ -343,16 +451,19 @@ def approve(db: Database, booking_id: str, *, actor: str, override: bool = False
                     "use an owner override to place a guest anyway"
                 )
 
+        _assert_no_confirmed_overlap(cur, booking_id, beds,
+                                     booking["check_in_at"], booking["check_out_at"])
+
         cur.execute(
-            "UPDATE bookings SET status = 'CONFIRMED', approved_by = %s, approved_at = now() "
-            "WHERE booking_id = %s",
+            "UPDATE bookings SET status = 'CONFIRMED', approved_by = %s, approved_at = now(), "
+            "final_confirmed_at = now() WHERE booking_id = %s",
             (actor, booking_id),
         )
         # Confirm the party's beds in one statement, so the exclusion constraint
         # sees them together and a partial confirmation cannot survive.
         cur.execute(
             "UPDATE booking_beds SET status = 'CONFIRMED' "
-            "WHERE booking_id = %s AND status = 'REQUESTED'",
+            "WHERE booking_id = %s AND status IN ('REQUESTED','ACCEPTED','PROOF_SENT')",
             (booking_id,),
         )
         cur.execute(
@@ -390,7 +501,7 @@ def _close(db: Database, booking_id: str, *, actor: str, target: str,
         cur.execute("UPDATE bookings SET status = %s WHERE booking_id = %s", (target, booking_id))
         cur.execute(
             "UPDATE booking_beds SET status = %s WHERE booking_id = %s "
-            "AND status IN ('REQUESTED','CONFIRMED')",
+            "AND status IN ('REQUESTED','ACCEPTED','PROOF_SENT','CONFIRMED')",
             (target, booking_id),
         )
         cur.execute(
@@ -454,36 +565,58 @@ def mark_bed_ready(db: Database, bed_id: str, *, actor: str) -> None:
 
 
 def expire_lapsed_requests(db: Database) -> int:
-    """Expire requests whose hold has lapsed, so the owner sees what went stale."""
+    """Expire requests whose hold has lapsed, so the owner sees what went stale.
+
+    ACCEPTED is included, and this is the point of it: an acceptance the guest
+    never pays for must not hold a bed for ever. Once the payment window passes
+    and the hold lapses, the bed is free again and the booking shows as EXPIRED
+    so the owner can see it went nowhere.
+    """
     with db.transaction() as cur:
         cur.execute(
             """
             UPDATE bookings SET status = 'EXPIRED'
-            WHERE status = 'REQUESTED'
+            WHERE status IN ('REQUESTED','ACCEPTED')
               AND NOT EXISTS (
                   SELECT 1 FROM bed_holds h
-                  WHERE h.bed_id = bookings.bed_id AND h.status = 'ACTIVE'
+                  WHERE h.bed_id = ANY(
+                            SELECT bed_id FROM booking_beds bb
+                            WHERE bb.booking_id = bookings.booking_id
+                        )
+                    AND h.status = 'ACTIVE'
                     AND h.expires_at > now()
                     AND tstzrange(h.start_at, h.end_at, '[)')
                         && tstzrange(bookings.check_in_at, bookings.check_out_at, '[)')
               )
-            RETURNING booking_id
+            RETURNING booking_id, status
             """
         )
-        expired = [str(r["booking_id"]) for r in cur.fetchall()]
-        for booking_id in expired:
+        expired = [(str(r["booking_id"]), r["status"]) for r in cur.fetchall()]
+        for booking_id, was in expired:
+            cur.execute(
+                "UPDATE booking_beds SET status = 'EXPIRED' WHERE booking_id = %s "
+                "AND status IN ('REQUESTED','ACCEPTED')",
+                (booking_id,),
+            )
             _audit(cur, "system", "booking_expired", "booking", booking_id,
-                   {"status": "REQUESTED"}, {"status": "EXPIRED"})
+                   {"status": was}, {"status": "EXPIRED"})
         return len(expired)
 
 
 def pending_requests(db: Database) -> list[dict]:
+    """Bookings waiting for the owner, whatever the reason.
+
+    Two things wait on the owner: a fresh request, and a booking whose guest has
+    sent payment proof. Both are shown together, because both are decisions the
+    owner owes someone. The status is carried through so the page and the chat
+    can say which of the two it is.
+    """
     return db.query_all(
         """
         SELECT bk.booking_id, bk.reference, bk.status, bk.check_in_at, bk.check_out_at,
                bk.charges_total, g.full_name, g.phone, bk.bed_id
         FROM bookings bk JOIN guests g ON g.guest_id = bk.guest_id
-        WHERE bk.status = 'REQUESTED'
+        WHERE bk.status IN ('REQUESTED', 'PROOF_SENT')
         ORDER BY bk.created_at
         """
     )

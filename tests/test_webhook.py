@@ -42,6 +42,11 @@ def test_health_reports_ok(client):
     assert response.json()["database"] == "ok"
 
 
+def test_health_says_whether_the_owner_is_emailed(client):
+    """The owner's first question when no email arrives: is it even switched on?"""
+    assert client.get("/health").json()["owner_email"] == "off"
+
+
 # --- GET verification handshake --------------------------------------------
 
 def test_verification_handshake_echoes_the_challenge(client):
@@ -262,7 +267,9 @@ def test_a_customer_cannot_reach_owner_information(client, db, channel):
     assert "Rs" not in guest_replies[0]
 
 
-def test_non_text_message_gets_a_polite_reply(client, db, channel):
+def test_an_image_without_a_waiting_booking_gets_a_polite_reply(client, db, channel):
+    """A screenshot is treated as payment proof; with no booking to attach it
+    to, the guest is told so rather than left in silence."""
     body = json.dumps({
         "object": "whatsapp_business_account",
         "entry": [{"changes": [{"field": "messages", "value": {
@@ -273,7 +280,42 @@ def test_non_text_message_gets_a_polite_reply(client, db, channel):
     }).encode()
     client.post("/webhook", content=body, headers=_signed(body))
     assert len(channel.sent) == 1
-    assert "text" in channel.sent[0][1].lower()
+    reply = channel.sent[0][1].lower()
+    assert "screenshot" in reply
+    assert "could not find a booking" in reply
+
+
+def test_a_payment_screenshot_reaches_the_owner_and_is_acknowledged(client, db, channel):
+    """The guest pays and sends the image; the owner is asked to check it."""
+    from datetime import datetime, timedelta
+
+    from core import booking as booking_mod
+    from tests.conftest import IST
+
+    start = datetime(2027, 2, 1, 12, tzinfo=IST)
+    request = booking_mod.create_request(
+        db, phone="+919000001666", full_name="Proof Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start,
+        check_out_at=start + timedelta(days=2), food_included=False)
+    booking_mod.accept(db, request.booking_id, actor="owner")
+
+    body = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "messages": [{"from": "919000001666", "id": "wamid.PROOF",
+                          "type": "image",
+                          "image": {"id": "media-9", "mime_type": "image/jpeg"}}],
+        }}]}],
+    }).encode()
+    client.post("/webhook", content=body, headers=_signed(body))
+
+    assert db.query_one("SELECT status FROM bookings WHERE reference = %s",
+                        (request.reference,))["status"] == "PROOF_SENT"
+    guest_replies = [t for phone, t in channel.sent if phone == "+919000001666"]
+    assert any("received your payment screenshot" in t.lower() for t in guest_replies)
+    # The owner was asked to check the money, with a one-tap confirm.
+    owner_prompts = [p for phone, p in channel.prompts if phone == "+919999999999"]
+    assert owner_prompts, "the owner must be asked to confirm after the screenshot"
 
 
 def test_several_rapid_messages_each_get_one_reply(client, db, channel):

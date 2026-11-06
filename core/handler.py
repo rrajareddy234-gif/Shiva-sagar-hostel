@@ -62,13 +62,15 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
         if tapped is not None:
             return Outcome(reply=tapped.text, handled_by="owner_command",
                            intent=tapped.action or "owner_command",
-                           prompt=tapped.prompt, file=tapped.file)
+                           prompt=tapped.prompt, file=tapped.file,
+                           events=tapped.events)
 
         command_result = commands.handle(db, phone=phone, text=text, owner_phone=owner_phone)
         if command_result is not None:
             return Outcome(reply=command_result.text, handled_by="owner_command",
                            intent=command_result.action or "owner_command",
-                           prompt=command_result.prompt, file=command_result.file)
+                           prompt=command_result.prompt, file=command_result.file,
+                           events=command_result.events)
 
         owner_reply = router.owner_answer(db, text)
         if owner_reply.handled:

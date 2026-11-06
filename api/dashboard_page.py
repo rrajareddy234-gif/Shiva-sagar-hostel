@@ -143,17 +143,18 @@ _ROW = """<tr>
 _PENDING = """<h1 style="font-size:16px;margin:22px 0 8px">Waiting for you</h1>
 <div class="scroll"><table>
 <thead><tr><th>Reference</th><th>Guest</th><th>Bed</th><th>Check-in</th>
-<th>Check-out</th><th>Amount</th><th>Decision</th></tr></thead>
+<th>Check-out</th><th>Amount</th><th>What it needs</th><th>Decision</th></tr></thead>
 <tbody>{rows}</tbody></table></div>"""
 
 _PENDING_ROW = """<tr>
   <td>{reference}</td><td>{name}</td><td>{bed}</td>
   <td>{check_in}</td><td>{check_out}</td><td>Rs {amount}</td>
+  <td class="muted">{step}</td>
   <td><div class="actions">
     <form method="post" action="/dashboard/decide">
       <input type="hidden" name="reference" value="{reference}">
       <input type="hidden" name="decision" value="approve">
-      <button class="yes" type="submit">Approve</button>
+      <button class="yes" type="submit">{action}</button>
     </form>
     <form method="post" action="/dashboard/decide">
       <input type="hidden" name="reference" value="{reference}">

@@ -132,8 +132,34 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
     assert "YES" in last_reply(channel, OWNER).upper(), "must ask for confirmation"
     send(client, "YES", sender=OWNER_SENDS)
 
+    # The first approval ACCEPTS: the guest is told to pay, with the details and
+    # the UPI id. It does not confirm the booking -- that is the second approval.
+    row = db.query_one("SELECT status FROM bookings WHERE reference = %s", (reference,))
+    assert row["status"] == "ACCEPTED"
+    guest_told = last_reply(channel, "+919000007777")
+    assert "accepted" in guest_told.lower()
+    assert reference in guest_told, "the guest must be told the reference"
+    assert "upi" in guest_told.lower(), "the guest must be told how to pay"
+    assert "GUTTIKONDA RAJAVARDHAN REDDY" in guest_told, \
+        "the guest must be warned which name the UPI id should show"
+
+    # 4b. The guest sends the payment screenshot; the owner is asked to check it.
+    from core import booking as booking_mod
+    booking_mod.mark_proof_sent(
+        db, db.query_one("SELECT booking_id FROM bookings WHERE reference = %s",
+                         (reference,))["booking_id"], proof_path="/tmp/p.jpg")
+    assert db.query_one("SELECT status FROM bookings WHERE reference = %s",
+                        (reference,))["status"] == "PROOF_SENT"
+
+    # 4c. The owner's second approval confirms the booking, and the guest gets
+    #     the final confirmation with every detail.
+    send(client, f"approve booking {reference}", sender=OWNER_SENDS)
+    send(client, "YES", sender=OWNER_SENDS)
     row = db.query_one("SELECT status FROM bookings WHERE reference = %s", (reference,))
     assert row["status"] == "CONFIRMED"
+    final = last_reply(channel, "+919000007777")
+    assert "confirmed" in final.lower()
+    assert reference in final and "Total" in final
 
     # 5. The guest's bed is now taken for those dates.
     from datetime import datetime

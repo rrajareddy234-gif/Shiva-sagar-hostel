@@ -91,15 +91,21 @@ async def dashboard_decide(request: Request) -> Response:
     reference = (fields.get("reference") or [""])[0]
     decision = (fields.get("decision") or [""])[0]
     actor = "owner-dashboard"
+    channel = request.app.state.channel
 
     try:
         if decision == "approve":
             result = dashboard.approve_booking(request.app.state.db, reference,
-                                               actor=actor)
-            notice = f"Booking {result['reference']} is confirmed. The bed is held."
+                                               actor=actor, channel=channel)
+            if result["status"] == "ACCEPTED":
+                notice = (f"Booking {result['reference']} is accepted. The guest has "
+                          f"been asked to pay; confirm again once they send the "
+                          f"screenshot.")
+            else:
+                notice = f"Booking {result['reference']} is confirmed. The bed is held."
         elif decision == "reject":
             result = dashboard.reject_booking(request.app.state.db, reference,
-                                              actor=actor)
+                                              actor=actor, channel=channel)
             notice = f"Booking {result['reference']} is rejected. The bed is free."
         else:
             notice, failed = "Unknown decision.", True

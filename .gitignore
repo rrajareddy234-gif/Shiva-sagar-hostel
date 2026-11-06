@@ -21,6 +21,9 @@ venv/
 *.dump
 backups/
 
+# Guests' payment screenshots (financial records). Runtime state, never source.
+payment_proofs/
+
 # Deployment
 deploy/.env
 
