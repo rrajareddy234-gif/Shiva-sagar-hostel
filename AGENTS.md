@@ -877,3 +877,38 @@ rupee still comes from `core/pricing.py`.
 A stray tap now re-asks the current question (`_reask`) instead of ending the
 flow, and the greeting no longer says "how many nights" -- the flow asks for a
 check-out date, not a number of nights.
+
+### Round 2: the flow reset itself, and the offer was invisible
+
+The owner tested the phone again. Two more faults, both in the guest journey.
+
+**The flow jumped back to the first question.** At a read-back step
+(`_CONFIRM_STEP`) the guest typed something we could not read as the value being
+confirmed -- "2 nights" while the check-in date was being confirmed.
+`_answer_confirm` fell through to `_reinterpret`, which could not parse it, and
+`_reinterpret` ended with `_redo_field`. `_redo_field` *erases* the field and
+sends the guest back to that question's step -- for a date, back to
+`_ask_date`, the first question of the whole flow. That is the "went to first
+state" the owner saw. `_reinterpret` now ends with `_reask_confirm`, which
+re-shows the same confirmation with the value we already hold, so an unreadable
+reply costs one re-ask, never the booking. Trap: `_redo_field` is still correct
+for a *deliberate* "Change" tap -- only the unreadable-reply path changed.
+
+**"1 guest" was read as 01:00.** At the time step, `_parse_clock` took any bare
+number anywhere in the sentence as a clock time, so "1 guest" confirmed a 1:00
+am check-in and skipped the guest-count question. A bare number is now a time
+only when it is the *whole* message (`value.isdigit()`); a colon or an am/pm
+still counts anywhere. "9 pm", "21:00" and "9:00 pm to 6 am" all still parse.
+
+**The greeting hid the offer.** The owner asked for the 10% offer to be visible
+when the guest says hello. `router._offer_line` reads the running promotion from
+the table (`pricing.active_promotion(scope="DAILY")`) and the greeting appends
+one line: percent, days left, end date, and what it does not cover (monthly
+stays, counter services). With no promotion set the line is absent, so the
+greeting can never promise a discount the owner has not set. The figure is the
+owner's, straight from the table -- the rule holds.
+
+**The mockup said "nights".** `mockups/final-booking-template.html` still asked
+"How many nights?"; it now asks for a check-out date, matching the code. The
+generated `docs/demo.html` was already correct, because it is built from the
+engine.
