@@ -15,6 +15,9 @@ Legend: **Guest** = what the visitor sends. **Bot** = the automatic reply.
 > **Guest:** hi
 
 > **Bot:** Hello! What would you like to know about Sagar PG Hostel?
+
+> **Bot:** Offer: 10% off the total when you book in the next 3 days (3 days
+> left, till 08 November). Not on monthly stays or counter services.
 > _[List: Rooms & Prices · Check Availability · Location & Directions · Food &
 > Amenities · Guest Reviews · Book a Room · My Bookings · Fresh-up or Rest ·
 > Talk to Staff]_

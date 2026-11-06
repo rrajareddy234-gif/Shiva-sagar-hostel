@@ -333,6 +333,23 @@ _MENU_TITLES = (
 )
 
 
+def _offer_line(db: Database) -> str | None:
+    """The offer running today, in one line, or None.
+
+    Read from the promotions table, so the greeting never promises a discount
+    the owner has not set, and the figure is the owner's, not ours.
+    """
+    today = datetime.now().astimezone().date()
+    promo = pricing.active_promotion(db, on=today, scope="DAILY")
+    if promo is None:
+        return None
+    days = (promo.ends_on - today).days + 1
+    left = "today is the last day" if days <= 1 else f"{days} days left"
+    return (f"Offer: {promo.percent:.0f}% off the total when you book in the "
+            f"next 3 days ({left}, till {promo.ends_on.strftime('%d %B')}). "
+            "Not on monthly stays or counter services.")
+
+
 def _greeting_reply(db: Database, phone: str | None = None) -> Reply:
     """Greet with tappable options, falling back to the help text.
 
@@ -348,8 +365,12 @@ def _greeting_reply(db: Database, phone: str | None = None) -> Reply:
     name = _guest_first_name(db, phone)
     hello = f"Hello {name}! What would you like to know about Sagar PG Hostel?" \
         if name else "Hello! What would you like to know about Sagar PG Hostel?"
+    offer = _offer_line(db)
+    if offer:
+        hello = f"{hello}\n\n{offer}"
     prompt = Prompt(body=hello, rows=rows, button_text="Choose")
-    return Reply(HELP, handled=True, intent="greeting", prompt=prompt)
+    text = f"{HELP}\n\n{offer}" if offer else HELP
+    return Reply(text, handled=True, intent="greeting", prompt=prompt)
 
 
 def _guest_first_name(db: Database, phone: str | None) -> str | None:

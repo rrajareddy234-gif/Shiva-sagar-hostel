@@ -500,6 +500,34 @@ def _answer_confirm(db: Database, *, phone: str, state: dict,
     return _reinterpret(db, phone=phone, state=state, field=field, text=text)
 
 
+def _reask_confirm(db: Database, *, state: dict) -> FlowResult:
+    """Show the read-back again, with the value we already hold intact.
+
+    A reply we cannot read as a correction -- a stray word, an answer meant for
+    a later question -- must not throw the answer away and send the guest back
+    to the first question. The guest is simply asked to confirm again.
+    """
+    pending = state.get("pending") or {}
+    value = pending.get("value")
+    field = pending.get("field")
+    if field == "times" and isinstance(value, dict):
+        label = _times_label(value)
+    elif field == "guests":
+        label = _guests_label(value)
+    elif field in ("check_in", "check_out"):
+        parsed = _date_of(value)
+        label = parsed.strftime("%d %B %Y") if parsed else str(value)
+    elif field == "room_type":
+        label = ROOM_LABEL.get(value, value)
+    else:
+        label = str(value)
+    return FlowResult(
+        f"I have {label}. Is that correct? Please tap Yes, correct or Change.",
+        prompt=Prompt(body=f"Just to confirm: {label}?",
+                      buttons=(Button(f"{_NS}cf:yes", "Yes, correct"),
+                               Button(f"{_NS}cf:no", "Change"))))
+
+
 def _commit_typed(db: Database, *, phone: str, state: dict, field: str,
                   value, next_step: str) -> FlowResult:
     state.pop("pending", None)
@@ -591,7 +619,9 @@ def _reinterpret(db: Database, *, phone: str, state: dict, field: str | None,
             return _confirm_typed(db, phone=phone, state=state, field="room_type",
                                   value=picked, next_step="food",
                                   label=ROOM_LABEL.get(picked, picked))
-    return _redo_field(db, phone=phone, state=state, field=field)
+    # A reply we cannot read as a new value is not a reason to throw the booking
+    # away. Ask for the same confirmation again, keeping the answer we hold.
+    return _reask_confirm(db, state=state)
 
 
 def _select_room(db: Database, *, phone: str, state: dict, value: str,
@@ -998,14 +1028,22 @@ def _date_of(value: str | None):
 
 
 def _parse_clock(text: str) -> tuple[int, int] | None:
-    """Read a clock time with AM/PM, or a 24-hour one. Returns (hour, minute)."""
+    """Read a clock time with AM/PM, or a 24-hour one. Returns (hour, minute).
+
+    A bare number is read as a time only when it is the whole message, so an
+    answer meant for another question -- "1 guest", "2 nights" -- is never
+    mistaken for 01:00 or 02:00.
+    """
     value = (text or "").strip().lower().replace(".", "")
+    if not value:
+        return None
     match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", value)
     if not match:
         return None
     hour = int(match.group(1))
     minute = int(match.group(2) or 0)
     meridiem = match.group(3)
+    has_colon = match.group(2) is not None
     if minute > 59:
         return None
     if meridiem:
@@ -1013,6 +1051,9 @@ def _parse_clock(text: str) -> tuple[int, int] | None:
             return None
         hour = hour % 12 + (12 if meridiem == "pm" else 0)
     elif hour > 23:
+        return None
+    elif not has_colon and not value.isdigit():
+        # A bare number inside a longer sentence is not a time.
         return None
     return hour, minute
 

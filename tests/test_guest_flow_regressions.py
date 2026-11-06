@@ -14,7 +14,7 @@ What these defend:
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 
@@ -149,3 +149,72 @@ def test_a_stray_tap_does_not_lose_the_answers_so_far(db):
     _send(db, bid="bk:bogus:xyz")
     state = booking_flow._load(db, GUEST)
     assert state.get("check_in") is not None
+
+
+# --- an unreadable reply must not throw the booking away -------------------
+
+def test_a_stray_reply_at_a_confirm_keeps_the_answer(db):
+    """The owner saw the flow jump back to the first question mid-booking.
+
+    The guest had given the date and was asked "Is that correct?". They typed
+    something we could not read as a date, and the flow erased the date and
+    asked for the check-in date again. The answer must survive.
+    """
+    _send(db, bid="menu:book")
+    _send(db, "2026-12-01")
+    stray = _send(db, "2 nights")  # not a date, and not a yes/no
+    assert "Is that correct?" in stray.reply
+    # The held date is still the one we asked about, not erased.
+    state = booking_flow._load(db, GUEST)
+    assert state.get("step") == "confirm"
+    assert (state.get("pending") or {}).get("value") == "2026-12-01"
+
+    # And confirming still moves on to the next question, not back to the start.
+    after = _send(db, bid="bk:cf:yes")
+    assert "check out" in after.reply.lower()
+    assert "check in" not in after.reply.lower()
+
+
+def test_a_number_meant_for_another_question_is_not_a_time(db):
+    """At the check-in-time question, "1 guest" must not be read as 01:00."""
+    for bid in ("menu:book", "bk:date:today", "bk:cout:2", "bk:stay:NIGHT"):
+        _send(db, bid=bid)
+    reply = _send(db, "1 guest")
+    # Still on the time question, not silently confirmed as 1:00 am.
+    assert "time" in reply.reply.lower()
+    state = booking_flow._load(db, GUEST)
+    assert state.get("step") == "times"
+    assert not state.get("check_in_time")
+
+
+def test_a_real_time_is_still_read(db):
+    """The guard above must not stop a genuine time from being understood."""
+    for bid in ("menu:book", "bk:date:today", "bk:cout:2", "bk:stay:NIGHT"):
+        _send(db, bid=bid)
+    reply = _send(db, "9 pm")
+    assert "Is that correct?" in reply.reply
+    assert (booking_flow._load(db, GUEST).get("pending") or {}).get("value", {}) \
+        .get("check_in_time") == "21:00"
+
+
+# --- the greeting shows the offer the owner set ---------------------------
+
+def test_the_greeting_shows_the_active_offer(db):
+    """A booking made in the offer window is discounted, so say so up front."""
+    from core import pricing
+    today = date.today()
+    pricing.set_promotion(db, name="Early booking 10%", percent=10,
+                          starts_on=today, ends_on=today + timedelta(days=2),
+                          scope="DAILY")
+    reply = _send(db, "hi")
+    assert reply.intent == "greeting"
+    assert "10%" in reply.reply
+    assert "next 3 days" in reply.reply.lower()
+    assert "monthly" in reply.reply.lower()
+
+
+def test_no_offer_means_the_greeting_does_not_invent_one(db):
+    """With no promotion set, the greeting must not promise a discount."""
+    reply = _send(db, "hi")
+    assert reply.intent == "greeting"
+    assert "%" not in reply.reply
