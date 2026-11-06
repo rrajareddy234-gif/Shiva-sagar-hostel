@@ -58,3 +58,6 @@ ignore = [
 "core/billing.py" = ["S608"]
 "n8n/build_workflows.py" = ["S105"]
 "scripts/*" = ["S108", "S310", "S603", "S607", "S608"]
+# The scheduler calls the app over HTTP and keeps its own run-time record in
+# /tmp. Same audit as scripts/watchdog.py, which does both.
+"deploy/scheduler.py" = ["S108", "S310"]

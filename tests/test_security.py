@@ -222,7 +222,8 @@ def test_env_example_has_no_real_values():
                                "HOSTEL_TIMEZONE", "DATABASE_URL",
                                # Non-secret defaults, safe to show.
                                "POSTGRES_USER", "POSTGRES_DB", "N8N_USER",
-                               "AI_TIMEOUT", "AUTO_REPLY_ENABLED"):
+                               "AI_TIMEOUT", "AUTO_REPLY_ENABLED",
+                               "SAGAR_APP_URL", "SCHEDULER_INTERVAL"):
                 continue
             assert value.strip() == "", f"{key.strip()} must be blank in .env.example"
 
