@@ -14,6 +14,7 @@ from pathlib import Path
 import pytest
 
 DEPLOY = Path(__file__).resolve().parent.parent / "deploy"
+SCRIPTS_ROOT = Path(__file__).resolve().parent.parent / "scripts"
 SCRIPTS = sorted(DEPLOY.glob("*.sh"))
 
 
@@ -63,3 +64,29 @@ def test_restore_drill_never_targets_the_live_database():
     text = (DEPLOY / "restore_drill.sh").read_text()
     assert "SCRATCH" in text
     assert "_drill" in text
+
+
+def test_start_app_restores_the_knowledge_base():
+    """A lost volume must not come back with an empty knowledge base.
+
+    The recovery path restored the newest backup, but that backup predated
+    hostel_facts and faq. The app came up healthy and answered guests from
+    nothing: no address, no amenities, no FAQs. The script now loads the seed
+    when -- and only when -- the knowledge base is missing.
+    """
+    text = (SCRIPTS_ROOT / "start_app.sh").read_text()
+    assert "db/seed.sql" in text, "recovery must be able to load the seed"
+    assert "hostel_facts" in text, "recovery must check the knowledge base"
+
+
+def test_start_app_does_not_reset_the_owners_confirmation_flags():
+    """The seed must not run on every start.
+
+    db/seed.sql sets rooms_confirmed = false. Running it on each restart would
+    silently undo the owner's own confirmation of the room list.
+    """
+    text = (SCRIPTS_ROOT / "start_app.sh").read_text()
+    assert "db/seed.sql" in text, "expected the seed to be loaded somewhere"
+    guard_at = text.index("facts=")
+    seed_at = text.index("db/seed.sql")
+    assert guard_at < seed_at, "the seed load must sit behind the empty check"

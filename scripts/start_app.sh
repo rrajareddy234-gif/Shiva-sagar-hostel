@@ -56,8 +56,23 @@ if [ "$($D exec -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -tAc \
     else
         echo "     database is empty and no backup found - loading schema and seed"
         $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < db/schema.sql
-        $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < db/seed.sql
     fi
+fi
+
+# A backup can be older than the schema. The one on disk predates hostel_facts
+# and faq, so restoring it alone left the owner's knowledge base -- address,
+# amenities, the map link, the FAQs -- empty and the app answered from nothing.
+# The schema is idempotent, so it always runs. The seed runs only when the
+# knowledge base is missing: re-running it would reset the owner's own
+# confirmation flags, and it is only needed to fill this gap.
+echo "     applying schema"
+$D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < db/schema.sql
+
+facts=$(  $D exec -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -tAc \
+        "SELECT count(*) FROM hostel_facts" 2>/dev/null)
+if [ "${facts:-0}" = "0" ]; then
+    echo "     knowledge base is empty - loading the seed"
+    $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < db/seed.sql
 fi
 
 echo "4/5  App"
