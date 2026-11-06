@@ -8,7 +8,10 @@ it, and the new figure is used everywhere.
 
 ## Nightly and daily rates, per bed
 
-| Room | Food | Night | Day |
+A **night** is dinner only. A **day** is 24 hours and includes tiffin, lunch and
+dinner. These are the same twelve figures the owner confirmed.
+
+| Room | Food | Night (dinner only) | Day (tiffin + lunch + dinner) |
 |---|---|---:|---:|
 | AC | with food | Rs 350 | Rs 450 |
 | AC | no food | Rs 300 | Rs 350 |

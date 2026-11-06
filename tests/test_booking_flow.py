@@ -43,7 +43,9 @@ def _tap_through(db, *, room="AC", food="1", terms="ADVANCE", name="Dummy Guest"
     """Walk the whole flow by tapping, as a guest would."""
     _step(db, bid="menu:book", phone=phone)
     _step(db, bid="bk:date:tomorrow", phone=phone)
-    _step(db, bid="bk:nights:2", phone=phone)
+    _step(db, bid="bk:cout:2", phone=phone)
+    _step(db, bid="bk:stay:NIGHT", phone=phone)
+    _step(db, bid="bk:times:skip", phone=phone)
     _step(db, bid="bk:guests:1", phone=phone)
     _step(db, bid=f"bk:room:{room}", phone=phone)
     _step(db, bid=f"bk:food:{food}", phone=phone)
@@ -63,9 +65,9 @@ def test_tapping_through_creates_a_request_with_no_ai(db):
 
 def test_the_owner_gets_approve_reject_with_no_ai(db, channel):
     """A full tap-through ends with an Approve/Reject prompt for the owner."""
-    for i, bid in enumerate(["menu:book", "bk:date:tomorrow", "bk:nights:1",
-                             "bk:guests:1", "bk:room:AC", "bk:food:1",
-                             "bk:terms:ADVANCE"]):
+    for i, bid in enumerate(["menu:book", "bk:date:tomorrow", "bk:cout:1",
+                             "bk:stay:NIGHT", "bk:times:skip", "bk:guests:1",
+                             "bk:room:AC", "bk:food:1", "bk:terms:ADVANCE"]):
         dispatch(db, channel, _settings(), InboundMessage(
             provider_message_id=f"wamid.{i}", from_phone=GUEST,
             message_type="interactive", text="", button_id=bid), ai=None)
@@ -93,7 +95,9 @@ def test_the_flow_works_even_when_the_ai_is_down(db):
 def test_the_amount_shown_matches_the_pricing_engine(db):
     outcome = _tap_through(db, room="AC", food="1", terms="FULL")
     event = outcome.events[0]
-    start = booking_flow._window({"check_in": event["check_in"], "nights": 2})[0]
+    start = booking_flow._window({
+        "check_in": event["check_in"], "check_out": event["check_out"],
+        "check_in_time": "21:00", "check_out_time": "09:00"})[0]
     end = start.replace(hour=0) + __import__("datetime").timedelta(days=2)
     q = pricing.quote(db, room_type="AC", food_included=True, start=start,
                       end=end, mode="daily", stay_mode="NIGHT", guests=1)
@@ -103,7 +107,9 @@ def test_the_amount_shown_matches_the_pricing_engine(db):
 def test_the_review_shows_the_amount_before_submitting(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:cout:2")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     _step(db, bid="bk:guests:1")
     _step(db, bid="bk:room:AC")
     _step(db, bid="bk:food:1")
@@ -257,7 +263,9 @@ def test_a_lost_race_is_retried_on_another_free_bed(db, monkeypatch):
 
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:1")
+    _step(db, bid="bk:cout:1")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     _step(db, bid="bk:guests:1")
     _step(db, bid="bk:room:AC")
     _step(db, bid="bk:food:0")
@@ -272,53 +280,61 @@ def test_a_lost_race_is_retried_on_another_free_bed(db, monkeypatch):
 
 # --- a typed value is read back before it is used --------------------------
 #
-# A number typed by hand is easy to get wrong, and a wrong night count sends a
-# wrong bill. So typed answers are confirmed first; tapped ones are not.
+# A value typed by hand is easy to get wrong, and a wrong date or guest count
+# sends a wrong bill. So typed answers are confirmed first; tapped ones are not.
 
-def test_typed_nights_are_confirmed_before_use(db):
+def test_typed_checkout_is_confirmed_before_use(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    outcome = _step(db, text="3")
-    assert "3 nights" in outcome.reply
+    outcome = _step(db, text="2026-12-25")
+    assert "25 December 2026" in outcome.reply
     assert "correct" in outcome.reply.lower()
-    # The value is not yet committed.
     from core import booking_flow
-    assert booking_flow._load(db, GUEST).get("nights") is None
+    assert booking_flow._load(db, GUEST).get("check_out") is None
 
 
-def test_confirming_typed_nights_moves_on(db):
+def test_confirming_typed_checkout_moves_on(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, text="3")
+    _step(db, text="2026-12-25")
     outcome = _step(db, bid="bk:cf:yes")
-    assert "guest" in outcome.reply.lower()
+    assert "night" in outcome.reply.lower() or "day" in outcome.reply.lower()
     from core import booking_flow
-    assert booking_flow._load(db, GUEST)["nights"] == 3
+    assert booking_flow._load(db, GUEST)["check_out"] == "2026-12-25"
 
 
 def test_saying_change_re_asks_the_same_question(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, text="3")
+    _step(db, text="2026-12-25")
     outcome = _step(db, bid="bk:cf:no")
-    assert "nights" in outcome.reply.lower()
+    assert "check out" in outcome.reply.lower()
     from core import booking_flow
-    assert booking_flow._load(db, GUEST).get("nights") is None
+    assert booking_flow._load(db, GUEST).get("check_out") is None
 
 
-def test_replying_with_a_number_at_the_confirm_step_corrects_it(db):
+def test_a_checkout_before_checkin_is_refused(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, text="3")
-    outcome = _step(db, text="5")
-    assert "5 nights" in outcome.reply
+    outcome = _step(db, text="2020-01-01")
+    assert "after the check-in" in outcome.reply
+
+
+def test_replying_with_a_date_at_the_confirm_step_corrects_it(db):
+    _step(db, bid="menu:book")
+    _step(db, bid="bk:date:tomorrow")
+    _step(db, text="2026-12-25")
+    outcome = _step(db, text="2026-12-26")
+    assert "26 December 2026" in outcome.reply
     assert "correct" in outcome.reply.lower()
 
 
 def test_typed_guests_are_confirmed_before_use(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:cout:2")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     outcome = _step(db, text="2")
     assert "2 guests" in outcome.reply
     assert "correct" in outcome.reply.lower()
@@ -327,7 +343,9 @@ def test_typed_guests_are_confirmed_before_use(db):
 def test_typed_room_is_confirmed_before_use(db):
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:cout:2")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     _step(db, bid="bk:guests:1")
     outcome = _step(db, text="ac")
     assert "AC" in outcome.reply
@@ -340,8 +358,8 @@ def test_tapped_answers_are_never_re_asked(db):
     """A tap is already an explicit choice, so no confirmation appears."""
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    outcome = _step(db, bid="bk:nights:2")
-    assert "guest" in outcome.reply.lower()
+    outcome = _step(db, bid="bk:cout:2")
+    assert "night" in outcome.reply.lower() or "day" in outcome.reply.lower()
     assert "correct" not in outcome.reply.lower()
 
 
@@ -379,7 +397,9 @@ def test_a_full_room_type_is_labelled_full(db):
     _fill_room_type(db, "DORM")
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:cout:2")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     outcome = _step(db, bid="bk:guests:1")
     titles = [b.title for b in (outcome.prompt.buttons or outcome.prompt.rows)]
     assert "Dormitory (full)" in titles
@@ -389,7 +409,9 @@ def test_tapping_a_full_room_type_explains_why(db):
     _fill_room_type(db, "DORM")
     _step(db, bid="menu:book")
     _step(db, bid="bk:date:tomorrow")
-    _step(db, bid="bk:nights:2")
+    _step(db, bid="bk:cout:2")
+    _step(db, bid="bk:stay:NIGHT")
+    _step(db, bid="bk:times:skip")
     _step(db, bid="bk:guests:1")
     outcome = _step(db, bid="bk:room:DORM")
     assert "full" in outcome.reply.lower()

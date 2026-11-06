@@ -29,6 +29,13 @@ log = logging.getLogger(__name__)
 KEY_ADDRESS = "address.full"
 KEY_NAME = "hostel.name"
 
+# What a night and a day include. Stored as facts, not written into code, so the
+# owner can reword them without a release. A "night" is dinner only; a "day" is
+# tiffin, lunch and dinner over 24 hours.
+KEY_NIGHT_MEALS = "policy.night_meals"
+KEY_DAY_MEALS = "policy.day_meals"
+KEY_TIMINGS = "policy.timings"
+
 VALID_SOURCES = ("owner", "seed")
 VALID_CATEGORIES = ("identity", "location", "amenity", "policy", "general")
 

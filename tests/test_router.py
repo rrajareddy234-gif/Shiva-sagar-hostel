@@ -150,6 +150,17 @@ def test_price_reply_names_the_night_and_day_rates(db):
     assert "a day" in reply.text
 
 
+def test_price_reply_says_what_a_night_and_a_day_include(db):
+    """A night is dinner only; a day is tiffin, lunch and dinner.
+
+    A guest choosing between the two figures is really choosing between meals,
+    so the reply must say which meals each one buys.
+    """
+    reply = router.route(db, "how much do you charge?")
+    assert "dinner only" in reply.text
+    assert "tiffin, lunch and dinner" in reply.text
+
+
 # --- the price flow, answered by tapping -----------------------------------
 
 def test_price_question_offers_room_buttons(db):

@@ -147,8 +147,9 @@ def test_when_paused_a_booking_still_reaches_the_owner(db):
     settings = _settings(auto_reply=False)
     guest = "+919000001200"
 
-    steps = ["menu:book", "bk:date:tomorrow", "bk:nights:1", "bk:guests:1",
-             "bk:room:AC", "bk:food:0", "bk:terms:FULL"]
+    steps = ["menu:book", "bk:date:tomorrow", "bk:cout:1", "bk:stay:NIGHT",
+             "bk:times:skip", "bk:guests:1", "bk:room:AC", "bk:food:0",
+             "bk:terms:FULL"]
     for i, bid in enumerate(steps, start=1):
         _tap(db, channel, settings, bid=bid, phone=guest, n=i)
     _tap(db, channel, settings, text="Pause Guest", phone=guest, n=20)

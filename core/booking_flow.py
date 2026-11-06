@@ -11,6 +11,7 @@ amount, so no rate is ever guessed.
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
@@ -32,6 +33,9 @@ ROOM_ORDER = ("AC", "NON_AC", "DORM")
 
 NIGHTS_MAX = 10
 GUESTS_MAX = 5
+# How far ahead a single tap can push the check-out. A guest can always type a
+# later date; this only caps the quick buttons, so a two-month stay is reachable.
+CHECKOUT_MAX_NIGHTS = 60
 
 UPI_KEY = "payment.upi_id"
 QR_KEY = "payment.qr_image_url"
@@ -121,17 +125,44 @@ def handle(db: Database, *, phone: str, text: str | None = None,
         if parsed:
             return _confirm_typed(db, phone=phone, state=state, field="check_in",
                                   value=parsed.date().isoformat(),
-                                  next_step="nights",
+                                  next_step="checkout",
                                   label=parsed.date().strftime("%d %B %Y"))
         return FlowResult("I couldn't read that date. Please send it as "
-                          "2026-11-20, or tap Today or Tomorrow.")
+                          "2026-11-20, or tap Today, Tomorrow or Day after "
+                          "tomorrow.")
 
-    if state.get("step") == "nights":
-        n = _clamp(_first_number(text), 1, NIGHTS_MAX)
-        if n is None:
-            return _ask_nights(db)
-        return _confirm_typed(db, phone=phone, state=state, field="nights", value=n,
-                              next_step="guests", label=_nights_label(n))
+    if state.get("step") == "checkout":
+        parsed = _parse_date(text)
+        if parsed:
+            check_in = _date_of(state.get("check_in"))
+            if check_in and parsed.date() <= check_in:
+                return FlowResult(
+                    "The check-out must be after the check-in. Please send a "
+                    "later date.", prompt=_ask_checkout(db, state).prompt)
+            return _confirm_typed(db, phone=phone, state=state, field="check_out",
+                                  value=parsed.date().isoformat(),
+                                  next_step="stay",
+                                  label=parsed.date().strftime("%d %B %Y"))
+        return FlowResult("I couldn't read that date. Please send it as "
+                          "2026-11-20, or tap a choice below.")
+
+    if state.get("step") == "stay":
+        lowered = (text or "").lower()
+        if "day" in lowered and "night" not in lowered:
+            return _tap(db, phone=phone, button_id=f"{_NS}stay:DAY")
+        if "night" in lowered:
+            return _tap(db, phone=phone, button_id=f"{_NS}stay:NIGHT")
+        return _ask_stay(db)
+
+    if state.get("step") == "times":
+        if _is_skip(text):
+            return _tap(db, phone=phone, button_id=f"{_NS}times:skip")
+        parsed = _parse_time_range(text, state)
+        if parsed:
+            return _confirm_typed(db, phone=phone, state=state, field="times",
+                                  value=parsed, next_step="guests",
+                                  label=_times_label(parsed))
+        return _ask_times(db, state)
 
     if state.get("step") == "guests":
         n = _clamp(_first_number(text), 1, GUESTS_MAX)
@@ -174,21 +205,72 @@ def _ask_date(db: Database) -> FlowResult:
     rows = (
         Button(f"{_NS}date:today", "Today"),
         Button(f"{_NS}date:tomorrow", "Tomorrow"),
+        Button(f"{_NS}date:dayafter", "Day after tomorrow"),
     )
     return FlowResult(
         "Happy to help you book. When would you like to check in?\n"
-        "Tap below, or type a date like 2026-11-20.",
+        "Tap below, or type a date like 2026-11-20. Any date is fine, however "
+        "far ahead, including a stay of one or two months.",
         prompt=Prompt(body="When would you like to check in?",
                       rows=rows, button_text="Pick a date"))
 
 
-def _ask_nights(db: Database) -> FlowResult:
-    rows = tuple(Button(f"{_NS}nights:{n}", f"{n} night" + ("s" if n > 1 else ""))
-                 for n in range(1, NIGHTS_MAX + 1))
+def _ask_checkout(db: Database, state: dict) -> FlowResult:
+    rows = (
+        Button(f"{_NS}cout:1", "1 night"),
+        Button(f"{_NS}cout:2", "2 nights"),
+        Button(f"{_NS}cout:3", "3 nights"),
+        Button(f"{_NS}cout:7", "1 week"),
+        Button(f"{_NS}cout:30", "1 month"),
+    )
+    check_in = _date_of(state.get("check_in"))
+    body = "When would you like to check out?"
+    if check_in:
+        body = (f"Checking in on {check_in.strftime('%d %B %Y')}. When would you "
+                f"like to check out?")
     return FlowResult(
-        f"How many nights? Tap a choice, or type the number (1 to {NIGHTS_MAX}).",
-        prompt=Prompt(body="How many nights would you like to stay?",
-                      rows=rows, button_text="Pick nights"))
+        body + "\nTap a choice, or type a date like 2026-11-20. A stay can be "
+        "as long as you like, even one or two months.",
+        prompt=Prompt(body=body, rows=rows, button_text="Pick check-out"))
+
+
+def _ask_stay(db: Database) -> FlowResult:
+    night = hostel_facts.get(db, hostel_facts.KEY_NIGHT_MEALS) or \
+        "A night includes dinner only."
+    day = hostel_facts.get(db, hostel_facts.KEY_DAY_MEALS) or \
+        "A day is 24 hours and includes tiffin, lunch and dinner."
+    body = f"{night}\n{day}\n\nWhich would you like?"
+    return FlowResult(
+        body,
+        prompt=Prompt(body=body,
+                      buttons=(Button(f"{_NS}stay:NIGHT", "Night (dinner)"),
+                               Button(f"{_NS}stay:DAY", "Day (all meals)"))))
+
+
+def _ask_times(db: Database, state: dict) -> FlowResult:
+    day = state.get("stay_mode") == "DAY"
+    if day:
+        body = ("We are open 24/7. What time would you like to check in? A day "
+                "runs 24 hours from that time.")
+    else:
+        body = ("We are open 24/7. What time would you like to check in? A "
+                "night covers dinner and the night.")
+    return FlowResult(
+        body + "\nReply like '9:00 pm' or '6 am', or tap Skip to use the default "
+        "(9:00 pm in, 9:00 am out).",
+        prompt=Prompt(body=body,
+                      buttons=(Button(f"{_NS}times:skip", "Skip"),)))
+
+
+def _is_skip(text: str | None) -> bool:
+    lowered = (text or "").strip().lower()
+    return lowered in ("skip", "default", "any", "any time", "anytime", "no",
+                       "not sure", "dont know", "don't know")
+
+
+def _times_label(value: dict) -> str:
+    return (f"check-in at {value['check_in_time']}, "
+            f"check-out at {value['check_out_time']}")
 
 
 def _ask_guests(db: Database) -> FlowResult:
@@ -230,7 +312,7 @@ def _full_room_types(db: Database, state: dict | None) -> set[str]:
     Without dates the question cannot be answered, and guessing would mark a
     room full that is not; so nothing is marked until the dates are known.
     """
-    if not state or not state.get("check_in") or not state.get("nights"):
+    if not state or not state.get("check_in") or not state.get("check_out"):
         return set()
     try:
         start_at, end_at = _window(state)
@@ -265,16 +347,12 @@ def _ask_terms(db: Database) -> FlowResult:
 
 # --- confirming a value the guest typed ------------------------------------
 #
-# A number typed by hand is easy to fat-finger, and "5 nights" read as "3" sends
-# the guest a wrong bill. So a typed date, night count, guest count or room is
-# read back and confirmed before it is used. A tapped button is already an
-# explicit choice and is never re-asked.
+# A value typed by hand is easy to fat-finger, and "5 nights" read as "3" sends
+# the guest a wrong bill. So a typed date, guest count or room is read back and
+# confirmed before it is used. A tapped button is already an explicit choice and
+# is never re-asked.
 
 _CONFIRM_STEP = "confirm"
-
-
-def _nights_label(n: int) -> str:
-    return f"{n} night" + ("s" if n > 1 else "")
 
 
 def _guests_label(n: int) -> str:
@@ -320,15 +398,23 @@ def _commit_typed(db: Database, *, phone: str, state: dict, field: str,
     state.pop("pending", None)
     if field is None:
         return _restart(db, phone)
-    state[field] = value
+    if field == "times":
+        state["check_in_time"] = value["check_in_time"]
+        state["check_out_time"] = value["check_out_time"]
+    else:
+        state[field] = value
     state["step"] = next_step
     _save(db, phone, state)
     return _after_step(db, phone=phone, state=state, next_step=next_step)
 
 
 def _after_step(db: Database, *, phone: str, state: dict, next_step: str) -> FlowResult:
-    if next_step == "nights":
-        return _ask_nights(db)
+    if next_step == "checkout":
+        return _ask_checkout(db, state)
+    if next_step == "stay":
+        return _ask_stay(db)
+    if next_step == "times":
+        return _ask_times(db, state)
     if next_step == "guests":
         return _ask_guests(db)
     if next_step == "room":
@@ -342,13 +428,18 @@ def _redo_field(db: Database, *, phone: str, state: dict, field: str | None) -> 
     """Ask the same question again after the guest said the value was wrong."""
     state.pop("pending", None)
     if field == "check_in":
+        state.pop("check_in", None)
         state["step"] = "date"
         _save(db, phone, state)
         return _ask_date(db)
-    if field == "nights":
-        state["step"] = "nights"
+    if field == "check_out":
+        state["step"] = "checkout"
         _save(db, phone, state)
-        return _ask_nights(db)
+        return _ask_checkout(db, state)
+    if field == "times":
+        state["step"] = "times"
+        _save(db, phone, state)
+        return _ask_times(db, state)
     if field == "guests":
         state["step"] = "guests"
         _save(db, phone, state)
@@ -368,13 +459,20 @@ def _reinterpret(db: Database, *, phone: str, state: dict, field: str | None,
         parsed = _parse_date(text)
         if parsed:
             return _confirm_typed(db, phone=phone, state=state, field="check_in",
-                                  value=parsed.date().isoformat(), next_step="nights",
+                                  value=parsed.date().isoformat(), next_step="checkout",
                                   label=parsed.date().strftime("%d %B %Y"))
-    elif field == "nights":
-        n = _clamp(_first_number(text), 1, NIGHTS_MAX)
-        if n is not None:
-            return _confirm_typed(db, phone=phone, state=state, field="nights",
-                                  value=n, next_step="guests", label=_nights_label(n))
+    elif field == "check_out":
+        parsed = _parse_date(text)
+        if parsed:
+            return _confirm_typed(db, phone=phone, state=state, field="check_out",
+                                  value=parsed.date().isoformat(), next_step="stay",
+                                  label=parsed.date().strftime("%d %B %Y"))
+    elif field == "times":
+        parsed = _parse_time_range(text, state)
+        if parsed:
+            return _confirm_typed(db, phone=phone, state=state, field="times",
+                                  value=parsed, next_step="guests",
+                                  label=_times_label(parsed))
     elif field == "guests":
         n = _clamp(_first_number(text), 1, GUESTS_MAX)
         if n is not None:
@@ -433,23 +531,27 @@ def _review(db: Database, phone: str, state: dict) -> FlowResult:
     try:
         q = pricing.quote(db, room_type=room_type, food_included=food,
                           start=start_at, end=end_at, mode="daily",
-                          stay_mode="NIGHT", guests=guests)
+                          stay_mode=state.get("stay_mode") or "NIGHT", guests=guests)
     except DomainError as exc:
         return FlowResult(f"I can't price that stay: {exc.message}")
 
     total = q.charges_total
     advance = billing.advance_due(db, guests) if terms == "ADVANCE" else total
     balance = money(total - advance)
+    nights = (end_at.date() - start_at.date()).days or 1
+    unit = "night" if q.breakdown.get("stay_mode") == "NIGHT" else "day"
 
     lines = [
         "Please check your booking:",
         f"- Room: {ROOM_LABEL.get(room_type, room_type)}",
         f"- Food: {'included' if q.food_included else 'not included'}",
-        f"- Check-in: {start_at.date().isoformat()}",
-        f"- Check-out: {end_at.date().isoformat()}",
-        f"- Nights: {state['nights']}",
+        f"- Check-in: {start_at.date().isoformat()} at "
+        f"{_clock_label(start_at.hour, start_at.minute)}",
+        f"- Check-out: {end_at.date().isoformat()} at "
+        f"{_clock_label(end_at.hour, end_at.minute)}",
+        f"- Stay: {nights} {unit}{'s' if nights > 1 else ''}",
         f"- Guests: {guests}",
-        f"- Rate: {_rupees(q.unit_rate)} per bed per night",
+        f"- Rate: {_rupees(q.unit_rate)} per bed per {unit}",
         f"- Total: {_rupees(total)}",
     ]
     if terms == "ADVANCE":
@@ -509,17 +611,45 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult:
 
     if verb == "date":
         today = datetime.now().astimezone().date()
-        day = today + timedelta(days=1 if value == "tomorrow" else 0)
+        offset = {"today": 0, "tomorrow": 1, "dayafter": 2}.get(value)
+        if offset is None:
+            return _ask_date(db)
+        day = today + timedelta(days=offset)
         state["check_in"] = day.isoformat()
-        state["step"] = "nights"
+        state["step"] = "checkout"
         _save(db, phone, state)
-        return _ask_nights(db)
+        return _ask_checkout(db, state)
 
-    if verb == "nights":
-        n = _clamp(value, 1, NIGHTS_MAX)
+    if verb == "cout":
+        check_in = _date_of(state.get("check_in"))
+        if not check_in:
+            return _restart(db, phone)
+        n = _clamp(value, 1, CHECKOUT_MAX_NIGHTS)
         if n is None:
-            return _ask_nights(db)
-        state["nights"] = n
+            return _ask_checkout(db, state)
+        day = check_in + timedelta(days=n)
+        state["check_out"] = day.isoformat()
+        state["step"] = "stay"
+        _save(db, phone, state)
+        return _ask_stay(db)
+
+    if verb == "stay":
+        state["stay_mode"] = "DAY" if value == "DAY" else "NIGHT"
+        state["step"] = "times"
+        _save(db, phone, state)
+        return _ask_times(db, state)
+
+    if verb == "times":
+        check_in = _date_of(state.get("check_in"))
+        check_out = _date_of(state.get("check_out"))
+        if not check_in or not check_out:
+            return _restart(db, phone)
+        if value == "skip":
+            times = _default_times(check_in, check_out)
+        else:
+            times = _parse_time_range(value, state) or _default_times(check_in, check_out)
+        state["check_in_time"] = times["check_in_time"]
+        state["check_out_time"] = times["check_out_time"]
         state["step"] = "guests"
         _save(db, phone, state)
         return _ask_guests(db)
@@ -600,7 +730,8 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         request = booking.create_request(
             db, phone=phone, full_name=name, gender=None,
             bed_ids=beds[:guests], check_in_at=start_at, check_out_at=end_at,
-            food_included=state.get("food"), mode="daily", stay_mode="NIGHT",
+            food_included=state.get("food"), mode="daily",
+            stay_mode=state.get("stay_mode") or "NIGHT",
             payment_terms=state.get("terms") or "ADVANCE", guests_count=guests,
             source="WHATSAPP", name_source=state.get("name_source") or "GUEST_TYPED")
     except (BookingConflict, BedUnavailable):
@@ -639,8 +770,10 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
     lines = [
         f"Request {request.reference} sent to the owner.",
         f"Room: {ROOM_LABEL.get(state.get('room_type'), state.get('room_type'))}",
-        f"Dates: {start_at.date().isoformat()} to {end_at.date().isoformat()} "
-        f"({state.get('nights')} night(s))",
+        f"Check-in: {start_at.date().isoformat()} at "
+        f"{_clock_label(start_at.hour, start_at.minute)}",
+        f"Check-out: {end_at.date().isoformat()} at "
+        f"{_clock_label(end_at.hour, end_at.minute)}",
         f"Guests: {guests}",
         f"Total: {_rupees(total)}",
         (f"Reservation (pay now): {_rupees(advance)}" if terms == "ADVANCE"
@@ -664,7 +797,12 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         ]
     lines += [
         "",
-        "The owner will confirm shortly. Your bed is not held until they do.",
+        "Please WAIT for the final confirmation. The owner will first confirm "
+        "your reservation and the payment, and only then is your booking "
+        "confirmed. Your bed is not held until they do.",
+        "Until then, please do not send another booking request. Whatever you "
+        "send now, I will only repeat this: wait for the owner's final "
+        "confirmation.",
     ]
 
     event = {
@@ -674,6 +812,9 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
         "guests": guests,
         "check_in": start_at.date().isoformat(),
         "check_out": end_at.date().isoformat(),
+        "check_in_time": _clock_label(start_at.hour, start_at.minute),
+        "check_out_time": _clock_label(end_at.hour, end_at.minute),
+        "stay_mode": state.get("stay_mode") or "NIGHT",
         "charges_total": str(total),
         "advance_due": str(advance),
         "payment_terms": terms,
@@ -684,25 +825,112 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
 
 # --- helpers ---------------------------------------------------------------
 
-_REQUIRED = ("check_in", "nights", "guests", "room_type")
+_REQUIRED = ("check_in", "check_out", "guests", "room_type")
 
 # What each tap step depends on. A step whose answers are missing means the
 # guest arrived there out of order, so the flow restarts rather than guessing.
 _PREREQ: dict[str, tuple[str, ...]] = {
-    "nights": ("check_in",),
-    "guests": ("check_in", "nights"),
-    "room": ("check_in", "nights", "guests"),
-    "food": ("check_in", "nights", "guests", "room_type"),
-    "terms": ("check_in", "nights", "guests", "room_type"),
-    "name": ("check_in", "nights", "guests", "room_type"),
+    "cout": ("check_in",),
+    "stay": ("check_in", "check_out"),
+    "times": ("check_in", "check_out"),
+    "guests": ("check_in", "check_out"),
+    "room": ("check_in", "check_out", "guests"),
+    "food": ("check_in", "check_out", "guests", "room_type"),
+    "terms": ("check_in", "check_out", "guests", "room_type"),
+    "name": ("check_in", "check_out", "guests", "room_type"),
     "submit": _REQUIRED,
 }
 
 
+def _date_of(value: str | None):
+    """Parse a stored ISO date into a date, or None."""
+    if not value:
+        return None
+    try:
+        return datetime.strptime(value, "%Y-%m-%d").date()
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_clock(text: str) -> tuple[int, int] | None:
+    """Read a clock time with AM/PM, or a 24-hour one. Returns (hour, minute)."""
+    value = (text or "").strip().lower().replace(".", "")
+    match = re.search(r"\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b", value)
+    if not match:
+        return None
+    hour = int(match.group(1))
+    minute = int(match.group(2) or 0)
+    meridiem = match.group(3)
+    if minute > 59:
+        return None
+    if meridiem:
+        if not 1 <= hour <= 12:
+            return None
+        hour = hour % 12 + (12 if meridiem == "pm" else 0)
+    elif hour > 23:
+        return None
+    return hour, minute
+
+
+def _clock_label(hour: int, minute: int) -> str:
+    """A 12-hour label, so a guest never has to read 21:00."""
+    meridiem = "AM" if hour < 12 else "PM"
+    display = hour % 12 or 12
+    return f"{display}:{minute:02d} {meridiem}"
+
+
+def _default_times(check_in, check_out) -> dict:
+    """The times used when the guest skips: 9:00 pm in, 9:00 am out."""
+    return {"check_in_time": "21:00", "check_out_time": "09:00"}
+
+
+def _parse_time_range(text: str | None, state: dict) -> dict | None:
+    """Read a check-in time, and a check-out time when the guest gives one.
+
+    "9 pm" sets the check-in time and leaves the check-out at its default; the
+    guest can give both, as "9 pm to 6 am". The times are stored as 24-hour
+    strings so the billing engine reads them without guessing an AM/PM.
+    """
+    value = (text or "").strip()
+    if not value:
+        return None
+    parts = re.split(r"\bto\b|[-–—]|,|\band\b", value)
+    times = [t for t in (_parse_clock(p) for p in parts) if t]
+    if not times:
+        single = _parse_clock(value)
+        times = [single] if single else []
+    if not times:
+        return None
+    start = times[0]
+    end = times[1] if len(times) > 1 else _parse_clock_hhmm(
+        state.get("check_out_time") or "09:00")
+    return {"check_in_time": _to_24(start),
+            "check_out_time": _to_24(end),
+            "check_in_label": _clock_label(*start),
+            "check_out_label": _clock_label(*end)}
+
+
+def _to_24(clock: tuple[int, int]) -> str:
+    return f"{clock[0]:02d}:{clock[1]:02d}"
+
+
 def _window(state: dict) -> tuple[datetime, datetime]:
-    start_at = datetime.strptime(state["check_in"], "%Y-%m-%d").replace(
-        tzinfo=datetime.now().astimezone().tzinfo)
-    return start_at, start_at + timedelta(days=int(state["nights"]))
+    """The real check-in and check-out instants, times included."""
+    tz = datetime.now().astimezone().tzinfo
+    start_day = datetime.strptime(state["check_in"], "%Y-%m-%d")
+    end_day = datetime.strptime(state["check_out"], "%Y-%m-%d")
+    start_h, start_m = _parse_clock_hhmm(state.get("check_in_time") or "21:00")
+    end_h, end_m = _parse_clock_hhmm(state.get("check_out_time") or "09:00")
+    start_at = start_day.replace(hour=start_h, minute=start_m, tzinfo=tz)
+    end_at = end_day.replace(hour=end_h, minute=end_m, tzinfo=tz)
+    if end_at <= start_at:
+        raise ValueError("the checkout time must be after the check-in time")
+    return start_at, end_at
+
+
+def _parse_clock_hhmm(value: str) -> tuple[int, int]:
+    hour, _, minute = value.partition(":")
+    return int(hour), int(minute)
 
 
 def _room_types(db: Database) -> list[str]:

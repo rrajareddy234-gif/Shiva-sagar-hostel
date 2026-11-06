@@ -132,6 +132,13 @@ def seeded(db: Database) -> Database:
             "('Pillow',50,'PER_ITEM'), "
             "('Locker',50,'PER_MONTH')"
         )
+        cur.execute(
+            "INSERT INTO hostel_facts (key, value, category, source) VALUES "
+            "('policy.night_meals','A night stay includes dinner only.','policy','owner'), "
+            "('policy.day_meals','A day stay is 24 hours and includes tiffin, lunch and dinner.','policy','owner'), "
+            "('policy.timings','We are open 24/7.','policy','owner') "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        )
     return db
 
 

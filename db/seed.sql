@@ -211,7 +211,16 @@ INSERT INTO hostel_facts (key, value, category, source) VALUES
     ('amenity.washing_machine', 'A washing machine is available.', 'amenity', 'owner'),
     ('amenity.food', 'Homely food is available.', 'amenity', 'owner'),
     ('amenity.lockers', 'Independent lockers are provided.', 'amenity', 'owner'),
-    ('amenity.security', '24/7 security.', 'amenity', 'owner')
+    ('amenity.security', '24/7 security.', 'amenity', 'owner'),
+    -- What a night and a day include. A guest paying for a night gets dinner;
+    -- a guest paying for a day gets tiffin, lunch and dinner over 24 hours.
+    ('policy.night_meals', 'A night stay includes dinner only.', 'policy', 'owner'),
+    ('policy.day_meals',
+     'A day stay is 24 hours and includes tiffin, lunch and dinner.',
+     'policy', 'owner'),
+    ('policy.timings',
+     'We are open 24/7; check-in and check-out can be any time you need.',
+     'policy', 'owner')
 ON CONFLICT (key) DO NOTHING;
 
 -- Starter FAQ entries for the amenities and the address, in the owner's words.

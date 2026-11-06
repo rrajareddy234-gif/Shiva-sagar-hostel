@@ -186,6 +186,18 @@ def _faq_reply(db: Database, text: str | None) -> Reply | None:
 
 # --- deterministic answers -------------------------------------------------
 
+def _meal_meaning(db: Database) -> list[str]:
+    """What a night and a day include, read from the owner's facts.
+
+    A guest choosing between "a night" and "a day" is really choosing between
+    meals: a night is dinner only, a day is tiffin, lunch and dinner. The owner
+    can reword either without a release, so nothing here is hard-coded.
+    """
+    night = hostel_facts.get(db, hostel_facts.KEY_NIGHT_MEALS)
+    day = hostel_facts.get(db, hostel_facts.KEY_DAY_MEALS)
+    return [line for line in (night, day) if line]
+
+
 def _price(db: Database, text: str, room_type: str | None,
            food_included: bool | None) -> str:
     """Quote from the owner's active rate plans. Never invents a figure."""
@@ -218,6 +230,11 @@ def _price(db: Database, text: str, room_type: str | None,
         if "DAY" in modes:
             parts.append(f"{_rupees(modes['DAY'])} a day")
         lines.append(f"- {label}{suffix}: " + " / ".join(parts))
+
+    meals = _meal_meaning(db)
+    if meals:
+        lines.append("")
+        lines.extend(meals)
 
     monthly = pricing.list_monthly_plans(db)
     if monthly:
@@ -477,6 +494,11 @@ def _quote(db: Database, room_type: str, food_included: bool) -> Reply:
         if parts:
             lines.append("")
             lines.append("For a monthly stay: " + " / ".join(parts))
+
+    meals = _meal_meaning(db)
+    if meals:
+        lines.append("")
+        lines.extend(meals)
 
     return Reply("\n".join(lines), handled=True, intent="price")
 
