@@ -114,20 +114,30 @@ def _print_reply(text: str) -> None:
     print()
 
 
+def _env_or(name: str, default: str) -> str:
+    """The environment value, or the default when it is unset *or empty*.
+
+    `os.environ.get(name, default)` returns "" when a variable is exported but
+    empty -- which a `source .env` with a blank line does. That produced a DSN
+    with no password and a confusing "no password supplied" error.
+    """
+    return os.environ.get(name) or default
+
+
 def _dsn() -> str:
-    user = os.environ.get("POSTGRES_USER", "sagar")
-    password = os.environ.get("POSTGRES_PASSWORD", "devpass")
-    host = os.environ.get("PGHOST", "localhost")
-    port = os.environ.get("PGPORT", "5432")
+    user = _env_or("POSTGRES_USER", "sagar")
+    password = _env_or("POSTGRES_PASSWORD", "devpass")
+    host = _env_or("PGHOST", "localhost")
+    port = _env_or("PGPORT", "5432")
     return f"postgresql://{user}:{password}@{host}:{port}/{DEMO_DB}"
 
 
 def _admin_dsn() -> str:
-    user = os.environ.get("POSTGRES_USER", "sagar")
-    password = os.environ.get("POSTGRES_PASSWORD", "devpass")
-    host = os.environ.get("PGHOST", "localhost")
-    port = os.environ.get("PGPORT", "5432")
-    maintenance = os.environ.get("POSTGRES_DB", "sagarpg")
+    user = _env_or("POSTGRES_USER", "sagar")
+    password = _env_or("POSTGRES_PASSWORD", "devpass")
+    host = _env_or("PGHOST", "localhost")
+    port = _env_or("PGPORT", "5432")
+    maintenance = _env_or("POSTGRES_DB", "sagarpg")
     return f"postgresql://{user}:{password}@{host}:{port}/{maintenance}"
 
 

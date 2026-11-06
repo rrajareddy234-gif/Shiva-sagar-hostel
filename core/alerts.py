@@ -85,8 +85,13 @@ def _send_prompt(db: Database, channel: ChannelAdapter, phone: str,
 
 
 def notify_new_request(db: Database, *, channel: ChannelAdapter,
-                       owner_phone: str | None, reference: str, summary: str) -> None:
-    """Tell the owner a booking request is waiting, with Approve/Reject buttons.
+                       owner_phone: str | None, reference: str, summary: str,
+                       step: str = "request") -> None:
+    """Tell the owner a booking decision is waiting, with one-tap buttons.
+
+    `step` picks the label: "request" for the first decision (Approve), "proof"
+    for the second, after the guest's payment has been forwarded (Confirm). The
+    ids are identical in both, so the tap routes the same way.
 
     Best effort, like every alert: a failure here must not affect the guest's
     own reply. The buttons carry the booking reference, so a tap is unambiguous.
@@ -94,7 +99,8 @@ def notify_new_request(db: Database, *, channel: ChannelAdapter,
     if not owner_phone:
         return
     from core.commands import approval_prompt
-    _send_prompt(db, channel, owner_phone, approval_prompt(reference, summary=summary))
+    _send_prompt(db, channel, owner_phone,
+                 approval_prompt(reference, summary=summary, step=step))
 
 
 def note_failure(db: Database, *, channel: ChannelAdapter, owner_phone: str | None,

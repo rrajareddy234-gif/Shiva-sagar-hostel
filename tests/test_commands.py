@@ -366,6 +366,19 @@ def test_a_button_prompt_carries_the_reference(db):
         f"own:approve:{request.reference}", f"own:reject:{request.reference}"]
 
 
+def test_the_second_decision_is_labelled_confirm(db):
+    """The owner must be able to tell the two decisions apart.
+
+    Both steps were labelled "Approve", so the owner saw the same word twice.
+    The ids stay identical, so a Confirm tap still routes to the same handler.
+    """
+    request = _request(db)
+    prompt = commands.approval_prompt(request.reference, step="proof")
+    assert [b.title for b in prompt.buttons] == ["Confirm", "Reject"]
+    assert [b.id for b in prompt.buttons] == [
+        f"own:approve:{request.reference}", f"own:reject:{request.reference}"]
+
+
 def test_the_owner_approves_with_a_tap(db):
     request = _request(db)
     result = commands.handle_button(

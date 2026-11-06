@@ -10,6 +10,7 @@ URL could read the hostel's figures.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from datetime import datetime, timedelta
@@ -30,7 +31,10 @@ def _authorise(provided: str | None) -> None:
     expected = os.environ.get("JOB_TOKEN", "")
     if not expected:
         raise HTTPException(status_code=503, detail="JOB_TOKEN is not configured")
-    if provided != expected:
+    # Constant-time compare, like the webhook's signature check: a plain `!=`
+    # leaks how many leading characters matched, which is enough to recover a
+    # token one byte at a time.
+    if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid job token")
 
 

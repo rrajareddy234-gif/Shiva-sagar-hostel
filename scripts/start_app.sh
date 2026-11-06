@@ -47,12 +47,30 @@ $D exec sagarpg-pg pg_isready -U sagar -d sagarpg >/dev/null 2>&1 \
 
 # An empty database means the volume was lost with the workspace. The newest
 # backup is the best we have; restoring it brings the schema and the rate card.
+#
+# The backup script writes `*.sql.gz`; an older hand-made dump is `*.sql`. Both
+# are looked for, gzipped first, and a compressed dump is decompressed on the
+# way in. Looking only for `*.sql` -- as this did -- found nothing once the
+# nightly job had run, so a lost volume came back as an empty hostel with the
+# owner's real data sitting unread in the backups directory.
 if [ "$($D exec -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -tAc \
         "SELECT to_regclass('public.beds') IS NOT NULL" 2>/dev/null)" != "t" ]; then
-    newest=$(ls -1t backups/*.sql 2>/dev/null | head -1)
+    newest=$(ls -1t backups/*.sql.gz backups/*.sql 2>/dev/null | head -1)
     if [ -n "$newest" ]; then
         echo "     database is empty - restoring $newest"
-        $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < "$newest"
+        case "$newest" in
+            *.gz)
+                if ! gzip -t "$newest" 2>/dev/null; then
+                    echo "     FAILED: $newest is corrupt; refusing to restore" >&2
+                    exit 1
+                fi
+                gunzip -c "$newest" | $D exec -i -e PGPASSWORD=devpass \
+                    sagarpg-pg psql -U sagar -d sagarpg -q
+                ;;
+            *)
+                $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < "$newest"
+                ;;
+        esac
     else
         echo "     database is empty and no backup found - loading schema and seed"
         $D exec -i -e PGPASSWORD=devpass sagarpg-pg psql -U sagar -d sagarpg -q < db/schema.sql

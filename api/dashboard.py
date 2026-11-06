@@ -21,6 +21,20 @@ _COOKIE = "sagar_dash"
 _YEAR = 60 * 60 * 24 * 365
 
 
+def _is_https(request: Request) -> bool:
+    """Whether this request reached us over HTTPS.
+
+    Behind the reverse proxy the app sees plain HTTP, so the forwarded header is
+    checked too. The cookie is only marked `secure` when the connection really is
+    HTTPS: setting it on a plain-HTTP preview would stop the browser sending the
+    cookie back and lock the owner out of his own dashboard.
+    """
+    if request.url.scheme == "https":
+        return True
+    forwarded = request.headers.get("x-forwarded-proto", "")
+    return forwarded.split(",")[0].strip().lower() == "https"
+
+
 def _authorised(request: Request) -> bool:
     return dashboard.password_is_ok(request.cookies.get(_COOKIE))
 
@@ -72,7 +86,7 @@ async def dashboard_login(request: Request) -> Response:
         return HTMLResponse(_login_page("That password is not right."), status_code=401)
     response = RedirectResponse("/dashboard", status_code=303)
     response.set_cookie(_COOKIE, supplied, max_age=_YEAR, httponly=True,
-                        samesite="lax")
+                        samesite="lax", secure=_is_https(request))
     return response
 
 

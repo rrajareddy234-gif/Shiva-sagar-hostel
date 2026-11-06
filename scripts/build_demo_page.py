@@ -31,44 +31,60 @@ ROOT = Path(__file__).resolve().parent.parent
 GUEST_PHONE = "+919000000001"
 OWNER_PHONE = "+918688397996"
 
-# Each step is a guest's message. A step wrapped in [ ] is a tap on the button
-# with that label, exactly as WhatsApp delivers it.
-GUEST_SCRIPT = [
-    "hi",
-    "[Rooms & Prices]",
-    "[AC]",
-    "[With food]",
-    "[Check Availability]",
-    "[Food & Amenities]",
-    "[Location & Directions]",
-    "[Guest Reviews]",
-    "[My Bookings]",
-    "[Book a Room]",
-    "[Tomorrow]",
-    "[2 nights]",
-    "[2 guests]",
-    "[AC]",
-    "[With food]",
-    "[Reservation]",
-    "Ravi Kumar",
-    "[Submit]",
-    "[My Bookings]",
-    "[Talk to Staff]",
-    "is there wifi?",
-    "where are you located",
-]
-
-OWNER_SCRIPT = [
-    "how many vacancies today",
-    "full status",
-    "pending bookings",
-    "payments awaiting verification",
-    "revenue this month",
+# The demo is one interleaved timeline, not two scripts. A guest books, the
+# owner makes the first decision, the guest pays and sends the screenshot, and
+# the owner makes the second decision -- in that order, because that is the
+# order the two people actually act in. Splitting it into a "guest script" and
+# an "owner script" would show the steps out of order and hide the whole point
+# of the two-step approval.
+#
+# A step wrapped in [ ] is a tap on the button with that label, exactly as
+# WhatsApp delivers it. `[screenshot]` is the guest's payment image.
+TIMELINE = [
+    ("guest", "hi"),
+    ("guest", "[Rooms & Prices]"),
+    ("guest", "[AC]"),
+    ("guest", "[With food]"),
+    ("guest", "[Check Availability]"),
+    ("guest", "[Food & Amenities]"),
+    ("guest", "[Location & Directions]"),
+    ("guest", "[Guest Reviews]"),
+    ("guest", "[My Bookings]"),
+    ("guest", "[Book a Room]"),
+    ("guest", "[Tomorrow]"),
+    ("guest", "[2 nights]"),
+    ("guest", "[2 guests]"),
+    ("guest", "[AC]"),
+    ("guest", "[With food]"),
+    ("guest", "[Reservation]"),
+    # The name is not asked for here: the guest's WhatsApp profile name is
+    # already known, so the flow goes straight to the review. That is the real
+    # behaviour, and it keeps this page free of any AI call.
+    ("guest", "[Submit]"),
+    # The owner is now asked to make the first decision.
+    ("owner", "pending bookings"),
+    ("owner", "[Approve]"),
+    # Accepting tells the guest to pay. The guest pays and sends the proof.
+    ("guest", "[screenshot]"),
+    # The owner checks the money and makes the second decision.
+    ("owner", "[Confirm]"),
+    ("guest", "[My Bookings]"),
+    ("guest", "is there wifi?"),
+    ("guest", "where are you located"),
+    ("guest", "[Talk to Staff]"),
+    ("owner", "how many vacancies today"),
+    ("owner", "revenue this month"),
 ]
 
 
 class CaptureChannel(ChannelAdapter):
-    """Records replies instead of sending them."""
+    """Records replies instead of sending them, and serves a fake screenshot.
+
+    Every capture is tagged with the phone it was addressed to, so one timeline
+    can hold both people's phones: a message sent to the owner belongs in the
+    owner's window and a message sent to the guest in the guest's. Without that
+    the two conversations could not be interleaved in the right order.
+    """
 
     name = "capture"
 
@@ -86,14 +102,23 @@ class CaptureChannel(ChannelAdapter):
     def parse_inbound(self, raw_body: bytes) -> list[InboundMessage]:
         return []
 
+    def fetch_media(self, media_id: str) -> tuple[bytes, str] | None:
+        """Stand in for the download of a guest's payment screenshot.
+
+        The real channel downloads the image from WhatsApp. Here a small, valid
+        1x1 JPEG is returned so the proof path -- file it, forward it to the
+        owner, email a copy -- runs exactly as it does in production.
+        """
+        return _SAMPLE_JPEG, "image/jpeg"
+
     def send_text(self, to_phone: str, text: str) -> SendResult:
-        self._capture({"type": "text", "text": text})
+        self._capture(to_phone, {"type": "text", "text": text})
         return SendResult(ok=True, provider_message_id=self._next("out"))
 
     def send_interactive(self, to_phone: str, prompt: Prompt) -> SendResult:
         options = prompt.rows or prompt.buttons
         self.last_options.update({o.title: o.id for o in options})
-        self._capture({
+        self._capture(to_phone, {
             "type": "list" if prompt.rows else "buttons",
             "text": prompt.body,
             "button_text": prompt.button_text,
@@ -102,44 +127,80 @@ class CaptureChannel(ChannelAdapter):
         return SendResult(ok=True, provider_message_id=self._next("btn"))
 
     def send_template(self, to_phone, template_name, params=None, language="en"):
-        self._capture({"type": "text", "text": f"(template: {template_name})"})
+        self._capture(to_phone, {"type": "text", "text": f"(template: {template_name})"})
         return SendResult(ok=True, provider_message_id=self._next("tpl"))
 
     def send_document(self, to_phone, filename, content, media_type="text/csv",
                       caption=None):
-        self._capture({"type": "text",
-                       "text": caption or f"(file: {filename})"})
+        self._capture(to_phone, {"type": "document", "text": caption or "",
+                                 "filename": filename, "bytes": len(content or b"")})
         return SendResult(ok=True, provider_message_id=self._next("doc"))
 
-    def _capture(self, payload: dict) -> None:
+    def _capture(self, to_phone: str, payload: dict) -> None:
+        payload = {"to": to_phone, **payload}
         CURRENT.setdefault("replies", []).append(payload)
 
+
+# A valid 1x1 JPEG, small enough to inline. It stands in for the guest's
+# payment screenshot so the demo exercises the real media path.
+_SAMPLE_JPEG = bytes.fromhex(
+    "ffd8ffe000104a46494600010100000100010000ffdb004300080606070605080707"
+    "07090908"
+    "0a0c140d0c0b0b0c1912130f141d1a1f1e1d1a1c1c20242e2720222c231c1c2837"
+    "292c30313434341f27393d38323c2e333432ffc0000b080001000101011100ffc400"
+    "1f0000010501010101010100000000000000000102030405060708090a0bffc400b5"
+    "100002010303020403050504040000017d0102030004110512213141061351610722"
+    "7114328191082342b1c11552d1f02433627282090a161718191a25262728292a343536"
+    "3738393a434445464748494a535455565758595a636465666768696a73747576777879"
+    "7a838485868788898a92939495969798999aa2a3a4a5a6a7a8a9aab2b3b4b5b6b7b8"
+    "b9bac2c3c4c5c6c7c8c9cad2d3d4d5d6d7d8d9dae1e2e3e4e5e6e7e8e9eaf1f2f3"
+    "f4f5f6f7f8f9faffda0008010100003f00fefeffd9")
 
 CURRENT: dict = {}
 
 
-def _run_script(db, channel, settings, ai, phone: str, script: list[str],
-                title: str) -> list[dict]:
-    """Send each message in turn and return the conversation as chat turns."""
+def _run_timeline(db, channel, settings, ai) -> dict:
+    """Play the timeline and split the captured traffic into two windows.
+
+    Every reply the engine sends is addressed to one phone, so it is filed in
+    that person's window. That is what lets the guest's and the owner's sides of
+    one booking be shown as they really happen, in order, rather than as two
+    unrelated scripts.
+    """
+    windows: dict[str, list[dict]] = {"guest": [], "owner": []}
+    people = {"guest": GUEST_PHONE, "owner": OWNER_PHONE}
     global CURRENT
-    turns: list[dict] = []
-    for i, raw in enumerate(script, start=1):
+
+    for i, (who, raw) in enumerate(TIMELINE, start=1):
+        phone = people[who]
         tap = None
-        text = raw
-        if raw.startswith("[") and raw.endswith("]"):
+        text: str | None = raw
+        media_id = None
+        message_type = "text"
+
+        if raw == "[screenshot]":
+            media_id = "demo-media-1"
+            message_type = "image"
+            text = None
+        elif raw.startswith("[") and raw.endswith("]"):
             tap = raw[1:-1]
             text = tap
+
         button_id = channel.last_options.get(tap, tap) if tap else None
         message = InboundMessage(
-            provider_message_id=f"{title}.{i}",
+            provider_message_id=f"{who}.{i}",
             from_phone=phone,
             text=text,
-            message_type="interactive" if button_id else "text",
+            message_type="interactive" if button_id else message_type,
             button_id=button_id,
+            media_id=media_id,
+            media_type="image/jpeg" if media_id else None,
             profile_name="Ravi Kumar",
         )
+
         CURRENT = {"replies": []}
-        turns.append({"from": "them", "text": raw, "tap": bool(tap)})
+        windows[who].append({"from": "them", "text": raw, "tap": bool(tap),
+                             "media": bool(media_id)})
         try:
             stored = store_inbound(db, message)
             dispatch(db, channel, settings, message, ai,
@@ -147,9 +208,11 @@ def _run_script(db, channel, settings, ai, phone: str, script: list[str],
         except Exception as exc:  # keep the page buildable
             CURRENT["replies"].append(
                 {"type": "text", "text": f"[engine error: {type(exc).__name__}: {exc}]"})
+
         for r in CURRENT["replies"]:
-            turns.append({"from": "bot", **r})
-    return turns
+            target = "owner" if r.get("to") == OWNER_PHONE else "guest"
+            windows[target].append({"from": "bot", **r})
+    return windows
 
 
 def _seed_sample_reviews(db) -> None:
@@ -190,10 +253,9 @@ def build_page(out_path: Path) -> Path:
 
     _seed_sample_reviews(db)
 
-    guest = _run_script(db, channel, settings, ai, GUEST_PHONE, GUEST_SCRIPT, "guest")
-    owner = _run_script(db, channel, settings, ai, OWNER_PHONE, OWNER_SCRIPT, "owner")
+    windows = _run_timeline(db, channel, settings, ai)
 
-    page = _render({"guest": guest, "owner": owner})
+    page = _render(windows)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(page)
 
@@ -217,6 +279,10 @@ def _esc(t: str) -> str:
 
 def _bubble(turn: dict) -> str:
     if turn["from"] == "them":
+        if turn.get("media"):
+            # The guest's payment screenshot, as it appears in the chat.
+            return ('<div class="msg out shot"><div class="thumb">🧾</div>'
+                    'payment-screenshot.jpg<span class="tick">✓✓</span></div>')
         body = _esc(turn["text"])
         cls = "out"
         if turn.get("tap"):
@@ -224,6 +290,12 @@ def _bubble(turn: dict) -> str:
         return f'<div class="msg {cls}">{body}<span class="tick">✓✓</span></div>'
 
     kind = turn.get("type", "text")
+    if kind == "document":
+        name = _esc(turn.get("filename", "file"))
+        caption = _esc(turn.get("text", "")).replace("\n", "<br>")
+        return (f'<div class="msg in doc"><div class="dhead">📎 {name}</div>'
+                f'{caption}</div>')
+
     body = _esc(turn.get("text", "")).replace("\n", "<br>")
     extra = ""
     if kind in ("list", "buttons") and turn.get("options"):
@@ -291,6 +363,16 @@ def _render(conv: dict) -> str:
   .ohdr{{font-size:.66rem;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);padding:8px 12px 5px}}
   .opt{{padding:9px 12px;border-top:1px solid rgba(245,239,230,.07);font-size:.82rem;display:flex;gap:9px}}
   .oic{{color:var(--green)}}
+  .shot{{display:flex;align-items:center;gap:9px}}
+  .shot .thumb{{width:38px;height:38px;border-radius:8px;background:rgba(255,255,255,.14);
+    display:grid;place-items:center;font-size:1.1rem;flex:0 0 auto}}
+  .doc{{border-left:3px solid var(--green)}}
+  .doc .dhead{{font-size:.72rem;color:#7ee2a8;font-weight:700;margin-bottom:5px;letter-spacing:.02em}}
+  .steps{{margin:22px 0 4px;display:grid;gap:9px}}
+  .step{{display:flex;gap:11px;align-items:flex-start;font-size:.86rem;line-height:1.5;color:#e3d6c6}}
+  .step .n{{flex:0 0 auto;width:22px;height:22px;border-radius:50%;background:var(--saffron);
+    color:#231a10;font-weight:700;font-size:.74rem;display:grid;place-items:center;margin-top:1px}}
+  .step b{{color:var(--paper)}}
   @keyframes pop{{from{{opacity:0;transform:translateY(8px)}}to{{opacity:1;transform:none}}}}
   .hide{{display:none}}
   footer{{margin-top:30px;color:var(--muted);font-size:.82rem;line-height:1.7}}
@@ -303,22 +385,29 @@ def _render(conv: dict) -> str:
 <div class="wrap">
   <header>
     <div class="eyebrow">Sagar PG · Macherla</div>
-    <h1>Talk to the hostel bot,<br><em>before it goes live</em>.</h1>
-    <p class="lede">Two real conversations, produced by running the actual booking engine
-    on a sample database. Nothing here is typed by hand.</p>
+    <h1>Book a bed, and watch<br><em>both sides of it</em>.</h1>
+    <p class="lede">One guest, one booking, two decisions by the owner. Every bubble
+    below was produced by the real booking engine on a sample database. Nothing here
+    is typed by hand.</p>
   </header>
 
   <div class="note">
-    <b>These are real outputs, not a mockup.</b> Each reply below was generated by the
-    same code your WhatsApp number runs, on a sample hostel seeded from your own rooms
-    and rate card. The database is a throwaway copy, so nothing here can affect real
-    guests. The AI is switched off on this page, so you see the fixed answers and the
-    exact prices from your rate card.
+    <b>These are real outputs, not a mockup.</b> Each reply was generated by the same
+    code your WhatsApp number runs, on a sample hostel seeded from your own rooms and
+    rate card. The database is a throwaway copy, so nothing here can affect real
+    guests. The AI is switched off, so you see the fixed answers and the exact prices
+    from your rate card.
+  </div>
+
+  <div class="steps">
+    <div class="step"><span class="n">1</span><span>The guest books and <b>sends the payment screenshot</b>.</span></div>
+    <div class="step"><span class="n">2</span><span>You tap <b>Approve</b> — the guest is told to pay.</span></div>
+    <div class="step"><span class="n">3</span><span>You check the money, then tap <b>Confirm</b>. <b>A bed is only ever confirmed once you have seen the payment.</b></span></div>
   </div>
 
   <div class="tabs" id="tabs">
-    <button class="on" data-t="guest">👤 As a guest</button>
-    <button data-t="owner">🏠 As the owner</button>
+    <button class="on" data-t="guest">👤 Guest's phone</button>
+    <button data-t="owner">🏠 Your phone</button>
   </div>
 
   <div id="guest">
@@ -340,11 +429,13 @@ def _render(conv: dict) -> str:
   </div>
 
   <footer>
-    <b>What you are looking at:</b> the guest tab shows the greeting menu, prices chosen by
-    tapping, live availability, a stored answer and your address. The owner tab shows the
-    owner-only commands. Both are computed from the database every time.<br><br>
+    <b>What you are looking at:</b> the guest tab shows the menu, prices chosen by
+    tapping, live availability, the booking, the payment screenshot, and your address.
+    The owner tab shows your two decisions — <b>Approve</b>, then <b>Confirm</b> — plus
+    your own commands. Switch tabs and read the two sides of the same booking.<br><br>
     <b>Prices never come from the AI.</b> Every figure is read from your rate card by
-    <code>core/pricing.py</code>.
+    <code>core/pricing.py</code>. The payment screenshot is only ever moved to you;
+    the bot never reads it, and it cannot.
   </footer>
 </div>
 

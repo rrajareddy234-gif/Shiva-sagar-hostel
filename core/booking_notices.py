@@ -102,7 +102,7 @@ def notify_proof_received(db: Database, booking: dict, *, channel: ChannelAdapte
                 owner_phone, filename or "payment-proof.jpg", content,
                 media_type=media_type,
                 caption=(f"Payment screenshot for {booking['reference']} from the "
-                         f"guest. Check it, then approve to confirm the booking."))
+                         f"guest. Check it, then tap Confirm to finish the booking."))
             forwarded = bool(result.ok)
         except Exception as exc:
             log.warning("could not forward proof for %s: %s",

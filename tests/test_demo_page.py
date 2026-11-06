@@ -48,3 +48,33 @@ def test_conversation_keeps_every_turn_in_order():
     ]
     html = _conversation(turns)
     assert html.index("first") < html.index("second") < html.index("third")
+
+
+def test_the_guest_screenshot_renders_as_an_image_bubble():
+    html = _bubble({"from": "them", "text": "[screenshot]", "media": True})
+    assert "payment-screenshot.jpg" in html
+    assert "thumb" in html
+
+
+def test_the_forwarded_proof_shows_the_filename_and_caption_escaped():
+    html = _bubble({"from": "bot", "type": "document",
+                    "filename": "SPG-1-payment.jpg",
+                    "text": "Check it <script>x</script>"})
+    assert "SPG-1-payment.jpg" in html
+    assert "<script>" not in html
+    assert "&lt;script&gt;" in html
+
+
+def test_the_timeline_shows_both_people_and_both_decisions():
+    """The demo must show the real two-step journey, not one side of it.
+
+    The whole point of the page is that a bed is confirmed only after the owner
+    has seen the payment. That needs the guest's request and screenshot, and the
+    owner's Approve and Confirm taps, in one ordered timeline.
+    """
+    from scripts.build_demo_page import TIMELINE
+    who = [w for w, _ in TIMELINE]
+    steps = [m for _, m in TIMELINE]
+    assert "guest" in who and "owner" in who
+    assert steps.index("[Approve]") < steps.index("[screenshot]") < steps.index("[Confirm]")
+    assert "[screenshot]" in steps

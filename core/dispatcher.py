@@ -230,10 +230,10 @@ def _handle_payment_proof(db: Database, *, channel: ChannelAdapter,
         content=content, filename=f"{row['reference']}-payment{_suffix(media_type)}",
         media_type=media_type)
 
-    # The owner is asked to check the money with a one-tap confirm.
+    # The owner is asked to check the money with a one-tap Confirm.
     alerts.notify_new_request(
         db, channel=channel, owner_phone=settings.owner_phone,
-        reference=row["reference"],
+        reference=row["reference"], step="proof",
         summary=(f"{row['reference']}: the guest says they have paid and sent a "
                  f"screenshot. Check the payment, then Confirm to finish the "
                  f"booking."))

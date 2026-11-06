@@ -75,13 +75,26 @@ class CommandResult:
 _OWNER = "own:"
 
 
-def approval_prompt(reference: str, *, summary: str | None = None) -> Prompt:
-    """The approve/reject buttons for one booking request."""
+def approval_prompt(reference: str, *, summary: str | None = None,
+                    step: str = "request") -> Prompt:
+    """The owner's decision buttons for one booking.
+
+    Two steps, and the wording has to match the step. The first decision
+    *accepts* a request (the guest is then asked to pay); the second *confirms*
+    a payment the owner has just checked. Both were labelled "Approve", so the
+    owner saw the same word twice and could not tell which decision he was
+    making. The second is now "Confirm".
+
+    The button **ids are the same in both steps** -- `own:approve:<ref>` -- so
+    the routing, the role check and the audit are untouched. Only the label the
+    owner reads changes, and the label is never what the code routes on.
+    """
     body = summary or f"Booking request {reference} is waiting for you."
+    second = "Confirm" if step == "proof" else "Approve"
     return Prompt(
         body=body,
         buttons=(
-            Button(f"{_OWNER}approve:{reference}", "Approve"),
+            Button(f"{_OWNER}approve:{reference}", second),
             Button(f"{_OWNER}reject:{reference}", "Reject"),
         ),
     )

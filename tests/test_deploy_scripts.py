@@ -90,3 +90,18 @@ def test_start_app_does_not_reset_the_owners_confirmation_flags():
     guard_at = text.index("facts=")
     seed_at = text.index("db/seed.sql")
     assert guard_at < seed_at, "the seed load must sit behind the empty check"
+
+
+def test_start_app_can_restore_the_backups_that_are_actually_written():
+    """The recovery path must find the dumps the backup job produces.
+
+    `backup.sh` writes `*.sql.gz`. The recovery path looked only for `*.sql`,
+    so once the nightly job had run there was nothing to find and a lost volume
+    came back as an empty hostel -- the owner's real bookings sitting unread in
+    the backups directory. Both names must be searched, and a compressed dump
+    decompressed on the way in.
+    """
+    text = (SCRIPTS_ROOT / "start_app.sh").read_text()
+    assert "backups/*.sql.gz" in text, "recovery must look for the gzipped backups"
+    assert "backups/*.sql" in text, "recovery must still accept an older plain dump"
+    assert "gunzip" in text, "a gzipped dump must be decompressed before restore"

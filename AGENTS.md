@@ -417,21 +417,46 @@ Writing it immediately found a real bug:
   `test_a_short_message_with_regex_characters_does_not_crash`. **Rule: guest
   text is data, never a pattern — escape it before it reaches any regex.**
 
+A second FAQ hazard, found while building the two-step demo (2026-11-06):
+**a grammar word must never be a search key.** The short-question fallback in
+`core/faq.py` matched any word of four or more characters, and "there" is four.
+"Is there parking" therefore matched the "Is there Wi-Fi?" entry on the shared
+word *there* and answered **"Yes, Wi-Fi is available."** — a confidently wrong
+answer, the exact thing `core/faq.py` says is worse than an AI call. The fix is
+`_STOPWORDS`: grammar words are dropped before the keyword search, so a question
+can only match on a word that names something. Guarded by
+`test_a_grammar_word_never_pulls_up_an_unrelated_answer`. **Rule: a stopword
+answers nothing — never search on one.**
+
 Note: the simulator's own channel must hand out unique outbound message ids
 across send kinds. `out.N` / `btn.N` sharing a counter collides on
 `messages.wa_message_id`.
 
 ## The permanent preview site
 
-`scripts/build_demo_page.py` runs two real conversations — one as a guest, one
-as the owner — against a throwaway database and writes a self-contained static
-site into `docs/`. Nothing on the pages is hand-written: every bubble is the
-real reply from the real engine, so the pages cannot drift from the code.
+`scripts/build_demo_page.py` runs one **interleaved timeline** against a throwaway
+database — guest messages and owner messages in the order the two people really
+act — and writes a self-contained static site into `docs/`. Nothing on the pages
+is hand-written: every bubble is the real reply from the real engine, so the
+pages cannot drift from the code.
+
+The timeline is deliberately *not* two separate scripts. A booking is a two-step
+approval, and splitting the run into a "guest script" and an "owner script" would
+show the steps out of order and hide the point of it. Every captured reply is
+tagged with the phone it was sent to, so the guest's window and the owner's
+window each get their own side of the same booking, in order. The page therefore
+shows the guest requesting a bed and sending a payment screenshot, the owner
+tapping **Approve**, then the owner checking the money and tapping **Confirm**.
 
 ```
 python scripts/build_demo_page.py --site docs   # index.html + demo.html + menu.html
 python scripts/build_demo_page.py --out /tmp/x.html   # just the demo page
 ```
+
+The demo runs with **AI off** (`ai=None`), so the page must not contain any
+free-text step the deterministic router cannot answer — that would print the
+AI-fallback bubble and make the demo look broken. Keep the timeline to taps,
+menu items and questions the router answers.
 
 `docs/` is published on the **`gh-pages` branch** by
 `.github/workflows/pages.yml` (GitHub Actions), which is the only way to turn
@@ -441,8 +466,8 @@ Pages on with the automation token — `POST /repos/.../pages` returns
 
 The AI is deliberately **off** on the demo page (`ai = None`). Every answer
 comes from the router and the database, so the page shows deterministic
-behaviour and real rate-card prices, not a model's mood. The guest script taps
-the app's real button labels (`[Prices]`, `[Availability]`, …), which only works
+behaviour and real rate-card prices, not a model's mood. The timeline taps the
+app's real button labels (`[Prices]`, `[Availability]`, …), which only works
 because the simulator accumulates button labels across prompts — real WhatsApp
 keeps every interactive message, so a label from an earlier prompt stays tappable.
 

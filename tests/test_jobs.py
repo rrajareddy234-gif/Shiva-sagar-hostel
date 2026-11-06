@@ -35,6 +35,22 @@ def test_missing_configuration_is_reported(client, monkeypatch):
     assert client.get("/jobs/daily-report", headers=AUTH).status_code == 503
 
 
+def test_a_token_that_is_a_prefix_of_the_real_one_is_refused(client):
+    """The compare must not accept a prefix.
+
+    A short-circuit `!=` leaks how many leading characters matched, which is
+    enough to recover a token one byte at a time. A prefix must be rejected
+    outright, whatever the compare does internally.
+    """
+    assert client.get("/jobs/daily-report",
+                      headers={"X-Job-Token": JOB_TOKEN[:6]}).status_code == 401
+
+
+def test_an_empty_token_header_is_refused(client):
+    assert client.get("/jobs/daily-report",
+                      headers={"X-Job-Token": ""}).status_code == 401
+
+
 @pytest.mark.parametrize("path", ["/jobs/unanswered-enquiries", "/jobs/upcoming",
                                   "/jobs/health-check", "/jobs/pending-requests"])
 def test_every_job_requires_a_token(client, path):

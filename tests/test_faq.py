@@ -114,6 +114,21 @@ def test_a_word_is_matched_whole_not_as_a_substring(stocked):
     assert faq.match(stocked, None) is None
 
 
+def test_a_grammar_word_never_pulls_up_an_unrelated_answer(stocked):
+    """A question must not be answered by a shared stopword.
+
+    "is there parking" shares the word "there" with "Is there Wi-Fi?" and, with
+    the stopword counted, matched the Wi-Fi entry -- telling a guest asking
+    about parking that Wi-Fi was available. A confidently wrong answer is worse
+    than no answer, so the grammar words are not searchable.
+    """
+    assert faq.match(stocked, "is there parking") is None
+    assert faq.match(stocked, "is there anything for parking") is None
+    # The real questions still answer, including on the short-keyword path.
+    assert "wifi" in (faq.answer(stocked, "is there wifi") or "").lower()
+    assert faq.match(stocked, "wifi?") is not None
+
+
 def test_re_adding_a_question_replaces_it(stocked):
     first = faq.add(stocked, question="What time is check-in?",
                     answer="Check-in is from 11am.")

@@ -88,6 +88,32 @@ def test_logging_out_locks_the_page_again(client, db):
     assert "Ramesh" not in client.get("/dashboard").text
 
 
+def test_the_session_cookie_is_httponly_and_samesite(client):
+    """The cookie must be unreadable by script and not sent cross-site."""
+    response = client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD},
+                           follow_redirects=False)
+    cookie = response.headers["set-cookie"]
+    assert "HttpOnly" in cookie
+    assert "samesite=lax" in cookie.lower()
+
+
+def test_the_cookie_is_secure_only_over_https(client):
+    """`secure` must follow the connection.
+
+    Over the plain-HTTP preview a `secure` cookie would never be sent back, so
+    the owner would be locked out of his own dashboard the moment he logged in.
+    Behind HTTPS it must be set, so a sniffed request cannot replay it.
+    """
+    plain = client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD},
+                        follow_redirects=False)
+    assert "secure" not in plain.headers["set-cookie"].lower()
+
+    forwarded = client.post(
+        "/dashboard/login", data={"password": DASHBOARD_PASSWORD},
+        headers={"X-Forwarded-Proto": "https"}, follow_redirects=False)
+    assert "secure" in forwarded.headers["set-cookie"].lower()
+
+
 # --- what the page shows ---------------------------------------------------
 
 def test_the_page_shows_the_numbers_the_owner_cares_about(db):

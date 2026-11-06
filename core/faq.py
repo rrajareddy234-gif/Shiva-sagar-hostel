@@ -38,6 +38,26 @@ MIN_ASK_LENGTH = 3
 MAX_KEYWORD_WORDS = 3
 MIN_KEYWORD_LENGTH = 4
 
+# Grammar words carry no topic, but they are four characters or more, so they
+# passed MIN_KEYWORD_LENGTH and could pull up an unrelated answer: "is there
+# parking" matched the Wi-Fi entry on the shared word "there" and told the guest
+# Wi-Fi was available. A confidently wrong answer is the one thing this module
+# exists to avoid, so these are never used as the search word. Words that can
+# name a real thing ("room", "water", "food") are deliberately not here.
+_STOPWORDS = {
+    "about", "after", "again", "also", "and", "any", "are", "before", "being",
+    "both", "can", "could", "does", "doing", "down", "each", "else", "even",
+    "ever", "from", "further", "have", "having", "here", "hers", "herself",
+    "him", "himself", "his", "how", "into", "its", "itself", "just", "know",
+    "like", "made", "make", "many", "more", "most", "much", "must", "myself",
+    "need", "only", "other", "ought", "our", "ours", "ourselves", "over", "own",
+    "same", "shall", "she", "should", "some", "such", "than", "that", "the",
+    "their", "theirs", "them", "themselves", "then", "there", "these", "they",
+    "this", "those", "through", "too", "under", "until", "very", "want", "was",
+    "were", "what", "when", "where", "which", "while", "who", "whom", "why",
+    "will", "with", "would", "your", "yours", "yourself", "yourselves",
+}
+
 
 @dataclass(frozen=True)
 class Match:
@@ -97,9 +117,15 @@ def _keyword_match(db: Database, asked: str) -> Match | None:
     characters count, so a stray preposition cannot pull up an answer. The
     match is a whole word, never a substring: "wifi" matches "wifi", but "the"
     matches nothing.
+
+    Grammar words are dropped first. Without that, "is there parking" matched
+    the Wi-Fi entry on the shared word "there" and answered with Wi-Fi, which
+    is a confidently wrong answer -- worse, as this module says, than admitting
+    it does not know and letting the AI try.
     """
     words = [w.strip("?.,!") for w in asked.split()]
-    words = [w for w in words if len(w) >= MIN_KEYWORD_LENGTH]
+    words = [w for w in words
+             if len(w) >= MIN_KEYWORD_LENGTH and w not in _STOPWORDS]
     if not words or len(asked.split()) > MAX_KEYWORD_WORDS:
         return None
 
