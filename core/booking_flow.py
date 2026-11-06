@@ -552,6 +552,16 @@ def _review(db: Database, phone: str, state: dict) -> FlowResult:
         f"- Stay: {nights} {unit}{'s' if nights > 1 else ''}",
         f"- Guests: {guests}",
         f"- Rate: {_rupees(q.unit_rate)} per bed per {unit}",
+    ]
+    if q.discount and q.discount > 0:
+        promo = q.breakdown.get("promotion") or "Offer"
+        percent = q.breakdown.get("promotion_percent")
+        label = f"{promo} ({percent}% off)" if percent else promo
+        lines += [
+            f"- Subtotal: {_rupees(q.base_amount + q.extras)}",
+            f"- {label}: - {_rupees(q.discount)}",
+        ]
+    lines += [
         f"- Total: {_rupees(total)}",
     ]
     if terms == "ADVANCE":

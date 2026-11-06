@@ -88,11 +88,27 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
         # own questions, so the flow answers before the router or the AI. A
         # submit here creates the request in code, which is what makes the owner
         # notification reliable.
-        from core import booking_flow
+        from core import booking_flow, service_flow, sticky
         flow = booking_flow.handle(db, phone=phone, text=text, button_id=button_id)
         if flow is not None:
             return Outcome(reply=flow.reply, handled_by="router", intent="book",
                            prompt=flow.prompt, events=flow.events)
+
+        flow = service_flow.handle(db, phone=phone, text=text, button_id=button_id)
+        if flow is not None:
+            return Outcome(reply=flow.reply, handled_by="router", intent="service",
+                           prompt=flow.prompt, events=flow.events)
+
+        # A guest with a live booking is held on "wait for the owner" before the
+        # router or the AI can answer. This is what stops a duplicate request and
+        # stops the AI promising a bed the owner has not confirmed. A deliberate
+        # tap (My Bookings) is allowed through: it is a status request, and the
+        # router answers it from the same records.
+        if button_id is None:
+            held = sticky.reply_for(db, phone=phone, text=text)
+            if held is not None:
+                return Outcome(reply=held, handled_by="router",
+                               intent="booking_status")
 
         customer_reply = router.route(db, text, role=role, button_id=button_id,
                                       phone=phone)

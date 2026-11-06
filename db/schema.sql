@@ -624,3 +624,90 @@ ALTER TABLE bookings ADD COLUMN IF NOT EXISTS payment_proof_at timestamptz;
 
 CREATE INDEX IF NOT EXISTS idx_bookings_awaiting_owner
     ON bookings(status) WHERE status IN ('REQUESTED','PROOF_SENT');
+
+-- ---------------------------------------------------------------------------
+-- Walk-in services: a fresh-up and a short rest.
+--
+-- These are sold at the counter, not booked as a bed for the night. A fresh-up
+-- uses no bed at all; a rest uses a bed for a few hours and then gives it back,
+-- so the same bed can still be sold for the night. Keeping them in their own
+-- table, rather than in `bookings`, is what keeps the occupancy counts honest:
+-- a rest is not a guest staying the night, and counting it as one would make
+-- every vacancy figure wrong.
+--
+-- The price is the owner's and lives here, like every other rate. Nothing in
+-- the code invents it.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS services (
+    service_code     text PRIMARY KEY,          -- FRESHUP | REST_3H
+    name             text NOT NULL,
+    price            numeric(10,2) NOT NULL CHECK (price >= 0),
+    duration_minutes integer NOT NULL DEFAULT 0 CHECK (duration_minutes >= 0),
+    needs_bed        boolean NOT NULL DEFAULT false,
+    active           boolean NOT NULL DEFAULT true,
+    notes            text
+);
+
+-- One sale of a service. The same two-step approval as a booking: the owner
+-- accepts, the guest pays, the owner confirms.
+CREATE TABLE IF NOT EXISTS service_orders (
+    service_order_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    reference        text UNIQUE NOT NULL DEFAULT
+                     ('SRV-' || to_char(now(), 'YYYY') || '-' ||
+                      lpad(nextval('booking_ref_seq')::text, 6, '0')),
+    service_code     text NOT NULL REFERENCES services(service_code) ON DELETE RESTRICT,
+    guest_id         uuid NOT NULL REFERENCES guests(guest_id) ON DELETE RESTRICT,
+    bed_id           text REFERENCES beds(bed_id) ON DELETE RESTRICT,
+    starts_at        timestamptz NOT NULL DEFAULT now(),
+    ends_at          timestamptz NOT NULL,
+    amount           numeric(10,2) NOT NULL CHECK (amount >= 0),
+    status           text NOT NULL DEFAULT 'REQUESTED'
+                     CHECK (status IN ('REQUESTED','ACCEPTED','PROOF_SENT','CONFIRMED',
+                                       'COMPLETED','CANCELLED','REJECTED')),
+    source           text NOT NULL DEFAULT 'WHATSAPP',
+    accepted_by      text,
+    accepted_at      timestamptz,
+    final_confirmed_at timestamptz,
+    payment_proof_path text,
+    payment_proof_at timestamptz,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    notes            text,
+    CONSTRAINT service_orders_dates_ordered CHECK (ends_at > starts_at)
+);
+CREATE INDEX IF NOT EXISTS idx_service_orders_status ON service_orders(status);
+CREATE INDEX IF NOT EXISTS idx_service_orders_bed_time
+    ON service_orders(bed_id, starts_at, ends_at);
+
+-- A confirmed rest may not overlap another confirmed rest on the same bed.
+-- The guarantee is the same one bookings get, in the same form.
+ALTER TABLE service_orders DROP CONSTRAINT IF EXISTS service_orders_no_overlap;
+ALTER TABLE service_orders ADD CONSTRAINT service_orders_no_overlap
+    EXCLUDE USING gist (
+        bed_id WITH =,
+        tstzrange(starts_at, ends_at, '[)') WITH &&
+    )
+    WHERE (status IN ('CONFIRMED') AND bed_id IS NOT NULL);
+
+-- ---------------------------------------------------------------------------
+-- Dated promotions. A discount is data, not code: the owner sets a window and a
+-- percentage, and the pricing engine applies it. It is never typed into a reply
+-- and never invented.
+--
+-- scope says which products it covers. 'DAILY' covers nightly and daily stays
+-- only: monthly (PG) stays and the walk-in services are excluded by design, so
+-- a fixed PG rate and a Rs 50 fresh-up are never quietly reduced.
+-- ---------------------------------------------------------------------------
+CREATE TABLE IF NOT EXISTS promotions (
+    promotion_id bigserial PRIMARY KEY,
+    name         text NOT NULL,
+    percent      numeric(5,2) NOT NULL CHECK (percent > 0 AND percent <= 100),
+    starts_on    date NOT NULL,
+    ends_on      date NOT NULL,
+    scope        text NOT NULL DEFAULT 'DAILY'
+                 CHECK (scope IN ('DAILY', 'MONTHLY', 'ALL')),
+    active       boolean NOT NULL DEFAULT true,
+    notes        text,
+    created_at   timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT promotions_window_ordered CHECK (ends_on >= starts_on)
+);
+CREATE INDEX IF NOT EXISTS idx_promotions_active ON promotions(active, starts_on, ends_on);

@@ -71,7 +71,11 @@ def test_history_without_the_current_message_is_kept(db):
 
 
 def test_the_system_prompt_carries_what_the_database_knows(db):
-    _stay(db)
+    # A guest with a live booking is held on "wait for the owner" and never
+    # reaches the model, so this uses a guest whose booking was cancelled: the
+    # database still knows them, and a free-text question still reaches the AI.
+    request = _stay(db)
+    booking.cancel(db, request.booking_id, actor=OWNER, reason="test")
     ai = FakeClient()
     handler.handle_message(db, phone="+919000000901",
                            text="can I bring my pet cat along with me", owner_phone=OWNER, ai=ai)
@@ -85,6 +89,7 @@ def test_the_system_prompt_carries_no_amounts(db):
     request = _stay(db)
     payments.record_payment(db, booking_id=request.booking_id, guest_id=None,
                             amount=750, method="UPI", actor=OWNER, verified=True)
+    booking.cancel(db, request.booking_id, actor=OWNER, reason="test")
     ai = FakeClient()
     handler.handle_message(db, phone="+919000000901",
                            text="can I bring my pet cat along with me", owner_phone=OWNER, ai=ai)

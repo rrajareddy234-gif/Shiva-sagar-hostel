@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from decimal import ROUND_HALF_UP, Decimal
 
 from core.db import Database
@@ -20,6 +20,80 @@ TWO_PLACES = Decimal("0.01")
 
 def money(value) -> Decimal:
     return Decimal(str(value)).quantize(TWO_PLACES, rounding=ROUND_HALF_UP)
+
+
+@dataclass(frozen=True)
+class Promotion:
+    promotion_id: int
+    name: str
+    percent: Decimal
+    starts_on: date
+    ends_on: date
+    scope: str
+
+
+def active_promotion(db: Database, *, on: date, scope: str = "DAILY") -> Promotion | None:
+    """The promotion running on this date, for this kind of product, or None.
+
+    The date is the day the booking is made, not the day of the stay: the offer
+    is "book in the next three days", so the booking date decides. A promotion
+    whose scope is ALL applies to everything; DAILY covers nightly and daily
+    stays only, which is what leaves monthly stays and the walk-in services out.
+    """
+    row = db.query_one(
+        """
+        SELECT promotion_id, name, percent, starts_on, ends_on, scope
+        FROM promotions
+        WHERE active
+          AND %(on)s BETWEEN starts_on AND ends_on
+          AND scope IN (%(scope)s, 'ALL')
+        ORDER BY percent DESC, promotion_id DESC
+        LIMIT 1
+        """,
+        {"on": on, "scope": scope},
+    )
+    return Promotion(**row) if row else None
+
+
+def promotion_discount(base, promotion: Promotion | None) -> Decimal:
+    """The money off a base amount, rounded to the paise. Zero when there is none."""
+    if promotion is None:
+        return money(0)
+    amount = money(base)
+    if amount <= 0:
+        return money(0)
+    return money(amount * money(promotion.percent) / Decimal(100))
+
+
+def set_promotion(db: Database, *, name: str, percent, starts_on: date, ends_on: date,
+                  scope: str = "DAILY", active: bool = True) -> int:
+    """Add or replace the promotion with this name."""
+    if scope not in ("DAILY", "MONTHLY", "ALL"):
+        raise ValidationError("scope must be DAILY, MONTHLY or ALL")
+    pct = money(percent)
+    if pct <= 0 or pct > 100:
+        raise ValidationError("a promotion percent must be above 0 and at most 100")
+    if ends_on < starts_on:
+        raise ValidationError("the promotion must end on or after it starts")
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO promotions (name, percent, starts_on, ends_on, scope, active)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT DO NOTHING
+            RETURNING promotion_id
+            """,
+            (name, pct, starts_on, ends_on, scope, active),
+        )
+        row = cur.fetchone()
+        if row:
+            return int(row["promotion_id"])
+        cur.execute(
+            "UPDATE promotions SET percent = %s, starts_on = %s, ends_on = %s, "
+            "scope = %s, active = %s WHERE name = %s RETURNING promotion_id",
+            (pct, starts_on, ends_on, scope, active, name),
+        )
+        return int(cur.fetchone()["promotion_id"])
 
 
 @dataclass(frozen=True)
@@ -145,7 +219,8 @@ def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
                    mode: str = "daily",
                    guests: int = 1,
                    extras: Decimal | float | int = 0,
-                   discount: Decimal | float | int = 0) -> Quote:
+                   discount: Decimal | float | int = 0,
+                   promotion: Promotion | None = None) -> Quote:
     """Pure calculation. No database, no AI, no side effects.
 
     A bed is charged per night, and a party is charged per bed: the nightly rate
@@ -199,6 +274,8 @@ def compute_charge(plan: RatePlan, start: datetime, end: datetime, *,
             "extras": str(extras_amt),
             "discount": str(discount_amt),
             "stay_mode": plan.stay_mode,
+            "promotion": (promotion.name if promotion else None),
+            "promotion_percent": (str(promotion.percent) if promotion else None),
         },
     )
 
@@ -208,7 +285,9 @@ def quote(db: Database, *, room_type: str, food_included: bool | None,
           stay_mode: str = "NIGHT",
           guests: int = 1,
           extras: Decimal | float | int = 0,
-          discount: Decimal | float | int = 0) -> Quote:
+          discount: Decimal | float | int = 0,
+          booked_on: date | None = None,
+          apply_promotion: bool = True) -> Quote:
     """Look up the owner's rate plan and compute a quote.
 
     `stay_mode` picks the night rate or the day rate. It defaults to NIGHT,
@@ -220,11 +299,25 @@ def quote(db: Database, *, room_type: str, food_included: bool | None,
 
     `guests` is the size of the party: the nightly rate is charged once per
     guest. It defaults to 1.
+
+    `booked_on` is the day the booking is made, and it is what a dated promotion
+    is judged against -- the offer is "book in the next three days". It defaults
+    to today. `apply_promotion` is False for a product a promotion does not
+    cover, such as a monthly stay.
     """
     food = resolve_food_option(db, room_type, food_included)
     plan = _load_plan(db, room_type, food, stay_mode)
+    promotion = None
+    if apply_promotion:
+        promotion = active_promotion(db, on=booked_on or date.today(), scope="DAILY")
+    promo_discount = money(0)
+    if promotion is not None:
+        base = money(money(plan.daily_rate) * billable_units(start, end, mode) * int(guests or 1))
+        promo_discount = promotion_discount(base, promotion)
     return compute_charge(plan, start, end, mode=mode, guests=guests,
-                          extras=extras, discount=discount)
+                          extras=extras,
+                          discount=money(discount) + promo_discount,
+                          promotion=promotion)
 
 
 def set_rate(db: Database, *, name: str, room_type: str, food_included: bool,
@@ -434,6 +527,65 @@ def list_monthly_plans(db: Database) -> list[dict]:
         "SELECT name, room_type, food_included, plan_kind, stay_mode, monthly_rate "
         "FROM monthly_plans WHERE active ORDER BY room_type, plan_kind, stay_mode"
     )
+
+
+@dataclass(frozen=True)
+class Service:
+    service_code: str
+    name: str
+    price: Decimal
+    duration_minutes: int
+    needs_bed: bool
+
+
+def list_services(db: Database) -> list[dict]:
+    """Every active walk-in service, with its price. Prices come from here only."""
+    return db.query_all(
+        "SELECT service_code, name, price, duration_minutes, needs_bed "
+        "FROM services WHERE active ORDER BY price"
+    )
+
+
+def get_service(db: Database, service_code: str) -> Service:
+    """One service by code. Refuses rather than inventing a price for an unknown one."""
+    row = db.query_one(
+        "SELECT service_code, name, price, duration_minutes, needs_bed "
+        "FROM services WHERE service_code = %s AND active",
+        (service_code,),
+    )
+    if not row:
+        raise NotFound(f"no active service {service_code!r}; ask the owner to set one")
+    return Service(**row)
+
+
+def service_quote(db: Database, *, service_code: str) -> Decimal:
+    """The price of one service. A fresh-up and a rest are never discounted."""
+    return money(get_service(db, service_code).price)
+
+
+def set_service(db: Database, *, service_code: str, name: str, price,
+                duration_minutes: int = 0, needs_bed: bool = False,
+                active: bool = True) -> str:
+    """Add a service, or change its price. The owner's price, stored not guessed."""
+    if money(price) < 0:
+        raise ValidationError("a service price cannot be negative")
+    if int(duration_minutes) < 0:
+        raise ValidationError("a service duration cannot be negative")
+    with db.transaction() as cur:
+        cur.execute(
+            """
+            INSERT INTO services (service_code, name, price, duration_minutes,
+                                  needs_bed, active)
+            VALUES (%s, %s, %s, %s, %s, %s)
+            ON CONFLICT (service_code) DO UPDATE
+                SET name = EXCLUDED.name, price = EXCLUDED.price,
+                    duration_minutes = EXCLUDED.duration_minutes,
+                    needs_bed = EXCLUDED.needs_bed, active = EXCLUDED.active
+            RETURNING service_code
+            """,
+            (service_code, name, money(price), int(duration_minutes), needs_bed, active),
+        )
+        return str(cur.fetchone()["service_code"])
 
 
 def list_extras(db: Database) -> list[dict]:

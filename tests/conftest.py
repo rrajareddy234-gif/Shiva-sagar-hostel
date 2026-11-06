@@ -139,6 +139,12 @@ def seeded(db: Database) -> Database:
             "('policy.timings','We are open 24/7.','policy','owner') "
             "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
         )
+        cur.execute(
+            "INSERT INTO services (service_code, name, price, duration_minutes, needs_bed) VALUES "
+            "('FRESH_UP','Fresh-up',50,0,false), "
+            "('REST_3H','Three-hour rest',100,180,true) "
+            "ON CONFLICT (service_code) DO NOTHING"
+        )
     return db
 
 

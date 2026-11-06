@@ -603,6 +603,45 @@ def expire_lapsed_requests(db: Database) -> int:
         return len(expired)
 
 
+def live_booking_for(db: Database, phone: str) -> dict | None:
+    """This guest's booking that is still going, or None.
+
+    A booking is "still going" until it is checked out. A cancelled, rejected or
+    expired one is finished, so the guest is free to book again. The most recent
+    is returned, so the answer is about the booking the guest is thinking of.
+    """
+    return db.query_one(
+        """
+        SELECT bk.booking_id, bk.reference, bk.status, bk.check_in_at,
+               bk.check_out_at, bk.charges_total
+        FROM bookings bk JOIN guests g ON g.guest_id = bk.guest_id
+        WHERE g.phone = %s
+          AND bk.status NOT IN ('CANCELLED', 'REJECTED', 'EXPIRED', 'NO_SHOW',
+                                'CHECKED_OUT')
+        ORDER BY bk.created_at DESC
+        LIMIT 1
+        """,
+        (phone,),
+    )
+
+
+def current_bookings(db: Database, *, limit: int = 50) -> list[dict]:
+    """Bookings that are still live: requested, accepted, proof sent, confirmed
+    or in house. Finished ones (checked out, cancelled, rejected, expired) are
+    left out, so the list answers "what is on the books now"."""
+    return db.query_all(
+        """
+        SELECT bk.reference, bk.status, bk.bed_id, bk.check_in_at, bk.check_out_at,
+               bk.charges_total, g.full_name, g.phone
+        FROM bookings bk JOIN guests g ON g.guest_id = bk.guest_id
+        WHERE bk.status IN ('REQUESTED','ACCEPTED','PROOF_SENT','CONFIRMED','CHECKED_IN')
+        ORDER BY bk.check_in_at, bk.reference
+        LIMIT %s
+        """,
+        (limit,),
+    )
+
+
 def pending_requests(db: Database) -> list[dict]:
     """Bookings waiting for the owner, whatever the reason.
 

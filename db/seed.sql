@@ -265,3 +265,29 @@ INSERT INTO faq (question, answer, category, aliases, priority, source) VALUES
            'where is the hostel', 'how do i reach you', 'directions', 'landmark'],
      10, 'seed')
 ON CONFLICT (question) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- Walk-in services, priced by the owner: a fresh-up at Rs 50, and a three-hour
+-- rest at Rs 100. A fresh-up uses no bed; a rest holds a bed for its three
+-- hours and then releases it. Re-running leaves an existing price alone only if
+-- the owner has since edited it -- this is an upsert keyed on the service, so
+-- the seeded price is the starting price, not a floor.
+-- ---------------------------------------------------------------------------
+INSERT INTO services (service_code, name, price, duration_minutes, needs_bed, notes) VALUES
+    ('FRESH_UP', 'Fresh-up', 50.00, 0, false,
+     'A wash and change, no bed. Walk-in.'),
+    ('REST_3H', 'Rest (3 hours)', 100.00, 180, true,
+     'A bed for three hours. The bed is free again afterwards.')
+ON CONFLICT (service_code) DO NOTHING;
+
+-- ---------------------------------------------------------------------------
+-- The owner's opening offer: 10% off a nightly or daily stay booked in the next
+-- three days. Monthly (PG) stays and the walk-in services are excluded. The
+-- window is dated, so it can be changed or switched off without a release.
+-- ---------------------------------------------------------------------------
+INSERT INTO promotions (name, percent, starts_on, ends_on, scope, notes) VALUES
+    ('Opening offer: 10% off bookings made in the next 3 days', 10.00,
+     CURRENT_DATE, CURRENT_DATE + 2, 'DAILY',
+     'Applies to a nightly or daily stay booked today, tomorrow or the day after. '
+     'Not monthly stays, not fresh-up or rest.')
+ON CONFLICT DO NOTHING;

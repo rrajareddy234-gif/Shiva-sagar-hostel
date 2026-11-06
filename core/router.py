@@ -121,6 +121,7 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     """
     if button_id:
         tapped = (_menu_button(db, button_id, phone=phone)
+                  or _service_button(db, button_id, phone=phone)
                   or _price_button(db, button_id))
         if tapped is not None:
             return tapped
@@ -150,7 +151,10 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     if intent == "book":
         if not phone:
             return _booking_prompt(db)
-        from core import booking_flow
+        from core import booking_flow, sticky
+        held = sticky.reply_for(db, phone=phone)
+        if held is not None:
+            return Reply(held, handled=True, intent=intent)
         flow = booking_flow.start(db, phone=phone)
         return Reply(flow.reply, handled=True, intent=intent, prompt=flow.prompt)
 
@@ -273,6 +277,15 @@ def _price(db: Database, text: str, room_type: str | None,
             }.get(extra["unit"], "")
             lines.append(f"- {extra['name']}: {_rupees(extra['price'])} {per}".rstrip())
 
+    services = pricing.list_services(db)
+    if services:
+        lines.append("")
+        lines.append("Short services (no bed needed for a fresh-up):")
+        for service in services:
+            when = ("for 3 hours" if service["needs_bed"]
+                    else "any time")
+            lines.append(f"- {service['name']}: {_rupees(service['price'])} {when}")
+
     lines.append("")
     lines.append("Tell me your dates and I can check availability.")
     return "\n".join(lines)
@@ -294,6 +307,7 @@ _MENU_TITLES = (
     ("menu:reviews", "Guest Reviews", "What other guests say"),
     ("menu:book", "Book a Room", "Send a booking request"),
     ("menu:bookings", "My Bookings", "Your booking status"),
+    ("menu:service", "Fresh-up or Rest", "A wash, or a bed for a few hours"),
     ("menu:talk", "Talk to Staff", "We will reply here"),
 )
 
@@ -356,7 +370,11 @@ def _menu_button(db: Database, button_id: str, *,
     if what == "book":
         if not phone:
             return _booking_prompt(db)
-        from core import booking_flow
+        from core import booking_flow, sticky
+        # A guest who already has a live booking must not start a second one.
+        held = sticky.reply_for(db, phone=phone)
+        if held is not None:
+            return Reply(held, handled=True, intent="booking_status")
         flow = booking_flow.start(db, phone=phone)
         return Reply(flow.reply, handled=True, intent="book", prompt=flow.prompt)
     if what == "bookings":
@@ -365,12 +383,50 @@ def _menu_button(db: Database, button_id: str, *,
         from core import booking_flow
         return Reply(booking_flow.my_bookings_reply(db, phone), handled=True,
                      intent="my_bookings")
+    if what == "service":
+        if not phone:
+            return None
+        return _service_menu(db, phone)
     if what == "talk":
         return Reply(
             "Of course. Tell me what you need and I will pass it to the owner, "
             "who will reply here personally.",
             handled=True, intent="talk_to_owner")
     return None
+
+
+def _service_button(db: Database, button_id: str, *,
+                    phone: str | None = None) -> Reply | None:
+    """Start a walk-in service from a menu tap. None if the id is not ours."""
+    if not button_id.startswith("svc:"):
+        return None
+    if not phone:
+        return None
+    from core import service_flow
+    flow = service_flow.start(db, phone=phone,
+                              service_code=button_id[len("svc:"):])
+    return Reply(flow.reply, handled=True, intent="service", prompt=flow.prompt)
+
+
+def _service_menu(db: Database, phone: str) -> Reply:
+    """Offer the walk-in services as taps, priced from the rate card."""
+    from core import pricing, sticky
+    held = sticky.reply_for(db, phone=phone)
+    if held is not None:
+        return Reply(held, handled=True, intent="booking_status")
+    services = pricing.list_services(db)
+    if not services:
+        return Reply("I don't have those services set up yet. I've asked the "
+                     "owner to add them.", handled=True, intent="service")
+    buttons = tuple(Button(f"svc:{s['service_code']}", s["name"]) for s in services)
+    lines = ["Here is what we offer at the counter:"]
+    for s in services:
+        lines.append(f"- {s['name']}: {_rupees(s['price'])}")
+    lines.append("")
+    lines.append("Tap one to request it. The owner confirms it.")
+    body = "\n".join(lines)
+    return Reply(body, handled=True, intent="service",
+                 prompt=Prompt(body="Which would you like?", buttons=buttons))
 
 
 def _booking_prompt(db: Database) -> Reply:
@@ -610,6 +666,28 @@ def owner_answer(db: Database, text: str, *, now: datetime | None = None) -> Rep
             f"{summary['occupied_beds']} occupied, {summary['blocked_beds']} blocked. "
             f"Full rooms: {', '.join(summary['full_rooms']) or 'none'}.",
             handled=True, intent="owner_availability")
+
+    # "bookings" asks for the bookings themselves. Without this the word fell
+    # through to the AI, which answered with an occupancy count ("1 occupied,
+    # 0 blocked") -- a different question entirely, and one that read as wrong
+    # next to "customers", which listed the guests. Two questions, two answers,
+    # both from the same records.
+    if re.search(r"\b(bookings?|reservations?)\b", lowered) and not re.search(
+            r"\b(export|download|send|share|backup|pending|waiting|awaiting|"
+            r"approval)\b", lowered):
+        rows = booking.current_bookings(db)
+        if not rows:
+            return Reply("No bookings on the books yet.", handled=True,
+                         intent="owner_bookings")
+        lines = [f"{len(rows)} booking(s) on the books:"]
+        for row in rows[:15]:
+            lines.append(
+                f"- {row['reference']} {row['status']}: "
+                f"{row['full_name'] or row['phone']}, bed {row['bed_id']}, "
+                f"{row['check_in_at']:%d %b %H:%M} to "
+                f"{row['check_out_at']:%d %b %H:%M} "
+                f"({_rupees(row['charges_total'] or 0)})")
+        return Reply("\n".join(lines), handled=True, intent="owner_bookings")
 
     if re.search(r"\b(outstanding|dues|owes|not paid|hasn'?t paid|unpaid)\b", lowered):
         rows = payments.outstanding_bookings(db)

@@ -797,3 +797,44 @@ over HTTP.
 Lint: `ruff.toml` now carries a documented `deploy/scheduler.py` entry for
 S108/S310, following the existing audited-convention pattern used for
 `scripts/*`.
+
+## Walk-in services and the 10% offer (2026-11-03)
+
+Two things were added that are **not bookings**, and keeping them out of
+`bookings` is the whole design.
+
+**A fresh-up (Rs 50) and a three-hour rest (Rs 100) are counter services.**
+They live in `services` / `service_orders` (`core/services.py`), not in
+`bookings`. A fresh-up uses no bed. A rest holds a bed for its three hours and
+then releases it, so the same bed can still be sold for the night. If either
+were written as a booking, every occupancy figure would be wrong: a rest is not
+a guest staying the night. `service_orders` carries its own
+`EXCLUDE USING gist` on `(bed_id, tstzrange(starts_at, ends_at))` so a confirmed
+rest cannot overlap another rest on the same bed; `create_order` also checks the
+booking tables, so a rest cannot land on a booked bed either.
+
+The guest reaches them from the menu's **Fresh-up or Rest** entry
+(`core/service_flow.py`, ids `svc:` / `sv:`). They follow the same two-step
+approval as a booking: the owner accepts, the guest pays, the owner confirms.
+
+**The 10% offer is dated data, not code.** A booking *made* in the next three
+days gets 10% off the total. `promotions` holds the window and the percentage
+(`scope` = DAILY | MONTHLY | ALL); `active_promotion` reads it and `quote()`
+applies it. `monthly_quote()` never applies one, and the services never call it,
+so a fixed PG rate and a Rs 50 fresh-up are never quietly reduced. The date
+judged is the day the booking is made, not the day of the stay — the offer is
+"book now", so `booked_on` defaults to today. Every figure still comes from
+`core/pricing.py`; the discount is a recorded line, not a typed number.
+
+The guest-facing wording for all of this is in `docs/MOCK_CONVERSATIONS.md`.
+
+## The owner's "bookings" and "customers" no longer disagree (2026-11-03)
+
+The owner typed `bookings` and got an occupancy count ("1 occupied, 0 blocked"),
+then typed `customers` and got a guest list, and the two read as if one were
+wrong. They were answering different questions: the word `bookings` was falling
+through to the AI, which summarised occupancy, while `customers` was answered
+from the records. `owner_answer` now answers `bookings` in SQL
+(`booking.current_bookings`, live statuses only) and lists the bookings
+themselves. "pending"/"waiting"/"awaiting approval" still route to the pending
+list, because that is a different question again.
