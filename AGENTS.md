@@ -838,3 +838,42 @@ from the records. `owner_answer` now answers `bookings` in SQL
 (`booking.current_bookings`, live statuses only) and lists the bookings
 themselves. "pending"/"waiting"/"awaiting approval" still route to the pending
 list, because that is a different question again.
+
+## The guest flow regressions the owner caught (2026-11-03)
+
+The owner tested the guest phone flow and said it was worse than before. Four
+faults, all in the guest journey, all now fixed and pinned by
+`tests/test_guest_flow_regressions.py`.
+
+**The wait wall was the big one.** `core/sticky.py` was called *before*
+`router.route` in `core/handler.py`, so once a guest had a live request every
+later message got the "wait for the owner" reply -- including "hi", "where are
+you" and "what are the prices". The hold now runs *after* the router has had its
+say: a question the router can answer is answered, and only a message the router
+cannot place is held. A genuine second booking is still refused, because the
+router refuses `book`/`menu:book` itself while a request is live. When moving
+this check, keep it after the router or the wall comes back.
+
+**Typed services fell to the AI.** "fresh up" / "rest for 3 hours" matched
+nothing in `classify`, so no `service_order` was ever created. `router._SERVICE`
+now claims them and `route()` opens `_service_menu`, the same menu the
+"Fresh-up or Rest" button opens.
+
+**"I want an AC room" fell to the AI.** `_BOOK` now matches
+`i want ... room` / `need ... room`, not just "i want a room".
+
+**The opening message was ignored.** `booking_flow.start(text=...)` now reads a
+date, a stay length, a room type, food and guests out of the guest's first
+message, and `_first_missing` asks only for what is still unset. `_parse_date`
+reads "tomorrow" / a month name ("1 December") / a numeric date ("2026-12-01")
+*anywhere* in the sentence. Two traps: the month alternation is built from
+`_MONTHS` so a stray word like "from 1" is not read as a month, and the tap
+handlers (`date`/`cout`/`stay`/`times`/`guests`/`food`) now call `_first_missing`
+rather than hardcoding the next step, or they would step over a prefilled answer.
+
+Nothing here guesses: a value is used only when the guest wrote it, and every
+rupee still comes from `core/pricing.py`.
+
+A stray tap now re-asks the current question (`_reask`) instead of ending the
+flow, and the greeting no longer says "how many nights" -- the flow asks for a
+check-out date, not a number of nights.
