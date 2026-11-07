@@ -17,9 +17,9 @@ double-booking. Use `sync_bed_status` to keep it tidy.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
 
 from core.db import Database
 from core.errors import NotFound, ValidationError
@@ -59,12 +59,21 @@ def _fetch_beds(db: Database, start: datetime, end: datetime,
                 room_type: str | None = None, bed_type: str | None = None) -> list[BedAvailability]:
     sql = f"""
         SELECT b.bed_id, b.room_id, r.room_type, b.bed_type, b.status,
-               EXISTS (
-                   SELECT 1 FROM bookings bk
-                   WHERE bk.bed_id = b.bed_id
-                     AND bk.status = ANY(%(occupying)s)
-                     AND tstzrange(bk.check_in_at, bk.check_out_at, '[)')
-                         && {_WINDOW}
+               (
+                   EXISTS (
+                       SELECT 1 FROM booking_beds bb
+                       WHERE bb.bed_id = b.bed_id
+                         AND bb.status = ANY(%(occupying)s)
+                         AND tstzrange(bb.check_in_at, bb.check_out_at, '[)')
+                             && {_WINDOW}
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM bookings bk
+                       WHERE bk.bed_id = b.bed_id
+                         AND bk.status = ANY(%(occupying)s)
+                         AND tstzrange(bk.check_in_at, bk.check_out_at, '[)')
+                             && {_WINDOW}
+                   )
                ) AS booked,
                EXISTS (
                    SELECT 1 FROM bed_holds h
@@ -121,6 +130,11 @@ def bed_is_available(db: Database, bed_id: str, start: datetime, end: datetime) 
         return False
     conflict = db.query_one(
         f"""
+        SELECT 1 AS hit FROM booking_beds bb
+        WHERE bb.bed_id = %(bed_id)s
+          AND bb.status = ANY(%(occupying)s)
+          AND tstzrange(bb.check_in_at, bb.check_out_at, '[)') && {_WINDOW}
+        UNION ALL
         SELECT 1 AS hit FROM bookings
         WHERE bed_id = %(bed_id)s
           AND status = ANY(%(occupying)s)

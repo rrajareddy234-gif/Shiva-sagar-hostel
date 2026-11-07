@@ -10,14 +10,15 @@ This module never talks to the channel directly; it returns text to send.
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 
 from core import booking, payments, security
+from core.channel.adapter import Button, Prompt
 from core.db import Database
 from core.errors import DomainError
+from core.export import DataFile
 
 CONFIRM_WORDS = {"yes", "y", "confirm", "ok", "okay", "do it", "go ahead", "approve"}
 CANCEL_WORDS = {"no", "cancel", "stop", "don't", "dont", "abort"}
@@ -52,6 +53,76 @@ class CommandResult:
     text: str
     applied: bool = False
     action: str | None = None
+    # A data file to send with the text. The channel is still not touched here;
+    # the caller does the sending, exactly as it does for the text.
+    file: DataFile | None = None
+    # Tappable answers to offer with the reply, when the owner has a choice to
+    # make. Used to let the owner approve or reject a booking with one tap.
+    prompt: Prompt | None = None
+    # Side effects the caller must carry out, such as telling the guest their
+    # booking was accepted. The command layer has no channel, so it never sends
+    # these itself; the dispatcher does.
+    events: tuple[dict, ...] = ()
+
+
+# --- owner buttons ---------------------------------------------------------
+#
+# The owner confirms a booking with a tap instead of a typed command. A button
+# carries the exact booking id and an explicit verb, so it is less ambiguous
+# than text, not more: there is nothing to mis-type and no doubt about which
+# booking was meant. The tap is still gated on the sender being the owner, and
+# every action is audited exactly as a typed command is.
+_OWNER = "own:"
+
+
+def approval_prompt(reference: str, *, summary: str | None = None,
+                    step: str = "request") -> Prompt:
+    """The owner's decision buttons for one booking.
+
+    Two steps, and the wording has to match the step. The first decision
+    *accepts* a request (the guest is then asked to pay); the second *confirms*
+    a payment the owner has just checked. Both were labelled "Approve", so the
+    owner saw the same word twice and could not tell which decision he was
+    making. The second is now "Confirm".
+
+    The button **ids are the same in both steps** -- `own:approve:<ref>` -- so
+    the routing, the role check and the audit are untouched. Only the label the
+    owner reads changes, and the label is never what the code routes on.
+    """
+    body = summary or f"Booking request {reference} is waiting for you."
+    second = "Confirm" if step == "proof" else "Approve"
+    return Prompt(
+        body=body,
+        buttons=(
+            Button(f"{_OWNER}approve:{reference}", second),
+            Button(f"{_OWNER}reject:{reference}", "Reject"),
+        ),
+    )
+
+
+def handle_button(db: Database, *, phone: str, button_id: str | None,
+                  owner_phone: str | None) -> CommandResult | None:
+    """Apply an owner button tap. None if the id is not one of ours.
+
+    Only the owner's own number can use these, checked here as everywhere else:
+    a button id that arrives from a customer is ignored.
+    """
+    if not button_id or not button_id.startswith(_OWNER):
+        return None
+    if security.role_for(phone, owner_phone) != security.OWNER:
+        return None
+
+    rest = button_id[len(_OWNER):]
+    verb, _, reference = rest.partition(":")
+    reference = (reference or "").strip().upper()
+    if not reference:
+        return None
+
+    if verb == "approve":
+        return _apply(db, phone, {"action": "approve_booking", "reference": reference})
+    if verb == "reject":
+        return _apply(db, phone, {"action": "reject_booking", "reference": reference})
+    return None
 
 
 def _set_pending(db: Database, phone: str, command: dict) -> None:
@@ -84,6 +155,38 @@ def is_cancellation(text: str) -> bool:
 def parse_command(text: str) -> dict | None:
     """Recognise an owner command in plain English. None if it is not one."""
     lowered = (text or "").lower().strip()
+
+    # The auto-reply switch, checked first: these are the two commands the owner
+    # reaches for most, and "resume replies" must never be read as anything else.
+    # The bare-word forms are deliberately limited to the unambiguous words
+    # (pause, mute, resume) -- a lone "stop" is left alone because it is also a
+    # way to cancel a staged command.
+    if re.search(r"\b(pause|stop|mute|suspend|disable|turn\s+off)\b\s+(the\s+)?"
+                 r"(auto[\s-]?repl\w*|repl\w*|answer\w*|respond\w*|messages?|bot)\b",
+                 lowered) or re.fullmatch(
+                     r"\s*(pause|mute)\s*(the\s*)?(bot|auto[\s-]?repl\w*|repl\w*)?"
+                     r"\s*[.!]?\s*", lowered):
+        return {"action": "pause_replies"}
+
+    if re.search(r"\b(resume|unpause|un[\s-]?mute|enable|start|continue|turn\s+on)\b\s+"
+                 r"(the\s+)?(auto[\s-]?repl\w*|repl\w*|answer\w*|respond\w*|"
+                 r"messages?|bot)\b", lowered) or re.fullmatch(
+                     r"\s*(resume|unpause|un[\s-]?mute)\s*(the\s*)?"
+                     r"(bot|auto[\s-]?repl\w*|repl\w*)?\s*[.!]?\s*", lowered):
+        return {"action": "resume_replies"}
+
+    _replyish = (r"auto[\s-]?repl\w*|repl\w*|answering|respond\w*|messages?|bot")
+    _statusish = (r"status|paused|enabled|disabled|active|working|going|stopped|"
+                  r"live|on|off")
+    if (re.search(rf"\b({_replyish})\b", lowered)
+            and re.search(rf"\b({_statusish})\b", lowered)):
+        return {"action": "auto_reply_status"}
+    if (re.search(r"\b(are we|are you|is the bot|is it)\b", lowered)
+            and re.search(r"\b(answer|repl|respond|paus)\w*", lowered)):
+        return {"action": "auto_reply_status"}
+
+    if re.fullmatch(r"\s*(owner\s+)?(help|commands?|menu)\s*[.!?]*\s*", lowered):
+        return {"action": "owner_help"}
 
     match = re.search(r"\bapprove\b\s*(?:booking|request)?\s*([A-Za-z0-9-]+)?", lowered)
     if match and "approve" in lowered:
@@ -121,6 +224,18 @@ def parse_command(text: str) -> dict | None:
     if match:
         return {"action": "verify_payment",
                 "reference": _reference_from(lowered, match.group(1))}
+
+    # "export customers", "send me the payments file", "download bookings".
+    # Read-only, so it never needs confirming.
+    match = re.search(r"\b(export|download|send\s+me|send\s+the|get\s+me|give\s+me|"
+                      r"share|backup)\b", lowered)
+    if match:
+        what = re.search(r"\b(customer|guest|booking|payment)s?\b", lowered)
+        if what:
+            word = what.group(1)
+            # "guests" and "customers" are the same file.
+            name = "customers" if word in ("customer", "guest") else word + "s"
+            return {"action": "export_data", "what": name}
 
     match = re.search(
         r"\brecord\s*(?:a\s*)?(?:payment|advance)?\s*(?:of\s*)?(?:rs\.?|inr)?\s*"
@@ -179,6 +294,25 @@ def handle(db: Database, *, phone: str, text: str, owner_phone: str | None) -> C
     return CommandResult(text=f"{_describe(command)}\n\nReply YES to confirm, or NO to cancel.")
 
 
+def _export(db: Database, what: str) -> CommandResult:
+    """Build a data file for the owner and hand it to the caller to send."""
+    from core import export
+
+    try:
+        data = export.build(db, what, datetime.now())
+    except DomainError as exc:
+        return CommandResult(text=f"I could not build that file: {exc.message}")
+    if data is None:
+        return CommandResult(
+            text="I can send customers, bookings or payments. "
+                 "Try: export customers")
+    rows = max(0, len(data.text.strip().splitlines()) - 1)
+    return CommandResult(
+        text=f"Here is your {what} file ({rows} row{'s' if rows != 1 else ''}). "
+             f"Open it in Excel or Google Sheets.",
+        applied=True, action="export_data", file=data)
+
+
 def _maybe_single_reference(db: Database, action: str) -> str | None:
     """The one waiting booking's reference, when exactly one is waiting."""
     if action in ("verify_payment", "record_payment"):
@@ -217,22 +351,80 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
     """Apply a staged or non-sensitive command and report the outcome."""
     action = command["action"]
     try:
+        if action == "export_data":
+            return _export(db, str(command.get("what") or "customers"))
+
+        if action == "pause_replies":
+            from core import auto_reply
+            auto_reply.set_paused(db, True, actor=actor)
+            return CommandResult(
+                text="Automatic replies are PAUSED. I will keep saving every "
+                     "message, bookings and payments still work, and I will still "
+                     "tell you about new booking requests. Guests get no reply "
+                     "until you send 'resume replies'.",
+                applied=True, action=action)
+
+        if action == "resume_replies":
+            from core import auto_reply
+            auto_reply.set_paused(db, False, actor=actor)
+            return CommandResult(
+                text="Automatic replies are ON again. Guests are answered as "
+                     "normal.",
+                applied=True, action=action)
+
+        if action == "auto_reply_status":
+            from core import auto_reply
+            return CommandResult(
+                text=f"Automatic replies: {auto_reply.status_line(db)}\n"
+                     f"Send 'pause replies' or 'resume replies' to change it.",
+                applied=True, action=action)
+
+        if action == "owner_help":
+            from core import auto_reply
+            return CommandResult(text=auto_reply.LONG_HELP, applied=True, action=action)
+
         if action == "approve_booking":
             row = _resolve_booking(db, command.get("reference"))
+            status = row["status"]
+            if status in ("REQUESTED",):
+                # The owner's first decision: accept, and ask the guest to pay.
+                accepted = booking.accept(db, str(row["booking_id"]), actor=actor,
+                                          reason="owner command")
+                return CommandResult(
+                    text=f"Booking {row['reference']} is ACCEPTED. The guest has "
+                         f"been told to pay the advance to the UPI ID, with the "
+                         f"payee name to check.\n"
+                         f"Once they send the payment screenshot, you will be "
+                         f"asked to confirm.",
+                    applied=True, action=action,
+                    events=({"type": "booking_accepted",
+                             "booking_id": str(accepted["booking_id"]),
+                             "reference": accepted["reference"]},))
+            # Second decision (or a guest paying cash, where the owner knows the
+            # money is fine): confirm the booking.
             booking.approve(db, str(row["booking_id"]), actor=actor,
                             override=bool(command.get("override")),
                             reason="owner command")
+            confirmed = booking.get_booking(db, str(row["booking_id"]))
             return CommandResult(
-                text=f"Booking {row['reference']} is confirmed. "
-                     f"The guest can be told their bed is held.",
-                applied=True, action=action)
+                text=f"Booking {row['reference']} is CONFIRMED. The guest has been "
+                     f"sent the final confirmation with every detail, and a copy "
+                     f"has been emailed to you.",
+                applied=True, action=action,
+                events=({"type": "booking_confirmed",
+                         "booking_id": str(confirmed["booking_id"]),
+                         "reference": confirmed["reference"]},))
 
         if action == "reject_booking":
             row = _resolve_booking(db, command.get("reference"))
             booking.reject(db, str(row["booking_id"]), actor=actor, reason="owner command")
             return CommandResult(
-                text=f"Booking {row['reference']} is rejected and the bed is free.",
-                applied=True, action=action)
+                text=f"Booking {row['reference']} is rejected and the bed is free. "
+                     f"The guest has been told.",
+                applied=True, action=action,
+                events=({"type": "booking_rejected",
+                         "booking_id": str(row["booking_id"]),
+                         "reference": row["reference"]},))
 
         if action == "cancel_booking":
             row = _resolve_booking(db, command.get("reference"))
@@ -269,7 +461,7 @@ def _apply(db: Database, actor: str, command: dict) -> CommandResult:
 
         if action == "record_payment":
             row = _resolve_booking(db, command.get("reference"))
-            payment_id = payments.record_payment(
+            payments.record_payment(
                 db, booking_id=str(row["booking_id"]), guest_id=None,
                 amount=command["amount"], method=command.get("method") or "CASH",
                 actor=actor, notes="owner command")

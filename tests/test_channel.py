@@ -11,6 +11,7 @@ import json
 
 import pytest
 
+from core.channel.adapter import Button, Prompt, SendResult
 from core.channel.meta_cloud import MetaCloudAdapter
 from core.channel.peach import PeachAdapter
 from core.channel.registry import build_channel
@@ -187,3 +188,245 @@ def test_peach_stub_fails_closed(adapter):
     peach = PeachAdapter(api_key="k", phone_number_id="1")
     assert peach.verify_inbound(b"{}", {}) is False
     assert peach.send_text("+919000000000", "hi").ok is False
+    assert peach.send_interactive(
+        "+919000000000", Prompt(body="hi", buttons=(Button("a", "A"),))).ok is False
+
+
+# --- interactive messages --------------------------------------------------
+
+def _sent_body(adapter, monkeypatch, prompt):
+    """Call send_interactive and return the JSON body it would have posted."""
+    captured = {}
+
+    def fake_post(self, body):
+        captured.update(body)
+        return SendResult(ok=True, provider_message_id="wamid.SENT")
+
+    monkeypatch.setattr(MetaCloudAdapter, "_post", fake_post)
+    result = adapter.send_interactive("+919876543210", prompt)
+    assert result.ok
+    return captured
+
+
+def test_send_interactive_sends_reply_buttons(adapter, monkeypatch):
+    prompt = Prompt(body="Which room type?",
+                    buttons=(Button("price:room:AC", "AC"),
+                             Button("price:room:NON_AC", "Non-AC")))
+    body = _sent_body(adapter, monkeypatch, prompt)
+
+    assert body["type"] == "interactive"
+    assert body["to"] == "919876543210"
+    interactive = body["interactive"]
+    assert interactive["type"] == "button"
+    assert interactive["body"]["text"] == "Which room type?"
+    assert interactive["action"]["buttons"] == [
+        {"type": "reply", "reply": {"id": "price:room:AC", "title": "AC"}},
+        {"type": "reply", "reply": {"id": "price:room:NON_AC", "title": "Non-AC"}},
+    ]
+
+
+def test_send_interactive_sends_a_list_when_more_than_three(adapter, monkeypatch):
+    rows = tuple(Button(f"price:room:R{i}", f"Room {i}") for i in range(4))
+    prompt = Prompt(body="Which room?", rows=rows, button_text="Choose a room")
+    body = _sent_body(adapter, monkeypatch, prompt)
+
+    interactive = body["interactive"]
+    assert interactive["type"] == "list"
+    assert interactive["action"]["button"] == "Choose a room"
+    assert len(interactive["action"]["sections"][0]["rows"]) == 4
+
+
+def test_send_interactive_truncates_over_long_titles(adapter, monkeypatch):
+    """Meta rejects over-long labels, so they are clipped rather than failing."""
+    prompt = Prompt(body="?", buttons=(Button("a", "x" * 40),))
+    body = _sent_body(adapter, monkeypatch, prompt)
+    assert len(body["interactive"]["action"]["buttons"][0]["reply"]["title"]) == 20
+
+
+def test_parse_interactive_reply_keeps_the_button_id(adapter):
+    payload = json.dumps({
+        "entry": [{"changes": [{"value": {"messages": [{
+            "from": "919000000000", "id": "wamid.BTN2", "type": "interactive",
+            "interactive": {"type": "button_reply",
+                            "button_reply": {"id": "price:room:AC", "title": "AC"}},
+        }]}}]}],
+    }).encode()
+    message = adapter.parse_inbound(payload)[0]
+    assert message.button_id == "price:room:AC"
+    assert message.text == "AC"
+
+
+def test_parse_interactive_list_reply_keeps_the_row_id(adapter):
+    payload = json.dumps({
+        "entry": [{"changes": [{"value": {"messages": [{
+            "from": "919000000000", "id": "wamid.LST", "type": "interactive",
+            "interactive": {"type": "list_reply",
+                            "list_reply": {"id": "price:room:DORM", "title": "Dormitory"}},
+        }]}}]}],
+    }).encode()
+    message = adapter.parse_inbound(payload)[0]
+    assert message.button_id == "price:room:DORM"
+    assert message.text == "Dormitory"
+
+
+def test_prompt_validity_matches_the_meta_limits():
+    assert Prompt(body="?", buttons=(Button("a", "A"),)).is_valid()
+    assert Prompt(body="?", buttons=tuple(Button(f"b{i}", "B") for i in range(4))).is_valid() is False
+    assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(10))).is_valid()
+    assert Prompt(body="?", rows=tuple(Button(f"r{i}", "R") for i in range(11))).is_valid() is False
+    assert Prompt(body="?").is_valid() is False
+
+
+# --- documents -------------------------------------------------------------
+
+def test_send_document_uploads_then_sends(adapter, monkeypatch):
+    """Meta needs two calls: upload the bytes, then send the media id."""
+    uploaded = {}
+
+    def fake_upload(self, filename, content, media_type):
+        uploaded.update(filename=filename, content=content, media_type=media_type)
+        return "MEDIA_ID_1"
+
+    def fake_post(self, body):
+        uploaded["body"] = body
+        return SendResult(ok=True, provider_message_id="wamid.DOC")
+
+    monkeypatch.setattr(MetaCloudAdapter, "_upload", fake_upload)
+    monkeypatch.setattr(MetaCloudAdapter, "_post", fake_post)
+    result = adapter.send_document("+919876543210", "customers-1.csv",
+                                   b"name\nRamesh\n", caption="Here you go")
+    assert result.ok
+    assert uploaded["filename"] == "customers-1.csv"
+    assert uploaded["content"] == b"name\nRamesh\n"
+    body = uploaded["body"]
+    assert body["type"] == "document"
+    assert body["to"] == "919876543210"
+    assert body["document"] == {"id": "MEDIA_ID_1", "filename": "customers-1.csv",
+                                "caption": "Here you go"}
+
+
+def test_a_failed_upload_does_not_send_an_empty_message(adapter, monkeypatch):
+    posted = []
+    monkeypatch.setattr(MetaCloudAdapter, "_upload",
+                        lambda self, f, c, m: None)
+    monkeypatch.setattr(MetaCloudAdapter, "_post",
+                        lambda self, body: posted.append(body))
+    result = adapter.send_document("+919876543210", "x.csv", b"a\n")
+    assert result.ok is False
+    assert posted == []
+
+
+def test_a_channel_that_cannot_send_files_fails_closed():
+    from core.channel.peach import PeachAdapter
+
+    peach = PeachAdapter(api_key="k", phone_number_id="1")
+    result = peach.send_document("+919876543210", "x.csv", b"a\n")
+    assert result.ok is False
+
+
+# --- a throttled send must not be retried -----------------------------------
+
+def _http_error(code, body):
+    import io
+    import urllib.error
+    return urllib.error.HTTPError("https://graph.facebook.com", code,
+                                  "err", {}, io.BytesIO(body.encode()))
+
+
+def _failing_urlopen(code, body):
+    def opener(req, timeout=None):
+        raise _http_error(code, body)
+    return opener
+
+
+def test_a_rate_limited_send_is_marked_not_retryable(adapter, monkeypatch):
+    """Meta's 131056 means this pair is throttled; a retry deepens the block."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", _failing_urlopen(
+        400, '{"error":{"code":131056,"message":"pair rate limit hit"}}'))
+
+    result = adapter.send_text("+919876543210", "hello")
+
+    assert result.ok is False
+    assert result.retryable is False
+
+
+def test_an_ordinary_failure_stays_retryable(adapter, monkeypatch):
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen",
+                        _failing_urlopen(500, '{"error":{"code":2}}'))
+
+    result = adapter.send_text("+919876543210", "hello")
+
+    assert result.ok is False
+    assert result.retryable is True
+
+
+def test_a_throttled_reply_is_attempted_once(db, channel):
+    """One throttled send must not be followed by another.
+
+    Meta counts each message to the pair against the same limit, so a fallback
+    after a refusal turns one refusal into two messages while the guest is
+    already blocked. A throttled reply makes exactly one attempt and stops.
+    """
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.throttle = True
+    prompt = Prompt(body="Would you like to book a room?",
+                    buttons=(Button("book", "Book"),))
+
+    sent = _reply(db, channel, "+919000009999",
+                  "We have 4 beds free for 1 night.", prompt=prompt)
+
+    assert sent is False, "the guest heard nothing, so the message must be retried"
+    assert channel.attempts == ["text"], (
+        "exactly one attempt: a second message to a throttled pair is counted "
+        "against the same limit and deepens the block")
+
+
+def test_a_failed_prompt_falls_back_to_text_when_it_holds_the_answer(db, channel):
+    """The food question sends its body as the prompt. If the prompt fails, the
+    guest has heard nothing, so the same words go out as plain text."""
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.fail_interactive = True
+    body = "AC room. With food or without?"
+    prompt = Prompt(body=body, buttons=(Button("food:1", "With food"),
+                                        Button("food:0", "Without food")))
+
+    sent = _reply(db, channel, "+919000009999", body, prompt=prompt)
+
+    assert sent is True
+    assert channel.attempts == ["interactive", "text"], \
+        "the prompt is tried once, then the same words as plain text"
+    assert channel.sent == [("+919000009999", body)]
+
+
+def test_a_failed_prompt_does_not_repeat_an_answer_already_sent(db, channel):
+    """When the text carried the answer, a failed prompt is not re-sent."""
+    from core.channel.adapter import Button, Prompt
+    from core.dispatcher import _reply
+
+    channel.fail_interactive = True
+    prompt = Prompt(body="Would you like to book a room?",
+                    buttons=(Button("book", "Book"),))
+
+    sent = _reply(db, channel, "+919000009999",
+                  "We have 4 beds free for 1 night.", prompt=prompt)
+
+    assert sent is True
+    assert channel.attempts == ["text", "interactive"], \
+        "the answer went out; the prompt failed once and was not repeated"
+
+
+def test_a_throttled_plain_text_reply_is_attempted_once(db, channel):
+    """With no prompt there is nothing to fall back from, so one attempt is made."""
+    from core.dispatcher import _reply
+
+    channel.throttle = True
+    sent = _reply(db, channel, "+919000009999", "hello")
+
+    assert sent is False
+    assert channel.attempts == ["text"]

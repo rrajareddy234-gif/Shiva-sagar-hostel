@@ -17,6 +17,12 @@
 		respond "not found" 404
 	}
 
+	# The owner's dashboard. Password-protected in the app, so it is safe to
+	# publish: the login is required before any guest data is shown.
+	handle /dashboard* {
+		reverse_proxy app:8000
+	}
+
 	# Everything else is the n8n interface.
 	handle {
 		reverse_proxy n8n:5678

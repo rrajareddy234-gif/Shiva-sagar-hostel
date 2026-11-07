@@ -60,6 +60,71 @@ def test_greeting_returns_help(db):
     assert "availability" in reply.text.lower() or "Sagar PG" in reply.text
 
 
+# --- the greeting menu, answered by tapping --------------------------------
+
+def test_greeting_offers_a_menu_of_taps(db):
+    """A bare "hi" should offer choices, not a paragraph to read."""
+    reply = router.route(db, "hi")
+    assert reply.prompt is not None
+    # Nine choices, so they are sent as a list, not three buttons.
+    assert [b.title for b in reply.prompt.rows] == [
+        "Rooms & Prices", "Check Availability", "Location & Directions",
+        "Food & Amenities", "Guest Reviews", "Book a Room", "My Bookings",
+        "Fresh-up or Rest", "Talk to Staff"]
+    assert [b.id for b in reply.prompt.rows] == [
+        "menu:price", "menu:availability", "menu:location", "menu:facilities",
+        "menu:reviews", "menu:book", "menu:bookings", "menu:service", "menu:talk"]
+    assert reply.prompt.is_valid()
+    # The help text is still the fallback body for a channel without buttons.
+    assert "Sagar PG" in reply.text
+
+
+def test_menu_word_asks_for_the_menu(db):
+    for word in ("menu", "help", "options", "start", "MENU!"):
+        reply = router.route(db, word)
+        assert reply.prompt is not None, word
+
+
+def test_help_inside_a_sentence_is_not_the_menu(db):
+    """"help me book a bed" is a real request, not a call for the menu."""
+    reply = router.route(db, "help me book a bed for tomorrow")
+    assert reply.intent != "greeting"
+
+
+def test_tapping_prices_starts_the_price_flow(db):
+    reply = router.route(db, "Prices", button_id="menu:price")
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons][0] == "price:room:AC"
+
+
+def test_tapping_availability_answers_without_the_ai(db):
+    reply = router.route(db, "Availability", button_id="menu:availability")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+    assert "free" in reply.text
+
+
+def test_tapping_facilities_answers_without_the_ai(db):
+    reply = router.route(db, "Facilities", button_id="menu:facilities")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+    assert "Sagar PG" in reply.text
+
+
+def test_a_menu_button_never_carries_a_price(db):
+    reply = router.route(db, "hi")
+    for button in reply.prompt.buttons:
+        assert "Rs" not in button.title
+        assert not any(ch.isdigit() for ch in button.title)
+
+
+def test_an_unknown_menu_id_is_ignored(db):
+    """A stale or foreign menu id must fall through, not crash."""
+    reply = router.route(db, "hi", button_id="menu:nonsense")
+    assert reply.handled is True
+    assert reply.intent == "greeting"
+
+
 def test_price_quotes_the_owners_rates(db):
     reply = router.route(db, "what is the price?")
     assert reply.handled is True
@@ -67,15 +132,14 @@ def test_price_quotes_the_owners_rates(db):
     assert "250" in reply.text          # non-AC with food, per day
     assert "300" in reply.text          # AC with food, per night
     assert "350" in reply.text          # AC with food, per day
-    assert "100" in reply.text          # dormitory, per night
-    assert "150" in reply.text          # dormitory, per day
+    assert "150" in reply.text          # dormitory mat, per night
 
 
 def test_price_reply_lists_the_extras(db):
     reply = router.route(db, "what are your rates?")
-    assert "New bedsheet" in reply.text
-    assert "New towel" in reply.text
-    assert "New pillow" in reply.text
+    assert "Bedsheet" in reply.text
+    assert "Towel" in reply.text
+    assert "Pillow" in reply.text
     assert "Locker" in reply.text
 
 
@@ -84,6 +148,86 @@ def test_price_reply_names_the_night_and_day_rates(db):
     reply = router.route(db, "how much do you charge?")
     assert "a night" in reply.text
     assert "a day" in reply.text
+
+
+def test_price_reply_says_what_a_night_and_a_day_include(db):
+    """A night is dinner only; a day is tiffin, lunch and dinner.
+
+    A guest choosing between the two figures is really choosing between meals,
+    so the reply must say which meals each one buys.
+    """
+    reply = router.route(db, "how much do you charge?")
+    assert "dinner only" in reply.text
+    assert "tiffin, lunch and dinner" in reply.text
+
+
+# --- the price flow, answered by tapping -----------------------------------
+
+def test_price_question_offers_room_buttons(db):
+    """The guest is asked which room, with taps, instead of reading every rate."""
+    reply = router.route(db, "what are the prices?")
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons] == [
+        "price:room:AC", "price:room:NON_AC", "price:room:DORM"]
+    assert [b.title for b in reply.prompt.buttons] == ["AC", "Non-AC", "Dormitory"]
+    # The full text is still the fallback body for a channel without buttons.
+    assert "350" in reply.text
+
+
+def test_tapping_a_room_asks_the_food_question(db):
+    reply = router.route(db, "what are the prices?", button_id="price:room:DORM")
+    assert reply.prompt is not None
+    assert [b.title for b in reply.prompt.buttons] == ["With food", "Without food"]
+
+
+def test_tapping_food_quotes_exactly_one_rate_from_the_rate_card(db):
+    """Two taps give one room's rate, computed from the database, not guessed."""
+    reply = router.route(db, "x", button_id="price:food:AC:1")
+    assert "AC with food" in reply.text
+    assert "Rs 350 a night" in reply.text
+    assert "Rs 450 a day" in reply.text
+    # Other rooms must not be listed: that was the whole point of the flow.
+    assert "Non-AC" not in reply.text
+    assert "Dormitory" not in reply.text
+
+
+def test_tapping_food_without_quotes_the_without_food_rate(db):
+    reply = router.route(db, "x", button_id="price:food:AC:0")
+    assert "AC without food" in reply.text
+    assert "Rs 300 a night" in reply.text
+    assert "Rs 350 a day" in reply.text
+
+
+def test_a_room_that_offers_only_one_food_option_is_quoted_immediately(db):
+    """When a room has no food choice to make, the question is skipped."""
+    db.execute("UPDATE rate_plans SET active = false "
+               "WHERE room_type = 'NON_AC' AND food_included = false")
+    reply = router.route(db, "x", button_id="price:room:NON_AC")
+    assert reply.prompt is None, "no question is needed when there is no choice"
+    assert "Non-AC with food" in reply.text
+    assert "Rs 250 a night" in reply.text
+
+
+def test_a_tap_is_answered_without_the_ai(db):
+    reply = router.route(db, "x", button_id="price:room:AC")
+    assert reply.handled is True
+    assert reply.needs_ai is False
+
+
+def test_an_unknown_button_id_falls_through_to_normal_routing(db):
+    """A foreign or stale button id must not be mistaken for a price tap."""
+    reply = router.route(db, "what is the price?", button_id="something:else")
+    assert reply.handled is True
+    assert reply.prompt is not None
+    assert [b.id for b in reply.prompt.buttons][0] == "price:room:AC"
+
+
+def test_the_guest_never_sees_a_price_on_a_button(db):
+    """Buttons carry the choice only; every figure is computed from the rate card."""
+    reply = router.route(db, "what are the prices?")
+    for button in reply.prompt.buttons:
+        assert "Rs" not in button.title
+        assert not any(ch.isdigit() for ch in button.title)
 
 
 def test_price_does_not_invent_a_figure_when_no_plan_exists(db):
@@ -179,7 +323,8 @@ def test_owner_pending_requests(db):
     start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
     booking.create_request(
         db, phone="+919000000801", full_name="Waiting Guest", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1))
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     reply = router.owner_answer(db, "show pending booking requests")
     assert "Waiting Guest" in reply.text
     assert "awaiting your approval" in reply.text
@@ -222,7 +367,7 @@ def test_owner_overdue_checkouts(db):
     request = booking.create_request(
         db, phone="+919000000802", full_name="Overdue Guest", gender="MALE",
         bed_id="1NA-B1", check_in_at=start,
-        check_out_at=start + timedelta(days=1))
+        check_out_at=start + timedelta(days=1), food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     booking.check_in(db, request.booking_id, actor=OWNER)
     reply = router.owner_answer(db, "any overdue checkouts?")
@@ -233,7 +378,8 @@ def test_owner_in_house_list(db):
     start = _now() - timedelta(hours=2)
     request = booking.create_request(
         db, phone="+919000000803", full_name="Staying Guest", gender="MALE",
-        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3))
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=3),
+        food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     booking.check_in(db, request.booking_id, actor=OWNER)
     reply = router.owner_answer(db, "show all occupied beds")
@@ -241,8 +387,8 @@ def test_owner_in_house_list(db):
 
 
 def test_owner_unanswered_enquiries(db):
-    from core.channel.adapter import InboundMessage
     from core import inbox
+    from core.channel.adapter import InboundMessage
     inbox.store_inbound(db, InboundMessage(
         provider_message_id="wamid.ROUTER", from_phone="+919000000804",
         text="is a room free?", message_type="text"))
@@ -339,3 +485,29 @@ def test_full_status_never_reaches_the_ai(db):
                                          ai=None)
         assert outcome.handled_by in ("router", "owner_command"), \
             f"{text!r} fell through to {outcome.handled_by}"
+
+
+# --- greeting by name ------------------------------------------------------
+
+def test_greeting_uses_the_name_we_hold(db):
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO guests (full_name, phone, name_source) "
+            "VALUES ('Sagar Reddy', '+919000003333', 'WHATSAPP_PROFILE')")
+    reply = router.route(db, "hi", phone="+919000003333")
+    assert "Sagar" in reply.prompt.body
+
+
+def test_greeting_without_a_name_stays_generic(db):
+    reply = router.route(db, "hi", phone="+919000004444")
+    assert reply.prompt.body.startswith("Hello!")
+
+
+def test_a_handle_that_is_not_a_name_is_not_used(db):
+    """An emoji-only or punctuation display name must not become a greeting."""
+    with db.transaction() as cur:
+        cur.execute(
+            "INSERT INTO guests (full_name, phone, name_source) "
+            "VALUES ('!!!', '+919000005555', 'WHATSAPP_PROFILE')")
+    reply = router.route(db, "hi", phone="+919000005555")
+    assert reply.prompt.body.startswith("Hello!")

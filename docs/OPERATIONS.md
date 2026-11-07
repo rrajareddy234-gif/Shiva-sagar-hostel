@@ -3,6 +3,44 @@
 What to do when things go wrong, and how to check the system is healthy. Written
 for the owner, not for a programmer.
 
+## Backups and recovery
+
+A backup you have never restored is not a backup. It is a file you hope is one.
+
+**Nightly backup.** `deploy/backup.sh` dumps the database to
+`backups/sagarpg-<date>.sql.gz` and keeps 14 days. It refuses to report success
+unless the file is non-empty, decompresses, and actually contains the `bookings`
+table — a truncated dump that looks fine is the dangerous kind. Add it to cron:
+
+```
+15 2 * * * cd /opt/sagar && ./deploy/backup.sh >> /var/log/sagar-backup.log 2>&1
+```
+
+**Copy it off the machine.** A backup sitting on the same server is lost with
+the server. Use `rclone` to cloud storage or `scp` to another machine, nightly.
+
+**Prove it restores.** `deploy/restore_drill.sh` is the check that matters. It
+restores the newest backup into a throwaway database, counts rows in the tables
+that hold money and bookings, compares them with the live database, and drops
+the throwaway again. It never touches the live data. Run it nightly, right after
+the backup:
+
+```
+45 2 * * * cd /opt/sagar && ./deploy/restore_drill.sh >> /var/log/sagar-backup.log 2>&1
+```
+
+It exits non-zero if the dump will not restore or if any count is wrong, so a
+failing cron job is your alarm. Run it by hand before going live:
+
+```bash
+./deploy/restore_drill.sh backups/sagarpg-2026-11-04-1413.sql.gz
+```
+
+**A real restore** (this destroys the live database) is `deploy/restore.sh`. It
+takes a fresh backup first, so a wrong restore is itself recoverable, and asks
+you to type the database name before it does anything. Restore only after a
+drill has passed on the same file.
+
 ## Daily checks
 
 The morning report covers most of it. Open WhatsApp and look for:
@@ -80,6 +118,89 @@ reply?"*
 If the message shows as received but unprocessed, the reply failed to send. The
 health check reports this after 15 minutes.
 
+## Pausing and resuming automatic replies
+
+Sometimes you want the system to go quiet for a while — a holiday, a family
+emergency, or a flood of junk messages. You can pause the automatic replies
+without taking anything down. The system keeps receiving and recording every
+message, and bookings, availability and payments keep working. Only the reply
+that would be sent back to the guest is held back.
+
+**What a pause does and does not do**
+
+| Keeps working | Held back |
+|---|---|
+| Incoming messages received and saved | Automatic reply to the guest |
+| Booking requests created | Button prompts to the guest |
+| Bed availability and holds | |
+| Payments and records | |
+| Notifications to you (the owner) | |
+| Meta webhook and verification | |
+
+A booking request that arrives while paused is **still sent to you**, so nothing
+is lost. The guest simply hears nothing back until you resume. You (the owner)
+and your staff are still answered — that is what lets you switch it back on.
+
+### The easy way: text the hostel number
+
+Send any of these from your own phone. The system understands them in plain
+English too.
+
+| What you send | What happens |
+|---|---|
+| `pause replies` | Stops automatic replies to guests |
+| `resume replies` | Starts them again |
+| `auto reply status` | Tells you if it is on or paused |
+| `owner help` | Lists every owner command |
+
+You can also just say it your way — *"stop replying for now"*, *"are we
+answering guests?"*, *"start replying again"* — and the assistant will do it.
+Only your number can change this; a guest cannot.
+
+### The easy way: the dashboard
+
+1. Open `https://your-domain/dashboard` in any browser.
+2. Log in with your dashboard password.
+3. At the top of the page you will see **Automatic replies: ON** or **PAUSED**.
+4. Tap **Pause replies** or **Resume replies**.
+
+The change takes effect at once. No restart, no file editing.
+
+### The fallback: the server
+
+Use this only if the dashboard and WhatsApp are both unreachable.
+
+1. On the server, open the settings file:
+   ```bash
+   nano /opt/sagar/.env
+   ```
+2. Find the line `AUTO_REPLY_ENABLED=true` and change it to `false` (pause) or
+   back to `true` (resume).
+3. Save, then restart the app so it reads the new value:
+   ```bash
+   cd /opt/sagar
+   docker compose -f deploy/docker-compose.yml up -d app
+   ```
+
+### Checking which mode you are in
+
+The health check always says, and it follows a change made anywhere:
+```bash
+curl https://your-domain/health
+```
+- `"auto_reply":"enabled"` — guests are answered.
+- `"auto_reply":"paused"` — guests are not answered.
+
+The dashboard shows the same thing in words at the top of the page. If you
+forget you paused it, these two are the answer.
+
+### Where the setting lives
+
+Your pause/resume choice is stored in the database, so it survives a restart and
+needs no server access. `AUTO_REPLY_ENABLED` in `.env` is only the **starting**
+value, used before you have ever chosen, or if the database cannot be read. Every
+change is recorded in the audit log with who made it.
+
 ## The AI is not working
 
 The system does not depend on it. Common questions are answered by plain code, so
@@ -97,7 +218,7 @@ This is one setting, not a code change. Edit `.env`:
 
 ```
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.5-flash
+AI_MODEL=gemini-flash-lite-latest
 AI_API_KEY=...
 ```
 
@@ -140,12 +261,35 @@ docker compose -f deploy/docker-compose.yml exec postgres \
 Do these in order. Do not skip the test in step 5.
 
 1. **Confirm the room list.** Read `db/seed.sql`. Are the rooms and bed counts
-   right? Is there really no room 5? Are there really 20 mat spaces? Edit the file
-   before applying it if not.
-2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner on 2026-11-03 and
-   live in `db/seed.sql`: non-AC with food Rs 200 a night / Rs 250 a day, AC with
-   food Rs 300 / Rs 350, dormitory mat Rs 100 / Rs 150, plus extras (bedsheet
-   Rs 50, towel Rs 100, pillow Rs 50, locker Rs 30 a month).
+   right? Room 5NA (Non-AC, 5 beds) was added at the owner's word; the rest are
+   still the historic list. Are there really 20 mat spaces? Edit the file before
+   applying it if not.
+2. ~~Confirm the rates.~~ **Done.** Confirmed by the owner and live in
+   `db/seed.sql`. Every room type is offered with and without food, and each has
+   a night and a day rate:
+
+   | Room | With food (night / day) | Without food (night / day) |
+   |---|---:|---:|
+   | AC | Rs 350 / Rs 450 | Rs 300 / Rs 350 |
+   | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
+   | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
+
+   Plus extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 50 a month.
+
+   **Monthly (PG) stays** are held separately in `db/seed.sql` as
+   `monthly_plans`:
+
+   | Room | With food (night / full day) | Without food (night / full day) |
+   |---|---:|---:|
+   | AC | Rs 8,000 / Rs 11,000 | Rs 5,000 / Rs 7,000 |
+   | Non-AC | Rs 5,500 / Rs 5,500 | Rs 4,000 / Rs 4,000 |
+   | Dormitory | Rs 4,500 / Rs 4,500 | Rs 3,500 / Rs 3,500 |
+
+   These rates are the same for every guest. There is no concession, and the
+   system will not offer one.
+
+   If a guest wants a lower rate, they must speak to you. Months are whole;
+   there is no pro-rating.
 3. **Set the owner number.** `OWNER_PHONE` in `.env`, in full international form,
    for example `+919876543210`. Owner commands only work from this number.
 4. **Set the spending limits.** In your AI provider's console, set a monthly
@@ -162,8 +306,9 @@ Do these in order. Do not skip the test in step 5.
    - `show pending booking requests`
    - `approve booking <reference>` then `YES`
 6. **Make one test booking** with a name you recognise as fake, then cancel it.
-7. **Rehearse a restore.** Run `./deploy/restore.sh` against a copy. Do this
-   before you need it.
+7. **Rehearse a restore.** Run `./deploy/restore_drill.sh` and confirm it says
+   "restores cleanly with matching row counts". This is the check that proves
+   your backups are real. Do this before you need it, and let it run nightly.
 8. **Turn on the workflows** one at a time, starting with the health check.
 
 ## What is not automatic

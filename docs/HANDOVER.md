@@ -12,7 +12,7 @@ It does five things:
 1. **Answers guests on WhatsApp.** Common questions — prices, availability,
    facilities, greeting — are answered by plain code and SQL, with no AI call at
    all. Only free text the code does not recognise reaches an AI model.
-2. **Keeps track of every bed.** All 63 beds (43 cots in six rooms plus 20
+2. **Keeps track of every bed.** All 68 beds (48 cots in seven rooms plus 20
    dormitory mat spaces) are individual records with their own status. A bed is
    never promised twice: the database itself refuses overlapping bookings.
 3. **Takes booking requests, never confirmations.** The system can create a
@@ -27,9 +27,9 @@ It does five things:
 
 ### Size of the thing
 
-- 345 tests, all passing, against a real PostgreSQL database.
-- 15 commits, every change reversible with git.
-- About 3,700 lines of application code and 1,500 lines of documentation.
+- 718 tests, all passing, against a real PostgreSQL database.
+- 42 commits on this branch, every change reversible with git.
+- About 10,000 lines of application code and 1,500 lines of documentation.
 
 ## 2. What was reused
 
@@ -127,9 +127,13 @@ I will not claim these passed, because they did not run:
   spoken to your WhatsApp number.
 - **Your room list is still unconfirmed.** The rooms in `db/seed.sql` are the
   historic list, flagged unconfirmed; they must be checked before a bed is
-  promised. The **rates are confirmed** (2026-11-03) and live: non-AC with food
-  Rs 200 a night / Rs 250 a day, AC with food Rs 300 / Rs 350, dormitory Rs 100 /
-  Rs 150, plus extras.
+  promised. The **rates are confirmed** and live. Every room type is offered
+  with and without food, each with a night and a day rate: AC Rs 350/450 with
+  food and Rs 300/350 without; Non-AC Rs 250/350 and Rs 200/250; dormitory
+  Rs 200/300 and Rs 150/200. Plus extras. **Monthly (PG)** plans are separate:
+  AC Rs 8,000/11,000 with food and Rs 5,000/7,000 without, Non-AC Rs 5,500 and
+  Rs 4,000, dormitory Rs 4,500 and Rs 3,500. There is no concession: the same
+  rate applies to every guest.
 - **Automatic follow-up is switched off**, deliberately. Following up more than
   24 hours after a guest writes needs a Meta-approved message template, and none
   exists. Until one does, follow-up is manual.
@@ -207,7 +211,7 @@ One setting in `.env`, then restart the app:
 
 ```
 AI_PROVIDER=gemini
-AI_MODEL=gemini-2.5-flash
+AI_MODEL=gemini-flash-lite-latest
 AI_API_KEY=...
 ```
 

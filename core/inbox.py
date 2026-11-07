@@ -20,6 +20,19 @@ log = logging.getLogger(__name__)
 
 UNANSWERED_AFTER = timedelta(minutes=30)
 
+# A real WhatsApp text message is at most 4096 characters. Anything far larger
+# is not a guest typing; it is a malformed or hostile payload. Storing it would
+# let one request bloat the database and the AI prompt, so it is trimmed at the
+# edge, once, before it reaches any handler.
+MAX_TEXT_LENGTH = 4096
+
+
+def bounded_text(text: str | None) -> str | None:
+    """Clip an inbound body to a sane length. None and short text pass through."""
+    if text is None:
+        return None
+    return text[:MAX_TEXT_LENGTH] if len(text) > MAX_TEXT_LENGTH else text
+
 
 @dataclass(frozen=True)
 class StoredMessage:
@@ -47,6 +60,34 @@ def store_inbound(db: Database, message: InboundMessage) -> StoredMessage | None
         )
         conversation_id = str(cur.fetchone()["conversation_id"])
 
+        # The WhatsApp display name arrives with every message. Record it as the
+        # guest's name only if we have nothing better: it must never overwrite a
+        # name the guest typed or the owner entered. Stored on the guest row, so
+        # a returning guest is recognised and never asked again.
+        profile_name = (message.profile_name or "").strip()
+        if profile_name and len(profile_name) <= 120:
+            cur.execute(
+                """
+                INSERT INTO guests (full_name, phone, name_source, wa_profile_name)
+                VALUES (%s, %s, 'WHATSAPP_PROFILE', %s)
+                ON CONFLICT (phone) DO UPDATE
+                SET wa_profile_name = EXCLUDED.wa_profile_name,
+                    full_name = CASE
+                        WHEN guests.full_name IS NULL
+                          OR btrim(guests.full_name) = ''
+                          OR guests.name_source IN ('UNKNOWN', 'WHATSAPP_PROFILE')
+                        THEN EXCLUDED.full_name
+                        ELSE guests.full_name
+                    END,
+                    name_source = CASE
+                        WHEN guests.name_source IN ('UNKNOWN', 'WHATSAPP_PROFILE')
+                        THEN 'WHATSAPP_PROFILE'
+                        ELSE guests.name_source
+                    END
+                """,
+                (profile_name, message.from_phone, profile_name),
+            )
+
         cur.execute(
             """
             INSERT INTO messages (wa_message_id, conversation_id, direction, body, payload)
@@ -54,7 +95,7 @@ def store_inbound(db: Database, message: InboundMessage) -> StoredMessage | None
             ON CONFLICT (wa_message_id) DO NOTHING
             RETURNING message_id
             """,
-            (message.provider_message_id, conversation_id, message.text,
+            (message.provider_message_id, conversation_id, bounded_text(message.text),
              _json(message.raw)),
         )
         row = cur.fetchone()
@@ -152,6 +193,22 @@ def set_conversation_state(db: Database, phone: str, state: dict) -> None:
         "INSERT INTO conversations (phone, state) VALUES (%s, %s::jsonb) "
         "ON CONFLICT (phone) DO UPDATE SET state = %s::jsonb, last_activity = now()",
         (phone, _json(state), _json(state)),
+    )
+
+
+def merge_conversation_state(db: Database, phone: str, patch: dict) -> None:
+    """Merge top-level keys into the stored state in one statement.
+
+    A read-then-write of the whole document loses a concurrent writer's key:
+    two taps arriving together both read the old state and the second write
+    drops the first. `||` merges inside the database, so each writer only ever
+    changes its own keys.
+    """
+    db.execute(
+        "INSERT INTO conversations (phone, state) VALUES (%s, %s::jsonb) "
+        "ON CONFLICT (phone) DO UPDATE SET "
+        "state = conversations.state || EXCLUDED.state, last_activity = now()",
+        (phone, _json(patch)),
     )
 
 

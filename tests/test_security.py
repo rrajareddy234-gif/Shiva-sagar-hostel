@@ -113,7 +113,8 @@ def test_approval_requires_an_actor(db):
     start = booking_start()
     request = booking.create_request(
         db, phone=CUSTOMER, full_name="Dummy", gender="MALE", bed_id="1NA-B1",
-        check_in_at=start, check_out_at=start + timedelta(days=1))
+        check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     booking.approve(db, request.booking_id, actor=OWNER)
     row = booking.get_booking(db, request.booking_id)
     assert row["approved_by"] == OWNER
@@ -220,7 +221,10 @@ def test_env_example_has_no_real_values():
             if key.strip() in ("CHANNEL_PROVIDER", "AI_PROVIDER", "AI_MODEL",
                                "HOSTEL_TIMEZONE", "DATABASE_URL",
                                # Non-secret defaults, safe to show.
-                               "POSTGRES_USER", "POSTGRES_DB", "N8N_USER"):
+                               "POSTGRES_USER", "POSTGRES_DB", "N8N_USER",
+                               "AI_TIMEOUT", "AUTO_REPLY_ENABLED",
+                               "SAGAR_APP_URL", "SCHEDULER_INTERVAL",
+                               "SMTP_PORT", "PAYMENT_PROOF_DIR"):
                 continue
             assert value.strip() == "", f"{key.strip()} must be blank in .env.example"
 
@@ -238,7 +242,8 @@ def test_audit_log_captures_who_did_what(db):
     start = booking_start()
     request = booking.create_request(
         db, phone=CUSTOMER, full_name="Dummy", gender="MALE", bed_id="1NA-B1",
-        check_in_at=start, check_out_at=start + timedelta(days=1))
+        check_in_at=start, check_out_at=start + timedelta(days=1),
+        food_included=True)
     booking.reject(db, request.booking_id, actor=OWNER, reason="not suitable")
     entries = db.query_all(
         "SELECT actor, action FROM audit_log WHERE entity_id = %s ORDER BY id",

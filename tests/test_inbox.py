@@ -131,3 +131,25 @@ def test_outbound_reply_is_recorded(db):
     row = db.query_one("SELECT direction, body FROM messages ORDER BY received_at DESC LIMIT 1")
     assert row["direction"] == "OUT"
     assert "450" in row["body"]
+
+
+# --- input bounds ----------------------------------------------------------
+
+def test_a_normal_message_is_stored_whole(db):
+    body = "please book a non-ac bed for two nights"
+    inbox.store_inbound(db, _message(text=body))
+    row = db.query_one("SELECT body FROM messages")
+    assert row["body"] == body
+
+
+def test_an_oversized_message_is_clipped_before_storage(db):
+    """A payload far larger than WhatsApp allows must not reach the database whole."""
+    inbox.store_inbound(db, _message(text="x" * 100_000))
+    row = db.query_one("SELECT length(body) AS n FROM messages")
+    assert row["n"] == inbox.MAX_TEXT_LENGTH
+
+
+def test_bounded_text_passes_none_and_short_text_through(db):
+    assert inbox.bounded_text(None) is None
+    assert inbox.bounded_text("hi") == "hi"
+    assert len(inbox.bounded_text("y" * 5000)) == inbox.MAX_TEXT_LENGTH

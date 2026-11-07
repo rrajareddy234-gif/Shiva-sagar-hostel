@@ -35,6 +35,22 @@ def test_missing_configuration_is_reported(client, monkeypatch):
     assert client.get("/jobs/daily-report", headers=AUTH).status_code == 503
 
 
+def test_a_token_that_is_a_prefix_of_the_real_one_is_refused(client):
+    """The compare must not accept a prefix.
+
+    A short-circuit `!=` leaks how many leading characters matched, which is
+    enough to recover a token one byte at a time. A prefix must be rejected
+    outright, whatever the compare does internally.
+    """
+    assert client.get("/jobs/daily-report",
+                      headers={"X-Job-Token": JOB_TOKEN[:6]}).status_code == 401
+
+
+def test_an_empty_token_header_is_refused(client):
+    assert client.get("/jobs/daily-report",
+                      headers={"X-Job-Token": ""}).status_code == 401
+
+
 @pytest.mark.parametrize("path", ["/jobs/unanswered-enquiries", "/jobs/upcoming",
                                   "/jobs/health-check", "/jobs/pending-requests"])
 def test_every_job_requires_a_token(client, path):
@@ -58,7 +74,8 @@ def test_daily_report_counts_pending_requests(client, db):
         hour=10, minute=0, second=0, microsecond=0)
     booking.create_request(db, phone="+919000003000", full_name="Report Guest",
                            gender="MALE", bed_id="1NA-B1", check_in_at=start,
-                           check_out_at=start + timedelta(days=2))
+                           check_out_at=start + timedelta(days=2),
+                           food_included=True)
     body = client.get("/jobs/daily-report", headers=AUTH).json()
     assert body["pending_requests"] == 1
 
@@ -114,7 +131,8 @@ def test_upcoming_reports_an_overdue_checkout(client, db):
     request = booking.create_request(db, phone="+919000003222", full_name="Late Guest",
                                      gender="MALE", bed_id="1NA-B1",
                                      check_in_at=start,
-                                     check_out_at=start + timedelta(days=1))
+                                     check_out_at=start + timedelta(days=1),
+                                     food_included=True)
     booking.approve(db, request.booking_id, actor=owner)
     booking.check_in(db, request.booking_id, actor=owner)
     body = client.get("/jobs/upcoming", headers=AUTH).json()
@@ -167,7 +185,8 @@ def test_pending_requests_job(client, db):
     request = booking.create_request(db, phone="+919000003444", full_name="Pending Guest",
                                      gender="MALE", bed_id="1NA-B1",
                                      check_in_at=start,
-                                     check_out_at=start + timedelta(days=1))
+                                     check_out_at=start + timedelta(days=1),
+                                     food_included=True)
     body = client.get("/jobs/pending-requests", headers=AUTH).json()
     assert body["count"] == 1
     assert body["requests"][0]["reference"] == request.reference
@@ -204,3 +223,60 @@ def test_notify_owner_reports_a_send_failure(client, channel):
     channel.fail = True
     response = client.post("/jobs/notify-owner", json={"text": "hello"}, headers=AUTH)
     assert response.status_code == 502
+
+
+# --- expiring lapsed holds -------------------------------------------------
+
+def test_expire_holds_requires_a_token(client):
+    assert client.post("/jobs/expire-holds").status_code == 401
+
+
+def test_expire_holds_frees_a_bed_an_unpaid_acceptance_was_holding(client, db):
+    """The promise accept() makes: an unpaid acceptance lets the bed go."""
+    from datetime import datetime, timedelta
+
+    from core import booking
+    from tests.conftest import IST
+    owner = "+919999999999"
+    start = (datetime.now(IST) + timedelta(days=2)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
+    request = booking.create_request(
+        db, phone="+919000003333", full_name="Unpaid Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start, check_out_at=start + timedelta(days=2),
+        food_included=True)
+    booking.accept(db, request.booking_id, actor=owner)
+
+    # The payment window lapses, as it would after a day of silence. The hold's
+    # own rule is that it expires after it was created, so both move together.
+    db.execute("UPDATE bed_holds SET created_at = now() - interval '2 hours', "
+               "expires_at = now() - interval '1 hour' WHERE status = 'ACTIVE'")
+
+    body = client.post("/jobs/expire-holds", headers=AUTH).json()
+    assert body["holds_expired"] == 1
+    assert body["bookings_expired"] == 1
+    assert booking.get_booking(db, request.booking_id)["status"] == "EXPIRED"
+
+    # And the bed is genuinely free again: it can be requested by someone else.
+    from core import availability
+    assert availability.bed_is_available(db, "1NA-B1", start,
+                                         start + timedelta(days=2))
+
+
+def test_expire_holds_leaves_a_live_acceptance_alone(client, db):
+    """A guest still inside their payment window must not lose the bed."""
+    from datetime import datetime, timedelta
+
+    from core import booking
+    from tests.conftest import IST
+    owner = "+919999999999"
+    start = (datetime.now(IST) + timedelta(days=2)).replace(
+        hour=12, minute=0, second=0, microsecond=0)
+    request = booking.create_request(
+        db, phone="+919000003334", full_name="Paying Guest", gender="MALE",
+        bed_id="1NA-B2", check_in_at=start, check_out_at=start + timedelta(days=2),
+        food_included=True)
+    booking.accept(db, request.booking_id, actor=owner)
+
+    body = client.post("/jobs/expire-holds", headers=AUTH).json()
+    assert body["bookings_expired"] == 0
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"

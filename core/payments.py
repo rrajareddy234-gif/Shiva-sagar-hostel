@@ -46,9 +46,13 @@ def _audit(cur, actor: str, action: str, entity: str, entity_id: str,
 def record_payment(db: Database, *, booking_id: str | None, guest_id: str | None,
                    amount, method: str, actor: str, txn_ref: str | None = None,
                    kind: str = "PAYMENT", notes: str | None = None,
-                   verified: bool = False,
+                   verified: bool = False, refundable: bool = True,
                    paid_at: datetime | None = None) -> str:
-    """Record a payment or refund. Unverified unless a trusted source sets it."""
+    """Record a payment or refund. Unverified unless a trusted source sets it.
+
+    `refundable=False` marks money the owner will not return, such as the
+    booking advance. It is still real money and still counts toward the bill.
+    """
     amount = money(amount)
     if amount == 0:
         raise ValidationError("a payment amount cannot be zero")
@@ -71,18 +75,19 @@ def record_payment(db: Database, *, booking_id: str | None, guest_id: str | None
         cur.execute(
             """
             INSERT INTO payments (booking_id, guest_id, amount, kind, method, txn_ref,
-                                  paid_at, verified, verified_by, verified_at, notes)
-            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, now()), %s, %s, %s, %s)
+                                  paid_at, verified, verified_by, verified_at,
+                                  refundable, notes)
+            VALUES (%s, %s, %s, %s, %s, %s, COALESCE(%s, now()), %s, %s, %s, %s, %s)
             RETURNING payment_id
             """,
             (booking_id, guest_id, amount, kind, method, txn_ref, paid_at,
              verified, actor if verified else None, datetime.now() if verified else None,
-             notes),
+             refundable, notes),
         )
         payment_id = str(cur.fetchone()["payment_id"])
         _audit(cur, actor, "payment_recorded", "payment", payment_id, None,
                {"amount": str(amount), "method": method, "kind": kind,
-                "verified": verified, "txn_ref": txn_ref})
+                "verified": verified, "refundable": refundable, "txn_ref": txn_ref})
     return payment_id
 
 
