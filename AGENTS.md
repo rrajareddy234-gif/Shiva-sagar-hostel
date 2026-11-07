@@ -8,6 +8,37 @@ Operated through WhatsApp. Owner keeps final approval over all bookings.
 Design rule: deterministic core (code + SQL) for availability, pricing, payments,
 booking rules; AI only for understanding free text and drafting replies.
 
+## The hostel, as the owner confirmed it (2026-11-07)
+
+**Authoritative. Do not re-derive these from the seed file's history, and do not
+"correct" them from any other source. The owner stated them directly.** The seed
+was seeded from historic records that were wrong; it has since been reconciled.
+If a future session sees different numbers anywhere, these win until the owner
+says otherwise.
+
+Beds are what is sold, not rooms. A guest books a bed; the bed is AC or non-AC.
+The room is only how the beds are organised, so the figures that matter are the
+AC bed total and the non-AC bed total.
+
+    AC        18 beds   (2AC 7, 3AC 11)
+    NON_AC    29 beds   (1NA 4, 4NA 5, 5NA 5, 6NA 10, 7NA 5)
+    DORM      20 mats   (mat spaces, no cots)
+    TOTAL     67 beds
+
+Monthly rates, per bed, by food option (night and full-day are the same):
+
+    AC         7500 with food   5000 without
+    Non-AC     5000 with food   3000 without
+    Dormitory  4500 with food   2500 without
+
+Extras: Towel 100/item, Bedsheet 50/item, Pillow 50/item, Locker 50/month.
+Walk-in: fresh-up 50 (no bed), rest 3 hours 100 (holds a bed).
+
+Availability counts **bed rows**, not `rooms.total_beds`. A correction to a
+count must therefore reconcile the rows too, or availability silently stays
+wrong. `db/seed.sql` generates beds from `total_beds` and retires (never
+deletes) rows above the count, so a booking history keeps its row.
+
 ## Environment facts (verified 2026-11-03)
 - Python 3.13, Node 24, Docker 29 (works via `sudo docker`; the user is in the
   `docker` group but the socket is root-owned, so plain `docker` gives permission
