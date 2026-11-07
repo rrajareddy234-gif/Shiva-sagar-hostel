@@ -6,8 +6,8 @@
 --
 --     AC       18 beds   (2AC 7, 3AC 11)
 --     NON_AC   29 beds   (1NA 4, 4NA 5, 5NA 5, 6NA 10, 7NA 5)
---     DORM     10 mats   (mat spaces, no cots)
---     total    57
+--     DORM     20 mats   (mat spaces, no cots)
+--     total    67
 --
 -- This file is safe to run more than once: it inserts missing rows, updates
 -- what the owner has since confirmed, and never deletes a booking.
@@ -30,7 +30,7 @@ INSERT INTO rooms (room_id, room_type, total_beds, notes) VALUES
     ('5NA',  'NON_AC',  5, 'confirmed by the owner 2026-11-07'),
     ('6NA',  'NON_AC', 10, 'confirmed by the owner 2026-11-07'),
     ('7NA',  'NON_AC',  5, 'confirmed by the owner 2026-11-07'),
-    ('DORM', 'DORM',   10, 'mat spaces, no cots; confirmed by the owner 2026-11-07')
+    ('DORM', 'DORM',   20, 'mat spaces, no cots; confirmed by the owner 2026-11-07')
 ON CONFLICT (room_id) DO UPDATE SET
     room_type  = EXCLUDED.room_type,
     total_beds = EXCLUDED.total_beds,
@@ -55,8 +55,10 @@ ON CONFLICT (bed_id) DO UPDATE SET active = true, bed_type = EXCLUDED.bed_type;
 
 INSERT INTO beds (bed_id, room_id, bed_type)
 SELECT 'DORM-M' || g.n, 'DORM', 'MAT'
-FROM generate_series(1, 10) AS g(n)
-ON CONFLICT (bed_id) DO UPDATE SET active = true;
+FROM rooms r
+JOIN generate_series(1, r.total_beds) AS g(n) ON true
+WHERE r.room_id = 'DORM'
+ON CONFLICT (bed_id) DO UPDATE SET active = true, bed_type = EXCLUDED.bed_type;
 
 -- Retire any bed above the confirmed count for its room.
 UPDATE beds b SET active = false
@@ -66,10 +68,12 @@ WHERE b.room_id = r.room_id
   AND b.bed_id ~ ('^' || r.room_id || '-B[0-9]+$')
   AND substring(b.bed_id from '[0-9]+$')::int > r.total_beds;
 
-UPDATE beds SET active = false
-WHERE room_id = 'DORM'
-  AND bed_id ~ '^DORM-M[0-9]+$'
-  AND substring(bed_id from '[0-9]+$')::int > 10;
+UPDATE beds b SET active = false
+FROM rooms r
+WHERE b.room_id = r.room_id
+  AND r.room_id = 'DORM'
+  AND b.bed_id ~ '^DORM-M[0-9]+$'
+  AND substring(b.bed_id from '[0-9]+$')::int > r.total_beds;
 
 -- ---------------------------------------------------------------------------
 -- Rates confirmed by the owner. Every room type is offered both with and
