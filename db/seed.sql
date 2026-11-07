@@ -1,31 +1,48 @@
--- Sagar PG Hostel — initial configuration from the owner's historic records.
+-- Sagar PG Hostel — initial configuration, confirmed by the owner 2026-11-07.
 --
--- NOT YET CONFIRMED. The owner must check the room list, the bed count per room
--- and the rates before this is treated as live. Prices here are the indicative
--- figures the owner supplied; they are editable and no quotation goes out until
--- the owner confirms them.
+-- Beds are what is sold, not rooms. A guest books a bed, and the bed is either
+-- AC or non-AC. The room a bed sits in is only how the beds are organised, so
+-- the numbers that matter are the AC bed total and the non-AC bed total:
 --
--- This file is safe to run more than once: it inserts missing rows and leaves
--- existing ones alone.
+--     AC       18 beds   (2AC 7, 3AC 11)
+--     NON_AC   29 beds   (1NA 4, 4NA 5, 5NA 5, 6NA 10, 7NA 5)
+--     DORM     10 mats   (mat spaces, no cots)
+--     total    57
+--
+-- This file is safe to run more than once: it inserts missing rows, updates
+-- what the owner has since confirmed, and never deletes a booking.
 
 BEGIN;
 
 -- ---------------------------------------------------------------------------
--- Rooms, as supplied historically.
+-- Rooms, as confirmed by the owner.
+--
+-- The counts are reconciled to what the owner stated, so a database seeded
+-- from an earlier, unconfirmed copy ends up correct rather than left stale.
+-- The update is deliberately not DO NOTHING: a stale count would misreport
+-- availability, which is the one thing the pricing engine must never guess.
 -- ---------------------------------------------------------------------------
 INSERT INTO rooms (room_id, room_type, total_beds, notes) VALUES
-    ('1NA',  'NON_AC',  5, 'historic configuration, unconfirmed'),
-    ('2AC',  'AC',      7, 'historic configuration, unconfirmed'),
-    ('3AC',  'AC',     10, 'historic configuration, unconfirmed'),
-    ('4NA',  'NON_AC',  5, 'historic configuration, unconfirmed'),
-    ('5NA',  'NON_AC',  5, 'confirmed by the owner'),
-    ('6NA',  'NON_AC', 12, 'historic configuration, unconfirmed'),
-    ('7NA',  'NON_AC',  4, 'historic configuration, unconfirmed'),
-    ('DORM', 'DORM',   20, 'dormitory mat spaces, no cots; unconfirmed')
-ON CONFLICT (room_id) DO NOTHING;
+    ('1NA',  'NON_AC',  4, 'confirmed by the owner 2026-11-07'),
+    ('2AC',  'AC',      7, 'confirmed by the owner 2026-11-07'),
+    ('3AC',  'AC',     11, 'confirmed by the owner 2026-11-07'),
+    ('4NA',  'NON_AC',  5, 'confirmed by the owner 2026-11-07'),
+    ('5NA',  'NON_AC',  5, 'confirmed by the owner 2026-11-07'),
+    ('6NA',  'NON_AC', 10, 'confirmed by the owner 2026-11-07'),
+    ('7NA',  'NON_AC',  5, 'confirmed by the owner 2026-11-07'),
+    ('DORM', 'DORM',   10, 'mat spaces, no cots; confirmed by the owner 2026-11-07')
+ON CONFLICT (room_id) DO UPDATE SET
+    room_type  = EXCLUDED.room_type,
+    total_beds = EXCLUDED.total_beds,
+    notes      = EXCLUDED.notes;
 
 -- ---------------------------------------------------------------------------
--- One bed row per bed. Mat spaces in the dormitory are labelled M1..M20.
+-- One bed row per bed. Availability counts bed rows, not the room's total_beds
+-- column, so the rows must agree with the counts above.
+--
+-- Beds added by this file appear. Beds removed by a correction are retired
+-- (active = false) rather than deleted: a bed that a booking history refers to
+-- must keep its row, and deactivating it takes it out of availability at once.
 -- ---------------------------------------------------------------------------
 INSERT INTO beds (bed_id, room_id, bed_type)
 SELECT r.room_id || '-B' || g.n,
@@ -34,12 +51,25 @@ SELECT r.room_id || '-B' || g.n,
 FROM rooms r
 JOIN generate_series(1, r.total_beds) AS g(n) ON true
 WHERE r.room_type <> 'DORM'
-ON CONFLICT (bed_id) DO NOTHING;
+ON CONFLICT (bed_id) DO UPDATE SET active = true, bed_type = EXCLUDED.bed_type;
 
 INSERT INTO beds (bed_id, room_id, bed_type)
 SELECT 'DORM-M' || g.n, 'DORM', 'MAT'
-FROM generate_series(1, 20) AS g(n)
-ON CONFLICT (bed_id) DO NOTHING;
+FROM generate_series(1, 10) AS g(n)
+ON CONFLICT (bed_id) DO UPDATE SET active = true;
+
+-- Retire any bed above the confirmed count for its room.
+UPDATE beds b SET active = false
+FROM rooms r
+WHERE b.room_id = r.room_id
+  AND r.room_type <> 'DORM'
+  AND b.bed_id ~ ('^' || r.room_id || '-B[0-9]+$')
+  AND substring(b.bed_id from '[0-9]+$')::int > r.total_beds;
+
+UPDATE beds SET active = false
+WHERE room_id = 'DORM'
+  AND bed_id ~ '^DORM-M[0-9]+$'
+  AND substring(bed_id from '[0-9]+$')::int > 10;
 
 -- ---------------------------------------------------------------------------
 -- Rates confirmed by the owner. Every room type is offered both with and
@@ -74,16 +104,15 @@ DO UPDATE SET name = EXCLUDED.name,
               notes = EXCLUDED.notes;
 
 -- ---------------------------------------------------------------------------
--- Monthly (PG) plans. Agreed in whole months. Every room type is offered with
--- and without food, and a night-only or full-day arrangement. Only AC charges
--- more for a full day; the others charge the same either way.
+-- Monthly (PG) plans, confirmed by the owner 2026-11-07.
 --
---   AC         with food 8000 night / 11000 full day
---              no food   5000 night /  7000 full day
---   Non-AC     with food 5500 night /  5500 full day
---              no food   4000 night /  4000 full day
---   Dormitory  with food 4500 night /  4500 full day
---              no food   3500 night /  3500 full day
+-- The owner quotes one monthly figure per room type and food option. A bed is
+-- booked, not a room, so the same rate applies whether the stay is taken as a
+-- night-only or a full-day arrangement.
+--
+--   AC        with food 7500      no food 5000
+--   Non-AC    with food 5000      no food 3000
+--   Dormitory with food 4500      no food 2500
 --
 -- These are the same for every guest. There is no student concession; anyone
 -- who wants a lower rate must speak to the owner.
@@ -92,18 +121,18 @@ INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode,
 SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.stay_mode, v.monthly_rate,
        'confirmed by the owner'
 FROM (VALUES
-    ('Monthly AC with food, night',        'AC',     true,  'STANDARD', 'NIGHT',  8000.00),
-    ('Monthly AC with food, full day',     'AC',     true,  'STANDARD', 'DAY',   11000.00),
+    ('Monthly AC with food, night',        'AC',     true,  'STANDARD', 'NIGHT',  7500.00),
+    ('Monthly AC with food, full day',     'AC',     true,  'STANDARD', 'DAY',    7500.00),
     ('Monthly AC no food, night',          'AC',     false, 'STANDARD', 'NIGHT',  5000.00),
-    ('Monthly AC no food, full day',       'AC',     false, 'STANDARD', 'DAY',    7000.00),
-    ('Monthly Non-AC with food',           'NON_AC', true,  'STANDARD', 'NIGHT',  5500.00),
-    ('Monthly Non-AC with food, full day', 'NON_AC', true,  'STANDARD', 'DAY',    5500.00),
-    ('Monthly Non-AC no food',             'NON_AC', false, 'STANDARD', 'NIGHT',  4000.00),
-    ('Monthly Non-AC no food, full day',   'NON_AC', false, 'STANDARD', 'DAY',    4000.00),
+    ('Monthly AC no food, full day',       'AC',     false, 'STANDARD', 'DAY',    5000.00),
+    ('Monthly Non-AC with food',           'NON_AC', true,  'STANDARD', 'NIGHT',  5000.00),
+    ('Monthly Non-AC with food, full day', 'NON_AC', true,  'STANDARD', 'DAY',    5000.00),
+    ('Monthly Non-AC no food',             'NON_AC', false, 'STANDARD', 'NIGHT',  3000.00),
+    ('Monthly Non-AC no food, full day',   'NON_AC', false, 'STANDARD', 'DAY',    3000.00),
     ('Monthly dormitory with food',        'DORM',   true,  'STANDARD', 'NIGHT',  4500.00),
     ('Monthly dormitory with food, full day','DORM', true,  'STANDARD', 'DAY',    4500.00),
-    ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  3500.00),
-    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    3500.00)
+    ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  2500.00),
+    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    2500.00)
 ) AS v(name, room_type, food_included, plan_kind, stay_mode, monthly_rate)
 ON CONFLICT (plan_kind, room_type, food_included, stay_mode) WHERE active
 DO UPDATE SET name = EXCLUDED.name,
@@ -147,13 +176,14 @@ ON CONFLICT (key) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- A flag the owner can read back, so nothing here is silently treated as live.
--- The rates above are confirmed. The room list still needs the owner's word.
+-- The owner confirmed the bed counts and the rates on 2026-11-07.
 -- ---------------------------------------------------------------------------
 INSERT INTO settings (key, value) VALUES
     ('rates_confirmed', 'true'::jsonb),
-    ('rates_confirmed_on', '"2026-11-03"'::jsonb),
-    ('rooms_confirmed', 'false'::jsonb),
-    ('configuration_source', '"rates confirmed by the owner; rooms still historic"'::jsonb)
+    ('rates_confirmed_on', '"2026-11-07"'::jsonb),
+    ('rooms_confirmed', 'true'::jsonb),
+    ('rooms_confirmed_on', '"2026-11-07"'::jsonb),
+    ('configuration_source', '"bed counts and rates confirmed by the owner 2026-11-07"'::jsonb)
 ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
 
 COMMIT;
