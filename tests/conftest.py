@@ -8,7 +8,9 @@ only — never real customer records.
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import psycopg
 import pytest
@@ -27,11 +29,22 @@ TEST_DSN = os.environ.get(
 
 IST = timezone(timedelta(hours=5, minutes=30))
 
-TABLES = (
-    "audit_log", "referrals", "partners", "messages", "conversations",
-    "payments", "bed_holds", "bookings", "rate_plans", "extras", "enquiries",
-    "guests", "beds", "rooms", "settings",
-)
+# Every table is read from the schema, not typed out here. A hand-kept list
+# silently goes stale the moment a table is added, and a table missing from the
+# truncate leaks rows from one test into the next. Deriving the list makes that
+# class of bug impossible.
+_SCHEMA_PATH = Path(__file__).resolve().parent.parent / "db" / "schema.sql"
+
+
+def _tables_from_schema() -> tuple[str, ...]:
+    sql = _SCHEMA_PATH.read_text()
+    names = re.findall(r"CREATE TABLE IF NOT EXISTS\s+([a-z_][a-z0-9_]*)", sql)
+    if not names:
+        raise RuntimeError(f"no tables found in {_SCHEMA_PATH}; the schema moved?")
+    return tuple(sorted(set(names)))
+
+
+TABLES = _tables_from_schema()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -42,15 +55,14 @@ def _database():
     except psycopg.OperationalError as exc:  # pragma: no cover
         pytest.skip(f"PostgreSQL is not available: {exc}")
 
-    with admin:
-        with admin.cursor() as cur:
-            cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s AND pid <> pg_backend_pid()",
-                (TEST_DB_NAME,),
-            )
-            cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"')
-            cur.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
+    with admin, admin.cursor() as cur:
+        cur.execute(
+            "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
+            "WHERE datname = %s AND pid <> pg_backend_pid()",
+            (TEST_DB_NAME,),
+        )
+        cur.execute(f'DROP DATABASE IF EXISTS "{TEST_DB_NAME}"')
+        cur.execute(f'CREATE DATABASE "{TEST_DB_NAME}"')
     admin.close()
 
     Database(TEST_DSN).apply_schema()
@@ -85,19 +97,53 @@ def seeded(db: Database) -> Database:
         )
         cur.execute(
             "INSERT INTO rate_plans (name, room_type, food_included, stay_mode, daily_rate, hourly_rate, min_hours) VALUES "
-            "('Non-AC with food per night','NON_AC',true,'NIGHT',200,20,1), "
-            "('Non-AC with food per day','NON_AC',true,'DAY',250,20,1), "
-            "('AC with food per night','AC',true,'NIGHT',300,30,1), "
-            "('AC with food per day','AC',true,'DAY',350,30,1), "
-            "('Dormitory mat per night','DORM',false,'NIGHT',100,10,1), "
-            "('Dormitory mat per day','DORM',false,'DAY',150,10,1)"
+            "('Non-AC with food per night','NON_AC',true,'NIGHT',250,20,1), "
+            "('Non-AC with food per day','NON_AC',true,'DAY',350,20,1), "
+            "('Non-AC without food per night','NON_AC',false,'NIGHT',200,20,1), "
+            "('Non-AC without food per day','NON_AC',false,'DAY',250,20,1), "
+            "('AC with food per night','AC',true,'NIGHT',350,30,1), "
+            "('AC with food per day','AC',true,'DAY',450,30,1), "
+            "('AC without food per night','AC',false,'NIGHT',300,30,1), "
+            "('AC without food per day','AC',false,'DAY',350,30,1), "
+            "('Dormitory with food per night','DORM',true,'NIGHT',200,10,1), "
+            "('Dormitory with food per day','DORM',true,'DAY',300,10,1), "
+            "('Dormitory mat per night','DORM',false,'NIGHT',150,10,1), "
+            "('Dormitory mat per day','DORM',false,'DAY',200,10,1)"
+        )
+        cur.execute(
+            "INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode, monthly_rate) VALUES "
+            "('Monthly AC with food, night','AC',true,'STANDARD','NIGHT',8000), "
+            "('Monthly AC with food, full day','AC',true,'STANDARD','DAY',11000), "
+            "('Monthly AC no food, night','AC',false,'STANDARD','NIGHT',5000), "
+            "('Monthly AC no food, full day','AC',false,'STANDARD','DAY',7000), "
+            "('Monthly Non-AC with food','NON_AC',true,'STANDARD','NIGHT',5500), "
+            "('Monthly Non-AC with food, full day','NON_AC',true,'STANDARD','DAY',5500), "
+            "('Monthly Non-AC no food','NON_AC',false,'STANDARD','NIGHT',4000), "
+            "('Monthly Non-AC no food, full day','NON_AC',false,'STANDARD','DAY',4000), "
+            "('Monthly dormitory with food','DORM',true,'STANDARD','NIGHT',4500), "
+            "('Monthly dormitory with food, full day','DORM',true,'STANDARD','DAY',4500), "
+            "('Monthly dormitory no food','DORM',false,'STANDARD','NIGHT',3500), "
+            "('Monthly dormitory no food, full day','DORM',false,'STANDARD','DAY',3500)"
         )
         cur.execute(
             "INSERT INTO extras (name, price, unit) VALUES "
-            "('New bedsheet',50,'PER_ITEM'), "
-            "('New towel',100,'PER_ITEM'), "
-            "('New pillow',50,'PER_ITEM'), "
-            "('Locker',30,'PER_MONTH')"
+            "('Towel',50,'PER_ITEM'), "
+            "('Bedsheet',50,'PER_ITEM'), "
+            "('Pillow',50,'PER_ITEM'), "
+            "('Locker',50,'PER_MONTH')"
+        )
+        cur.execute(
+            "INSERT INTO hostel_facts (key, value, category, source) VALUES "
+            "('policy.night_meals','A night stay includes dinner only.','policy','owner'), "
+            "('policy.day_meals','A day stay is 24 hours and includes tiffin, lunch and dinner.','policy','owner'), "
+            "('policy.timings','We are open 24/7.','policy','owner') "
+            "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value"
+        )
+        cur.execute(
+            "INSERT INTO services (service_code, name, price, duration_minutes, needs_bed) VALUES "
+            "('FRESH_UP','Fresh-up',50,0,false), "
+            "('REST_3H','Three-hour rest',100,180,true) "
+            "ON CONFLICT (service_code) DO NOTHING"
         )
     return db
 
@@ -117,6 +163,8 @@ def tomorrow(tz):
 
 APP_SECRET = "test-app-secret"
 VERIFY_TOKEN = "test-verify-token"
+# The dashboard has no fixed default password, so tests set one explicitly.
+DASHBOARD_PASSWORD = "test-dashboard-password"
 
 
 class FakeChannel(ChannelAdapter):
@@ -124,9 +172,19 @@ class FakeChannel(ChannelAdapter):
 
     name = "fake"
 
-    def __init__(self, *, fail: bool = False):
+    def __init__(self, *, fail: bool = False, fail_interactive: bool = False,
+                 fail_document: bool = False, throttle: bool = False):
         self.sent: list[tuple[str, str]] = []
+        self.prompts: list[tuple[str, object]] = []
+        self.documents: list[tuple[str, str, bytes]] = []
         self.fail = fail
+        self.fail_interactive = fail_interactive
+        self.fail_document = fail_document
+        self.throttle = throttle
+        # Every outbound attempt, whether or not it succeeded. A test that only
+        # looks at successes cannot tell "did not try" from "tried and failed",
+        # and the whole point of the throttle guard is not to try twice.
+        self.attempts: list[str] = []
 
     def _meta(self):
         from core.channel.meta_cloud import MetaCloudAdapter
@@ -143,6 +201,10 @@ class FakeChannel(ChannelAdapter):
         return self._meta().verify_challenge(query)
 
     def send_text(self, to_phone, text):
+        self.attempts.append("text")
+        if self.throttle:
+            return SendResult(ok=False, retryable=False,
+                              error="HTTP 400: (#131056) pair rate limit hit")
         if self.fail:
             return SendResult(ok=False, error="simulated outage")
         self.sent.append((to_phone, text))
@@ -151,6 +213,32 @@ class FakeChannel(ChannelAdapter):
     def send_template(self, to_phone, template_name, params=None, language="en"):
         return SendResult(ok=True, provider_message_id="tpl.1")
 
+    def send_interactive(self, to_phone, prompt):
+        self.attempts.append("interactive")
+        if self.throttle:
+            return SendResult(ok=False, retryable=False,
+                              error="HTTP 400: (#131056) pair rate limit hit")
+        if self.fail or self.fail_interactive:
+            return SendResult(ok=False, error="simulated interactive failure")
+        self.prompts.append((to_phone, prompt))
+        return SendResult(ok=True, provider_message_id=f"btn.{len(self.prompts)}")
+
+    def send_document(self, to_phone, filename, content, media_type="text/csv",
+                      caption=None):
+        if self.fail or self.fail_document:
+            return SendResult(ok=False, error="simulated document failure")
+        self.documents.append((to_phone, filename, content))
+        return SendResult(ok=True, provider_message_id=f"doc.{len(self.documents)}")
+
+    # What a fetch_media call returns for the next inbound image. Tests set this
+    # to stand in for a real WhatsApp download.
+    media_bytes: bytes | None = b"\xff\xd8\xff\xe0fake-jpeg"
+
+    def fetch_media(self, media_id):
+        if self.media_bytes is None:
+            return None
+        return self.media_bytes, "image/jpeg"
+
 
 @pytest.fixture
 def channel() -> FakeChannel:
@@ -158,13 +246,14 @@ def channel() -> FakeChannel:
 
 
 @pytest.fixture
-def client(db, channel, seeded):
+def client(db, channel, seeded, monkeypatch):
     """A TestClient against the real database with a fake WhatsApp channel."""
     from fastapi.testclient import TestClient
 
     from api.webhook import create_app
     from core.config import Settings
 
+    monkeypatch.setenv("DASHBOARD_PASSWORD", DASHBOARD_PASSWORD)
     settings = Settings(
         database_url=TEST_DSN,
         channel_provider="meta_cloud",

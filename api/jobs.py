@@ -10,6 +10,7 @@ URL could read the hostel's figures.
 
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from datetime import datetime, timedelta
@@ -17,7 +18,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Header, HTTPException, Request
 from fastapi.responses import JSONResponse
 
-from core import availability, booking, inbox, payments
+from core import availability, booking, inbox, payments, reports
 from core.config import Settings
 from core.db import Database
 
@@ -30,7 +31,10 @@ def _authorise(provided: str | None) -> None:
     expected = os.environ.get("JOB_TOKEN", "")
     if not expected:
         raise HTTPException(status_code=503, detail="JOB_TOKEN is not configured")
-    if provided != expected:
+    # Constant-time compare, like the webhook's signature check: a plain `!=`
+    # leaks how many leading characters matched, which is enough to recover a
+    # token one byte at a time.
+    if not provided or not hmac.compare_digest(provided, expected):
         raise HTTPException(status_code=401, detail="invalid job token")
 
 
@@ -70,6 +74,7 @@ def daily_report(request: Request, x_job_token: str | None = Header(default=None
         "revenue_this_month": str(payments.revenue_between(db, month_start, day_end)),
         "collected_today": str(payments.revenue_between(db, day_start, day_end)),
     }
+    report["text"] = reports.daily_report_text(report)
     return report
 
 
@@ -79,7 +84,7 @@ def unanswered(request: Request, x_job_token: str | None = Header(default=None))
     _authorise(x_job_token)
     db: Database = request.app.state.db
     rows = inbox.unanswered_enquiries(db, _now())
-    return {
+    payload = {
         "count": len(rows),
         "enquiries": [
             {"phone": r["phone"],
@@ -88,6 +93,8 @@ def unanswered(request: Request, x_job_token: str | None = Header(default=None))
             for r in rows
         ],
     }
+    payload["text"] = reports.unanswered_enquiries_text(payload)
+    return payload
 
 
 @router.get("/upcoming")
@@ -96,7 +103,7 @@ def upcoming(request: Request, x_job_token: str | None = Header(default=None)) -
     _authorise(x_job_token)
     db: Database = request.app.state.db
     tomorrow = _now() + timedelta(days=1)
-    return {
+    payload = {
         "arrivals_tomorrow": [
             {"reference": r["reference"], "bed_id": r["bed_id"],
              "guest": r["full_name"] or r["phone"],
@@ -116,6 +123,8 @@ def upcoming(request: Request, x_job_token: str | None = Header(default=None)) -
             for r in booking.overdue_checkouts(db)
         ],
     }
+    payload["text"] = reports.upcoming_text(payload)
+    return payload
 
 
 @router.get("/health-check")
@@ -146,8 +155,9 @@ def health_check(request: Request, x_job_token: str | None = Header(default=None
         if expired_holds and expired_holds["n"]:
             problems.append(f"{expired_holds['n']} expired holds are still ACTIVE")
 
-    return JSONResponse({"ok": not problems, "problems": problems},
-                        status_code=200 if not problems else 503)
+    payload = {"ok": not problems, "problems": problems}
+    payload["text"] = reports.health_check_text(payload)
+    return JSONResponse(payload, status_code=200 if not problems else 503)
 
 
 @router.get("/pending-requests")
@@ -155,7 +165,7 @@ def pending_requests(request: Request, x_job_token: str | None = Header(default=
     """Booking requests waiting for the owner."""
     _authorise(x_job_token)
     db: Database = request.app.state.db
-    return {
+    payload = {
         "count": len(booking.pending_requests(db)),
         "requests": [
             {"reference": r["reference"], "bed_id": r["bed_id"],
@@ -165,6 +175,30 @@ def pending_requests(request: Request, x_job_token: str | None = Header(default=
             for r in booking.pending_requests(db)
         ],
     }
+    payload["text"] = reports.pending_requests_text(payload)
+    return payload
+
+
+@router.post("/expire-holds")
+def expire_holds(request: Request, x_job_token: str | None = Header(default=None)) -> dict:
+    """Release beds whose hold has lapsed, and expire the bookings that held them.
+
+    A bed is held while a guest is deciding and while they are paying. Neither
+    hold may last for ever: an owner who accepts a request and a guest who never
+    pays must not keep the bed off the market. This sweep is what makes that
+    true, and it is the reason `accept()` can promise that an unpaid acceptance
+    lets the bed go.
+
+    Two steps, in this order: the lapsed holds are marked EXPIRED, then the
+    REQUESTED and ACCEPTED bookings with no live hold left are marked EXPIRED.
+    Doing the holds first means the booking sweep sees the true state.
+    """
+    _authorise(x_job_token)
+    db: Database = request.app.state.db
+
+    holds = availability.expire_stale_holds(db)
+    bookings = booking.expire_lapsed_requests(db)
+    return {"holds_expired": holds, "bookings_expired": bookings}
 
 
 @router.post("/notify-owner")

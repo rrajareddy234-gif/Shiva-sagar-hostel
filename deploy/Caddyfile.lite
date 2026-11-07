@@ -1,0 +1,39 @@
+# The Caddyfile for the lean deployment (docker-compose.lite.yml).
+#
+# Same job as deploy/Caddyfile, with one difference: there is no n8n to fall
+# back to, so an unknown path is refused instead of proxied to a second
+# service. A smaller exposed surface is the point of this setup.
+#
+# Replace sagar.example.com with your real domain before deploying, or set
+# SAGAR_HOST in .env and leave the placeholder. Caddy obtains and renews the
+# HTTPS certificate automatically.
+
+{$SAGAR_HOST} {
+	# WhatsApp webhook, straight to the app. Meta requires HTTPS, and the app
+	# verifies the signature on every call.
+	handle /webhook* {
+		reverse_proxy app:8000
+	}
+
+	# Health check, for the host's own monitoring and for Meta's setup screen.
+	handle /health {
+		reverse_proxy app:8000
+	}
+
+	# The owner's dashboard. Password-protected in the app.
+	handle /dashboard* {
+		reverse_proxy app:8000
+	}
+
+	# The scheduled-job endpoints are called by the scheduler over the compose
+	# network. They are not published, so the internet cannot reach them even
+	# though the job token would protect them anyway.
+	handle /jobs* {
+		respond "not found" 404
+	}
+
+	# Everything else is not part of this service.
+	handle {
+		respond "not found" 404
+	}
+}

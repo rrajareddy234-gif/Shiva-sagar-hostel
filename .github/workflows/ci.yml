@@ -1,0 +1,75 @@
+name: CI
+
+# Every push and every pull request is checked the same way, so "it passes on
+# my machine" cannot be the last word. Two independent jobs:
+#
+#   lint   — static checks (ruff), fast, no database
+#   test   — the full suite against a real PostgreSQL, exactly as it runs locally
+#
+# The suite is not mocked: it creates and drops a throwaway database, which is
+# the only way to catch the schema and constraint bugs this app has hit before.
+
+on:
+  push:
+  pull_request:
+
+# A newer push to the same branch cancels the older run; only the latest
+# commit matters.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Install ruff
+        run: pip install "ruff==0.17.3"
+      - name: Lint
+        run: ruff check .
+
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        # Same image and credentials as the local dev container, so a test that
+        # passes here passes locally and the other way round.
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: sagar
+          POSTGRES_PASSWORD: devpass
+          POSTGRES_DB: sagarpg
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U sagar -d sagarpg"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      # The fixtures read these; the defaults already match, but setting them
+      # makes the dependency explicit.
+      TEST_ADMIN_DSN: postgresql://sagar:devpass@localhost:5432/sagarpg
+      TEST_DATABASE_URL: postgresql://sagar:devpass@localhost:5432/sagarpg_test
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+      - name: Apply the schema to the admin database
+        run: psql "$TEST_ADMIN_DSN" -v ON_ERROR_STOP=1 -q -f db/schema.sql
+      - name: Run the test suite
+        run: python -m pytest -ra

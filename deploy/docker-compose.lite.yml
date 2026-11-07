@@ -1,0 +1,93 @@
+# The lean deployment: the app, PostgreSQL, the scheduler and Caddy.
+#
+# This is docker-compose.yml with n8n removed and deploy/scheduler.py in its
+# place. Same app, same database, same HTTPS. What changes:
+#
+#   * no n8n container          -> about 400 MB less memory
+#   * no n8n web login          -> one fewer password to keep safe
+#   * no n8n encryption key     -> one fewer secret that must never change
+#   * scheduling runs in-process, in Python, covered by tests/  (n8n's
+#     JavaScript formatting was covered by nothing)
+#
+# The WhatsApp webhook does not go through n8n in either setup. Caddy sends
+# /webhook straight to the app, which verifies the Meta signature itself.
+#
+# Use this file:
+#
+#   docker compose -f deploy/docker-compose.lite.yml up -d --build
+#
+# Set SAGAR_HOST in .env to your domain. Nothing else changes.
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sagar}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-sagarpg}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    # Not published to the host. Only the app and the scheduler reach it, over
+    # the compose network.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sagar} -d ${POSTGRES_DB:-sagarpg}"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  app:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file: ../.env
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-sagar}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-sagarpg}
+    expose:
+      - "8000"
+
+  # Runs the same jobs n8n used to run: it calls the app's /jobs endpoints and
+  # forwards the text to /jobs/notify-owner. The app holds the WhatsApp
+  # credentials, so this container never sees them.
+  scheduler:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    restart: unless-stopped
+    depends_on:
+      - app
+    env_file: ../.env
+    environment:
+      SAGAR_APP_URL: http://app:8000
+      SCHEDULER_STATE_FILE: /state/last-runs.json
+    volumes:
+      # Bind-mounted, so the scheduler runs from the repo without a second
+      # image. The file is the only thing it writes.
+      - ./scheduler.py:/app/deploy/scheduler.py:ro
+      - schedulerstate:/state
+    command: ["python", "/app/deploy/scheduler.py"]
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - app
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Caddyfile.lite has no n8n fallback: anything that is not /webhook,
+      # /health or /dashboard is refused rather than proxied somewhere.
+      - ./Caddyfile.lite:/etc/caddy/Caddyfile:ro
+      - caddydata:/data
+      - caddyconfig:/config
+
+volumes:
+  pgdata:
+  schedulerstate:
+  caddydata:
+  caddyconfig:

@@ -15,8 +15,10 @@ import hashlib
 import hmac
 import json
 
-from tests.conftest import APP_SECRET  # noqa: F401
-from tests.conftest import client  # noqa: F401
+from tests.conftest import (
+    APP_SECRET,  # noqa: F401
+    client,  # noqa: F401
+)
 
 OWNER = "+919999999999"          # as stored after normalisation
 OWNER_SENDS = "919999999999"     # as Meta delivers it, no plus
@@ -59,17 +61,56 @@ def last_reply(channel, phone=None):
     return sent[-1][1] if sent else ""
 
 
+def tap(client, button_id, *, sender=GUEST_SENDS, message_id=None):
+    """Post a signed button tap, as WhatsApp delivers it when a guest taps."""
+    if message_id is None:
+        _counter[0] += 1
+        message_id = f"wamid.TAP{_counter[0]}"
+    body = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{"id": "WABA", "changes": [{"field": "messages", "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {"phone_number_id": "123456789"},
+            "messages": [{"from": sender, "id": message_id, "timestamp": "1735689600",
+                          "type": "interactive",
+                          "interactive": {"type": "button_reply",
+                                          "button_reply": {"id": button_id,
+                                                           "title": "tapped"}}}],
+        }}]}],
+    }).encode()
+    sig = hmac.new(APP_SECRET.encode(), body, hashlib.sha256).hexdigest()
+    return client.post("/webhook", content=body,
+                       headers={"X-Hub-Signature-256": f"sha256={sig}",
+                                "Content-Type": "application/json"})
+
+
+def last_prompt(channel, phone=None):
+    """The body of the last tappable prompt sent, or '' if none was."""
+    prompts = [p for ph, p in channel.prompts if phone is None or ph == phone]
+    return prompts[-1].body if prompts else ""
+
+
 # --- the full journey ------------------------------------------------------
 
 def test_a_guest_books_stays_and_leaves(client, channel, db):
     """Enquiry, booking request, owner approval, payment, check-in, checkout."""
     from core import booking
 
-    # 1. The guest asks a question the router answers without any AI call.
+    # 1. The guest asks for prices. The router sends the rate card, then offers
+    #    the room types as buttons, and no AI call is made.
     send(client, "what are your prices?")
-    assert "350" in last_reply(channel, GUEST)
+    assert "which room type" in last_prompt(channel, GUEST).lower()
+    assert "rs 300" in last_reply(channel, GUEST).lower(), \
+        "the rate card itself must reach the guest, not just the question"
     assert db.query_one(
         "SELECT count(*) AS n FROM ai_usage")["n"] == 0, "no AI call was needed"
+
+    # 1b. The guest taps AC, then "with food", and gets exactly that one rate.
+    tap(client, "price:room:AC")
+    assert "with food or without" in last_prompt(channel, GUEST).lower()
+    tap(client, "price:food:AC:1")
+    assert "350" in last_reply(channel, GUEST), "AC with food is Rs 350 a night"
+    assert "450" in last_reply(channel, GUEST), "AC with food is Rs 450 a day"
 
     # 2. The guest makes a booking request through the tool the AI would call.
     from core import tools
@@ -91,13 +132,40 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
     assert "YES" in last_reply(channel, OWNER).upper(), "must ask for confirmation"
     send(client, "YES", sender=OWNER_SENDS)
 
+    # The first approval ACCEPTS: the guest is told to pay, with the details and
+    # the UPI id. It does not confirm the booking -- that is the second approval.
+    row = db.query_one("SELECT status FROM bookings WHERE reference = %s", (reference,))
+    assert row["status"] == "ACCEPTED"
+    guest_told = last_reply(channel, "+919000007777")
+    assert "accepted" in guest_told.lower()
+    assert reference in guest_told, "the guest must be told the reference"
+    assert "upi" in guest_told.lower(), "the guest must be told how to pay"
+    assert "GUTTIKONDA RAJAVARDHAN REDDY" in guest_told, \
+        "the guest must be warned which name the UPI id should show"
+
+    # 4b. The guest sends the payment screenshot; the owner is asked to check it.
+    from core import booking as booking_mod
+    booking_mod.mark_proof_sent(
+        db, db.query_one("SELECT booking_id FROM bookings WHERE reference = %s",
+                         (reference,))["booking_id"], proof_path="/tmp/p.jpg")
+    assert db.query_one("SELECT status FROM bookings WHERE reference = %s",
+                        (reference,))["status"] == "PROOF_SENT"
+
+    # 4c. The owner's second approval confirms the booking, and the guest gets
+    #     the final confirmation with every detail.
+    send(client, f"approve booking {reference}", sender=OWNER_SENDS)
+    send(client, "YES", sender=OWNER_SENDS)
     row = db.query_one("SELECT status FROM bookings WHERE reference = %s", (reference,))
     assert row["status"] == "CONFIRMED"
+    final = last_reply(channel, "+919000007777")
+    assert "confirmed" in final.lower()
+    assert reference in final and "Total" in final
 
     # 5. The guest's bed is now taken for those dates.
     from datetime import datetime
-    from tests.conftest import IST
+
     from core import availability
+    from tests.conftest import IST
     free = availability.list_bed_availability(
         db, datetime(2026, 12, 1, 12, tzinfo=IST), datetime(2026, 12, 3, 10, tzinfo=IST))
     assert not next(b for b in free if b.bed_id == bed_id).available
@@ -146,7 +214,7 @@ def test_a_guest_cannot_approve_their_own_booking(client, channel, db):
     ctx = tools.ToolContext(db=db, phone="+919000007777", role="CUSTOMER")
     reference = tools.execute(ctx, "create_booking_request", {
         "full_name": "Dummy Guest", "check_in": "2026-12-01",
-        "check_out": "2026-12-02"})["reference"]
+        "check_out": "2026-12-02", "food_included": True})["reference"]
 
     send(client, f"approve booking {reference}", sender=GUEST_SENDS)
     send(client, "YES", sender=GUEST_SENDS)
@@ -187,16 +255,20 @@ def test_a_duplicate_webhook_delivery_replies_once(client, channel, db):
     client.post("/webhook", content=body, headers=headers)
 
     replies = [s for s in channel.sent if s[0] == GUEST]
+    prompts = [p for ph, p in channel.prompts if ph == GUEST]
+    # The rate card is sent once, and the prompt follows it once. Counting the
+    # two together would hide a duplicate.
     assert len(replies) == 1, "Meta retries deliveries; the guest must not get two replies"
+    assert len(prompts) == 1, "the room-type prompt goes out exactly once"
 
 
 def test_an_outage_leaves_the_message_for_a_retry(client, db):
     """If sending fails, the message stays unprocessed so it can be retried."""
-    from tests.conftest import FakeChannel
+    from fastapi.testclient import TestClient
+
     from api.webhook import create_app
     from core.config import Settings
-    from fastapi.testclient import TestClient
-    from tests.conftest import TEST_DSN, VERIFY_TOKEN
+    from tests.conftest import TEST_DSN, VERIFY_TOKEN, FakeChannel
 
     broken = FakeChannel(fail=True)
     settings = Settings(

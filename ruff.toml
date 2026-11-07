@@ -1,0 +1,63 @@
+# Lint configuration.
+#
+# The ruleset is deliberately narrow: it catches things that are actually
+# wrong — a name used before it is defined, an import that is not there, a bare
+# except that hides a failure, a comparison to None with == — and stays quiet
+# about formatting preferences, which are not defects. A noisy linter gets
+# ignored, and an ignored linter catches nothing.
+#
+# Security rules (S = flake8-bandit) stay on: this app holds guest names, phone
+# numbers and money, so a weak hash or a hardcoded secret is a real problem.
+
+target-version = "py313"
+line-length = 100
+
+[lint]
+select = [
+    "E4", "E7", "E9",   # real syntax and control-flow errors
+    "F",                # pyflakes: undefined names, unused imports/vars
+    "I",                # import order (deterministic diffs)
+    "B",                # bugbear: likely bugs (mutable defaults, == None, ...)
+    "S",                # bandit: security anti-patterns
+    "C4",               # comprehension misuse
+    "UP",               # modern syntax
+]
+
+ignore = [
+    "S101",   # assert: used freely in tests, which is the point of tests
+    "E501",   # line length: long explanatory strings are fine here
+    "B008",   # call in default arg: FastAPI's Header()/Depends() pattern
+    "E402",   # module import not at top: scripts must load .env before importing
+]
+
+[lint.per-file-ignores]
+# Test files may import fixtures without using them directly (pytest collects
+# them) and may use assert liberally.
+"tests/*" = ["F401", "F811", "S", "B011"]
+
+# --- audited security findings, reviewed line by line -----------------------
+#
+# S310 (urlopen scheme): every call site passes a URL built from a fixed https
+# prefix — the Google, OpenAI-compatible and Meta Graph endpoints, or a base URL
+# the operator sets in config. No caller can make the scheme file: or custom.
+#
+# S608 (SQL built from a string): the interpolated fragments are module-level
+# constants (_WINDOW) or a fixed WHERE clause written at the call site, never
+# guest input. Values always travel as bound parameters.
+#
+# S105 (hardcoded password): the flagged value is a header *name*, not a secret.
+#
+# S108 (hardcoded /tmp path): the watchdog's own state files on a single-host
+# deployment; no guest data is written there.
+#
+# S603/S607 (subprocess): the watchdog runs fixed, absolute-path commands.
+"ai/gemini.py" = ["S310"]
+"ai/openai_compatible.py" = ["S310"]
+"core/channel/meta_cloud.py" = ["S310"]
+"core/availability.py" = ["S608"]
+"core/billing.py" = ["S608"]
+"n8n/build_workflows.py" = ["S105"]
+"scripts/*" = ["S108", "S310", "S603", "S607", "S608"]
+# The scheduler calls the app over HTTP and keeps its own run-time record in
+# /tmp. Same audit as scripts/watchdog.py, which does both.
+"deploy/scheduler.py" = ["S108", "S310"]
