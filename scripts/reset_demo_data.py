@@ -25,7 +25,7 @@ from core.db import Database  # noqa: E402
 
 # People and money. Order matters: children before the guests they point at.
 DEMO_TABLES = (
-    "booking_extras", "payments", "invoice_lines", "invoices", "bed_holds",
+    "booking_extras", "payments", "invoice_lines", "invoices",
     "service_orders", "bookings", "referrals", "partners", "guests",
     "audit_log", "ai_usage",
 )

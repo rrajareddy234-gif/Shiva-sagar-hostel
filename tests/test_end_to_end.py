@@ -113,8 +113,8 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
     assert "450" in last_reply(channel, GUEST), "AC with food is Rs 450 a day"
 
     # 2. The guest makes a booking request through the tool the AI would call.
-    from core import tools
-    ctx = tools.ToolContext(db=db, phone="+919000007777", role="CUSTOMER")
+    from core import security, tools
+    ctx = tools.ToolContext(db=db, phone="+919000007777", role=security.CUSTOMER)
     result = tools.execute(ctx, "create_booking_request", {
         "full_name": "Dummy Guest", "check_in": "2026-12-01",
         "check_out": "2026-12-03", "room_type": "NON_AC", "food_included": True})
@@ -210,8 +210,8 @@ def test_a_guest_books_stays_and_leaves(client, channel, db):
 
 
 def test_a_guest_cannot_approve_their_own_booking(client, channel, db):
-    from core import tools
-    ctx = tools.ToolContext(db=db, phone="+919000007777", role="CUSTOMER")
+    from core import security, tools
+    ctx = tools.ToolContext(db=db, phone="+919000007777", role=security.CUSTOMER)
     reference = tools.execute(ctx, "create_booking_request", {
         "full_name": "Dummy Guest", "check_in": "2026-12-01",
         "check_out": "2026-12-02", "food_included": True})["reference"]
@@ -262,8 +262,9 @@ def test_a_duplicate_webhook_delivery_replies_once(client, channel, db):
     assert len(prompts) == 1, "the room-type prompt goes out exactly once"
 
 
-def test_an_outage_leaves_the_message_for_a_retry(client, db):
-    """If sending fails, the message stays unprocessed so it can be retried."""
+def test_an_outage_does_not_lose_the_reply_or_replay_the_message(client, db):
+    """If sending fails, the reply is kept in the outbox and the message is
+    handled exactly once -- never replayed, and never lost."""
     from fastapi.testclient import TestClient
 
     from api.webhook import create_app
@@ -281,5 +282,12 @@ def test_an_outage_leaves_the_message_for_a_retry(client, db):
 
     send(broken_client, "what are your prices?")
 
+    # The inbound was handled once and marked done, so a Meta retry cannot make
+    # the bot reply a second time.
     row = db.query_one("SELECT processed_at FROM messages WHERE direction = 'IN'")
-    assert row["processed_at"] is None, "an unsent reply must not be marked done"
+    assert row["processed_at"] is not None, "the message was handled"
+    # The reply itself is not lost: it stays in the outbox for the worker.
+    outbound = db.query_one("SELECT state FROM outbound_messages")
+    assert outbound is not None, "the unsent reply is retained in the outbox"
+    guest_sends = [t for phone, t in broken.sent if phone == GUEST]
+    assert guest_sends == [], "nothing reached the guest during the outage"

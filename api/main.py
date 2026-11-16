@@ -13,7 +13,7 @@ from api.webhook import create_app
 from core.config import Settings, load_dotenv
 
 logging.basicConfig(
-    level=os.environ.get("LOG_LEVEL", "INFO"),
+    level=os.environ.get("LOG_LEVEL") or "INFO",
     format="%(asctime)s %(levelname)s %(name)s %(message)s",
 )
 

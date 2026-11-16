@@ -30,9 +30,12 @@ log = logging.getLogger(__name__)
 # (which would be a cycle).
 _OWNER = "owner"
 _STAFF = "staff"
+_CUSTOMER = "customer"
 
-# A booking request holds its bed for this long before the hold expires.
-HOLD_MINUTES = 60
+# The owner's decision: only the owner creates or manages bookings. Staff are
+# read-only -- they may look up the day's work but may not record money, add
+# extras, issue invoices, request or touch a booking. A guest may still make
+# their own request, which the owner approves.
 
 
 @dataclass(frozen=True)
@@ -273,7 +276,6 @@ def _create_booking_request(ctx: ToolContext, args: dict) -> dict:
         stay_mode=(args.get("stay_mode") or "NIGHT").upper(),
         guests_count=guests, payment_terms=terms,
         name_source="GUEST_TYPED",
-        hold_minutes=HOLD_MINUTES,
     )
     ctx.events.append({
         "type": "booking_requested",
@@ -642,7 +644,8 @@ TOOLS: list[Tool] = [
         "create_booking_request",
         "Create a booking request for the guest you are talking to. This does "
         "NOT confirm a booking; the owner approves every request. Collect the "
-        "guest's name first.",
+        "guest's name first. A guest may make their own request; staff may not "
+        "create bookings.",
         {
             "type": "object",
             "properties": {
@@ -660,6 +663,7 @@ TOOLS: list[Tool] = [
             "required": ["full_name", "check_in", "check_out"],
         },
         _create_booking_request,
+        roles=(_OWNER, _CUSTOMER),
     ),
     Tool(
         "hostel_summary",
@@ -697,7 +701,7 @@ TOOLS: list[Tool] = [
     Tool(
         "add_extra",
         "Add an extra such as a towel or locker to a guest's stay. It goes on "
-        "their bill. Staff and owner only.",
+        "their bill. Owner only.",
         {
             "type": "object",
             "properties": {
@@ -708,13 +712,13 @@ TOOLS: list[Tool] = [
             "required": ["reference", "name"],
         },
         _add_extra,
-        roles=(_OWNER, _STAFF),
+        owner_only=True,
     ),
     Tool(
         "record_payment",
         "Record money received against a booking. It is recorded unverified; the "
         "owner must still verify it. Set refundable false for a booking advance, "
-        "which is never returned. Staff and owner only.",
+        "which is never returned. Owner only.",
         {
             "type": "object",
             "properties": {
@@ -728,12 +732,11 @@ TOOLS: list[Tool] = [
             "required": ["reference", "amount"],
         },
         _record_payment_tool,
-        roles=(_OWNER, _STAFF),
+        owner_only=True,
     ),
     Tool(
         "issue_invoice",
-        "Produce the bill for a stay. Re-issuing returns the same bill. Staff and "
-        "owner only.",
+        "Produce the bill for a stay. Re-issuing returns the same bill. Owner only.",
         {
             "type": "object",
             "properties": {
@@ -743,7 +746,7 @@ TOOLS: list[Tool] = [
             "required": ["reference"],
         },
         _issue_invoice,
-        roles=(_OWNER, _STAFF),
+        owner_only=True,
     ),
     Tool(
         "who_is",

@@ -132,7 +132,7 @@ Never commit this file. `.gitignore` excludes it and a test enforces that.
 
 ```bash
 cd /opt/sagar
-docker compose -f deploy/docker-compose.lite.yml up -d --build
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml up -d --build
 ```
 
 Every service is set to `restart: unless-stopped`, so they come back after a
@@ -141,12 +141,12 @@ reboot or a crash. Nothing needs a manual start.
 ## Step 6: the database
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml exec -T postgres \
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/schema.sql
 
-# Read db/seed.sql before running it. Every row is marked unconfirmed, and the
-# rooms and rates must be checked before going live.
-docker compose -f deploy/docker-compose.lite.yml exec -T postgres \
+# Seed data contains the owner-confirmed inventory and rate card. On an existing
+# installation, review and apply the focused reconciliation script instead.
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/seed.sql
 ```
 
@@ -166,7 +166,7 @@ Caddy worked.
 It starts with the stack; there is nothing to log into. Confirm it is running:
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml logs -f scheduler
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml logs -f scheduler
 ```
 
 A healthy system prints lines like `health-check: nothing to report`. That is
@@ -176,7 +176,7 @@ that matters is not lost in noise.
 To see what it would send without sending it:
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml exec scheduler \
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml exec scheduler \
   python /app/deploy/scheduler.py --once --no-notify
 ```
 
@@ -227,8 +227,8 @@ Restore, rehearsed rather than assumed:
 ## Checking on it
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml ps      # what is running
-docker compose -f deploy/docker-compose.lite.yml logs app # what the app says
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml ps      # what is running
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml logs app # what the app says
 ```
 
 The scheduler messages the owner when the health check fails, so a silent phone
@@ -258,7 +258,7 @@ To roll back:
 ```bash
 cd /opt/sagar
 git checkout "$(cat /tmp/last-known-good)"
-docker compose -f deploy/docker-compose.lite.yml up -d --build app
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml up -d --build app
 ```
 
 Rolling back the code does not roll back the database. If a change altered the

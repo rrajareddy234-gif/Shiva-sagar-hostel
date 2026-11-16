@@ -20,6 +20,7 @@ venv/
 *.sql.gz
 *.dump
 backups/
+*.tar.gz
 
 # Guests' payment screenshots (financial records). Runtime state, never source.
 payment_proofs/

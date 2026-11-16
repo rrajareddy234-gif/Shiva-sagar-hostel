@@ -22,8 +22,9 @@ from api import dashboard, jobs
 from core.channel.registry import build_channel
 from core.config import Settings
 from core.db import Database
-from core.dispatcher import build_ai, dispatch
-from core.inbox import store_inbound
+from core.dispatcher import build_ai
+from core.inbound_worker import process_message
+from core.inbox import store_delivery_status, store_inbound
 
 log = logging.getLogger(__name__)
 
@@ -123,17 +124,30 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
         try:
             messages = channel.parse_inbound(raw)
         except Exception as exc:
-            # A parse failure must still return 200 so Meta does not retry forever.
-            log.error("failed to parse a verified webhook payload: %s", exc)
-            return JSONResponse({"status": "ignored"}, status_code=200)
+            # A message parse failure must not prevent status callbacks being handled.
+            log.error("failed to parse inbound messages from verified webhook: %s", exc)
+            messages = []
 
         for message in messages:
             stored = store_inbound(db, message)
             if stored is None:
                 log.info("ignored a duplicate delivery of %s", message.provider_message_id)
                 continue
-            background.add_task(dispatch, db, channel, settings, message, ai,
-                                stored.message_id)
+            background.add_task(process_message, db, channel, settings,
+                                stored.message_id, ai)
+
+        try:
+            statuses = channel.parse_statuses(raw)
+        except Exception as exc:
+            log.error("failed to parse delivery statuses from verified webhook: %s", exc)
+            statuses = []
+
+        for status in statuses:
+            store_delivery_status(db, status, owner_phone=settings.owner_phone)
+            log.info(
+                "stored WhatsApp delivery status %s for message %s",
+                status.status, status.provider_message_id,
+            )
 
         return JSONResponse({"status": "received"}, status_code=200)
 

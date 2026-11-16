@@ -12,11 +12,17 @@ from __future__ import annotations
 
 import logging
 import os
+import uuid
 from datetime import UTC, datetime
 
 from ai.adapter import AIClient
-from core import alerts, handler, inbox, security
-from core.channel.adapter import ChannelAdapter, InboundMessage, Prompt
+from core import alerts, handler, inbox, outbox, security
+from core.channel.adapter import (
+    ChannelAdapter,
+    Flow,
+    InboundMessage,
+    Prompt,
+)
 from core.config import Settings
 from core.db import Database
 from core.export import DataFile
@@ -77,7 +83,8 @@ def history_for(db: Database, phone: str) -> list[dict]:
 
 def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
              message: InboundMessage, ai: AIClient | None = None,
-             message_id: str | None = None) -> bool:
+             message_id: str | None = None,
+             claim_token: str | None = None) -> bool:
     """Handle one inbound message and send the reply.
 
     Returns True when the message was handled, so the caller can mark it done.
@@ -91,31 +98,56 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
     """
     auto = auto_replies_go_out(db, settings, message.from_phone)
 
+    # A submitted calendar Flow arrives as an interactive whose answers are a
+    # JSON object, not free text. It is folded into the booking and the next
+    # question is asked, so the Flow replaces only the date question. A Flow the
+    # guest cancelled carries no usable range; the dates are then asked for
+    # again, rather than answered with the generic "send it as text" reply.
+    if message.message_type == "interactive" and not message.button_id:
+        from core.channel.adapter import flow_date_range, flow_response_data
+        interactive = message.raw.get("interactive") or {}
+        if "nfm_reply" in interactive:
+            check_in, check_out = flow_date_range(flow_response_data(message.raw))
+            return _handle_flow_submission(
+                db, channel=channel, settings=settings, message=message,
+                check_in=check_in or "", check_out=check_out or "",
+                message_id=message_id, claim_token=claim_token, auto=auto)
+
     # A payment screenshot is an image with no text. It is not routed like a
     # message: the guest has paid and is waiting, so it is filed, forwarded to
     # the owner, and acknowledged. The bot never reads the image -- it cannot --
     # the owner checks the money.
     if message.media_id and message.message_type in ("image", "document"):
-        _handle_payment_proof(db, channel=channel, settings=settings, message=message)
+        if message_id and not inbox.mark_dispatch_started(db, message_id, claim_token):
+            return False
+        _handle_payment_proof(db, channel=channel, settings=settings, message=message,
+                              message_id=message_id, claim_token=claim_token)
         if message_id:
-            inbox.mark_processed(db, message_id)
+            inbox.mark_processed(db, message_id, claim_token)
         return True
 
     # A tap is a text message the guest did not have to type. It carries the
     # button id, so it is handled exactly like typed text.
     if not message.button_id and (message.message_type != "text"
                                   or not (message.text or "").strip()):
+        if message_id and not inbox.mark_dispatch_started(db, message_id, claim_token):
+            return False
         # Media and other message types are acknowledged but not yet understood.
         if auto:
             _reply(db, channel, message.from_phone,
                    "Thanks for your message. Please send it as text so I can help, "
-                   "or tell me your check-in date and how many nights you need.")
+                   "or tell me your check-in date and how many nights you need.",
+                   source_inbound_id=message_id, claim_token=claim_token,
+                   private_root=settings.payment_proof_dir, settings=settings)
         else:
             log.info("auto-reply paused; media from %s stored without a reply",
                      message.from_phone)
-        if message_id:
-            inbox.mark_processed(db, message_id)
+        if message_id and not auto:
+            inbox.mark_processed(db, message_id, claim_token)
         return True
+
+    if message_id and not inbox.mark_dispatch_started(db, message_id, claim_token):
+        return False
 
     try:
         outcome = handler.handle_message(
@@ -123,15 +155,19 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
             owner_phone=settings.owner_phone, ai=ai,
             history=history_for(db, message.from_phone),
             button_id=message.button_id,
-            staff_phones=settings.staff_phones)
+            staff_phones=settings.staff_phones,
+            flow_id=settings.whatsapp_flow_id,
+            flow_screen=settings.whatsapp_flow_calendar_screen)
     except Exception as exc:
         log.exception("handling failed for %s: %s", message.from_phone, exc)
         if auto:
             _reply(db, channel, message.from_phone,
                    "Sorry, something went wrong on my side. The owner has been alerted "
-                   "and will get back to you.")
-        if message_id:
-            inbox.mark_processed(db, message_id)
+                   "and will get back to you.", source_inbound_id=message_id,
+                   claim_token=claim_token, private_root=settings.payment_proof_dir,
+                   settings=settings)
+        elif message_id:
+            inbox.mark_processed(db, message_id, claim_token)
         return True
 
     # An outage is silent from the guest's side, so the owner is told about it
@@ -160,25 +196,29 @@ def dispatch(db: Database, channel: ChannelAdapter, settings: Settings,
                                    "booking_rejected"):
             _notify_booking_event(db, channel=channel, settings=settings, event=event)
 
+    # The owner's alerts and the guest's reply are queued in the outbox; send
+    # them now so both reach their phone promptly. This runs even while guest
+    # replies are paused, because a booking request must still reach the owner.
+    _drain(db, channel, settings=settings, private_root=settings.payment_proof_dir)
+
     if not auto:
         log.info("auto-reply paused; stored and handled %s from %s without replying",
                  message.message_type, message.from_phone)
         if message_id:
-            inbox.mark_processed(db, message_id)
+            inbox.mark_processed(db, message_id, claim_token)
         return True
 
     sent = _reply(db, channel, message.from_phone, outcome.reply,
-                  prompt=outcome.prompt, file=outcome.file)
-    if not sent:
-        return False
-
-    if message_id:
-        inbox.mark_processed(db, message_id)
-    return True
+                  prompt=outcome.prompt, file=outcome.file, flow=outcome.flow,
+                  source_inbound_id=message_id, claim_token=claim_token,
+                  private_root=settings.payment_proof_dir, settings=settings)
+    return sent
 
 
 def _handle_payment_proof(db: Database, *, channel: ChannelAdapter,
-                          settings: Settings, message) -> None:
+                          settings: Settings, message,
+                          message_id: str | None = None,
+                          claim_token: str | None = None) -> None:
     """File a guest's payment screenshot and pass it to the owner to check.
 
     Which booking it belongs to is the guest's most recent booking that is
@@ -200,7 +240,9 @@ def _handle_payment_proof(db: Database, *, channel: ChannelAdapter,
         _reply(db, channel, message.from_phone,
                "Thank you for the screenshot. I could not find a booking of yours "
                "waiting for payment. Please send the booking reference, or make "
-               "your booking first.")
+               "your booking first.", source_inbound_id=message_id,
+               claim_token=claim_token, private_root=settings.payment_proof_dir,
+               settings=settings)
         return
 
     content = None
@@ -214,21 +256,40 @@ def _handle_payment_proof(db: Database, *, channel: ChannelAdapter,
         log.warning("could not download proof for %s: %s", row["reference"], exc)
 
     path = _store_proof(settings.payment_proof_dir, row["reference"], content, media_type)
+    proof_ref = None
+    proof_filename = f"{row['reference']}-payment{_suffix(media_type)}"
+    if content and settings.owner_phone:
+        try:
+            from core.outbound_worker import stage_attachment
+            proof_ref = stage_attachment(settings.payment_proof_dir, content=content,
+                                         filename=proof_filename)
+        except Exception as exc:
+            log.warning("could not stage private outbound proof for %s: %s",
+                        row["reference"], type(exc).__name__)
 
     try:
-        booking.mark_proof_sent(db, str(row["booking_id"]), proof_path=path)
+        booking.mark_proof_sent(db, str(row["booking_id"]), proof_path=path,
+                                owner_phone=settings.owner_phone,
+                                outbound_file_ref=proof_ref, filename=proof_filename,
+                                media_type=media_type)
     except Exception as exc:
+        if proof_ref:
+            from core.outbound_worker import discard_staged_attachment
+            discard_staged_attachment(settings.payment_proof_dir, proof_ref)
         log.warning("could not mark proof sent for %s: %s", row["reference"], exc)
         _reply(db, channel, message.from_phone,
                "Thank you for the screenshot. Something went wrong saving it; "
-               "please send it again or contact the owner.")
+               "please send it again or contact the owner.",
+               source_inbound_id=message_id, claim_token=claim_token,
+               private_root=settings.payment_proof_dir, settings=settings)
         return
 
     updated = booking.get_booking(db, str(row["booking_id"]))
     booking_notices.notify_proof_received(
         db, updated, channel=channel, owner_phone=settings.owner_phone,
         content=content, filename=f"{row['reference']}-payment{_suffix(media_type)}",
-        media_type=media_type)
+        media_type=media_type, attachment_path=path,
+        outbound_proof_queued=bool(proof_ref and settings.owner_phone))
 
     # The owner is asked to check the money with a one-tap Confirm.
     alerts.notify_new_request(
@@ -244,6 +305,51 @@ def _suffix(media_type: str) -> str:
             "application/pdf": ".pdf"}.get(media_type, ".jpg")
 
 
+def _handle_flow_submission(db: Database, *, channel: ChannelAdapter,
+                            settings: Settings, message,
+                            check_in: str, check_out: str,
+                            message_id: str | None = None,
+                            claim_token: str | None = None,
+                            auto: bool = True) -> bool:
+    """Fold a submitted calendar Flow into the booking and answer with the next
+    question. One Flow submission is one inbound message, so it gets one reply."""
+    from core import booking_flow
+
+    if message_id and not inbox.mark_dispatch_started(db, message_id, claim_token):
+        return False
+
+    try:
+        result = booking_flow.apply_flow_dates(
+            db, phone=message.from_phone, check_in=check_in, check_out=check_out,
+            flow_id=settings.whatsapp_flow_id,
+            flow_screen=settings.whatsapp_flow_calendar_screen)
+    except Exception as exc:
+        log.exception("flow submission failed for %s: %s", message.from_phone, exc)
+        if auto:
+            _reply(db, channel, message.from_phone,
+                   "Sorry, something went wrong on my side. The owner has been "
+                   "alerted and will get back to you.",
+                   source_inbound_id=message_id, claim_token=claim_token,
+                   private_root=settings.payment_proof_dir, settings=settings)
+        elif message_id:
+            inbox.mark_processed(db, message_id, claim_token)
+        return True
+
+    _drain(db, channel, settings=settings, private_root=settings.payment_proof_dir)
+
+    if not auto:
+        log.info("auto-reply paused; stored and handled flow submission from %s",
+                 message.from_phone)
+        if message_id:
+            inbox.mark_processed(db, message_id, claim_token)
+        return True
+
+    return _reply(db, channel, message.from_phone, result.reply,
+                  prompt=result.prompt, flow=result.flow,
+                  source_inbound_id=message_id, claim_token=claim_token,
+                  private_root=settings.payment_proof_dir, settings=settings)
+
+
 def _store_proof(directory: str, reference: str, content: bytes | None,
                  media_type: str) -> str | None:
     """Write the screenshot to disk. Returns the path, or None if unavailable.
@@ -254,11 +360,14 @@ def _store_proof(directory: str, reference: str, content: bytes | None,
     if not content:
         return None
     try:
-        os.makedirs(directory, exist_ok=True)
+        os.makedirs(directory, exist_ok=True, mode=0o700)
+        os.chmod(directory, 0o700)
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
         name = f"{reference}-{stamp}{_suffix(media_type)}"
         path = os.path.join(directory, name)
-        with open(path, "wb") as handle:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "wb") as handle:
             handle.write(content)
         return path
     except Exception as exc:
@@ -320,65 +429,141 @@ def _request_summary(event: dict) -> str:
 
 
 def _reply(db: Database, channel: ChannelAdapter, phone: str, text: str,
-           prompt: Prompt | None = None, file: DataFile | None = None) -> bool:
-    """Send the answer, then the tappable answers, when the router offered them.
+           prompt: Prompt | None = None, file: DataFile | None = None,
+           flow: Flow | None = None,
+           source_inbound_id: str | None = None,
+           claim_token: str | None = None,
+           private_root: str = "payment_proofs",
+           settings: Settings | None = None) -> bool:
+    """Queue and send exactly one guest-facing response for this inbound message.
 
-    A prompt is a nicety, never a replacement for the answer. It used to be sent
-    *instead of* `text`, which silently dropped the answer: "we have 4 beds free,
-    - AC: 1 free, ..." became the bare question "Would you like to book a room?",
-    and the whole 798-character rate card became "Which room type would you
-    like?". The guest was left wondering what had happened.
+    The conversation is interactive-only: one inbound message produces one
+    logical reply. When the router offers choices, the answer and the choices
+    travel in ONE WhatsApp interactive message -- never a text answer followed
+    by a separate prompt. The reply is written to the durable outbox (which also
+    completes the inbound message, so a Meta retry cannot reply twice) and then
+    sent once; if the send fails, the outbox keeps the payload and the worker
+    retries it under the normal bounded policy.
 
-    So the body goes first and the prompt follows, as a second message. The one
-    exception is a prompt whose body *is* the answer -- the food question, "AC
-    room. With food or without?". There the prompt replaces the text, because
-    sending both would repeat the same sentence twice.
+    Meta caps an interactive body at 1024 characters (`MAX_INTERACTIVE_BODY`).
+    When the answer plus the question would exceed that, the answer is shortened
+    at a line boundary so the guest still gets everything in one interactive
+    message. A text fallback is never sent for a failed interactive: the outbox
+    retries the interactive payload, and a second message would violate the
+    interactive-only contract and worsen Meta's pair throttling.
+
+    A guest reply with no choices of its own -- an informational answer, an
+    acknowledgement, an error -- is given a terminal set of actions
+    (`router.terminal_prompt`) so the conversation stays interactive-only: one
+    inbound message still produces exactly one interactive message. The owner
+    and staff are answered in plain text; the rule is about guest conversations.
+
+    A Flow (a native form such as the calendar range picker) is its own single
+    message; the guest's answers arrive back on the webhook, not as text. A file
+    is its own single document message.
     """
+    if (prompt is None and flow is None and file is None
+            and (text or "").strip() and _is_guest(phone, settings)):
+        from core import router
+        prompt = router.terminal_prompt()
+    key = (f"inbound:{source_inbound_id}:guest" if source_inbound_id
+           else f"reply:{uuid.uuid4()}:guest")
+    file_ref = None
     if file is not None:
-        # The file carries the answer; the text is only a caption. If the file
-        # cannot be sent, say so instead of silently sending a caption that
-        # promises a file the owner never receives.
-        result = channel.send_document(phone, file.filename, file.content,
-                                       file.media_type, caption=text)
-        if result.ok:
-            inbox.record_outbound(db, phone, text, result.provider_message_id)
-            return True
-        log.warning("document send failed for %s: %s", phone, result.error)
-        text = ("I could not send the file just now. Please ask me again in a "
-                "moment. Nothing has changed in your records.")
+        file_ref = outbox.attach_file(private_root, file.content, file.filename)
+        messages = [{
+            "recipient": phone,
+            "message_type": "document",
+            "payload": {
+                "file_ref": file_ref, "filename": file.filename,
+                "media_type": file.media_type, "caption": text,
+            },
+            "idempotency_key": f"{key}:document",
+        }]
+        try:
+            outbox.enqueue_many(db, messages, source_inbound_id=source_inbound_id,
+                                claim_token=claim_token)
+        except Exception:
+            from core.outbound_worker import discard_staged_attachment
+            discard_staged_attachment(private_root, file_ref)
+            raise
+    elif flow is not None and flow.is_valid():
+        messages = [{
+            "recipient": phone,
+            "message_type": "flow",
+            "payload": outbox.flow_payload(flow),
+            "idempotency_key": f"{key}:flow",
+        }]
+        outbox.enqueue_many(db, messages, source_inbound_id=source_inbound_id,
+                            claim_token=claim_token)
+    elif prompt is not None and prompt.is_valid():
+        # Interactive-only: the answer and the choices travel in ONE WhatsApp
+        # interactive message. The prompt's own question is skipped when it
+        # repeats the answer, so the food question is not said twice.
+        answer = (text or "").strip()
+        question = (prompt.body or "").strip()
+        body = _fit_interactive(answer, question)
+        combined = Prompt(body=body, buttons=prompt.buttons,
+                          rows=prompt.rows, button_text=prompt.button_text)
+        if not combined.is_valid():
+            raise ValueError("interactive response has no valid choices")
+        messages = [{
+            "recipient": phone,
+            "message_type": "interactive",
+            "payload": {"prompt": outbox.prompt_payload(combined)},
+            "idempotency_key": f"{key}:interactive",
+        }]
+        outbox.enqueue_many(db, messages, source_inbound_id=source_inbound_id,
+                            claim_token=claim_token)
+    else:
+        messages = [{
+            "recipient": phone,
+            "message_type": "text",
+            "payload": {"text": text},
+            "idempotency_key": f"{key}:text",
+        }]
+        outbox.enqueue_many(db, messages, source_inbound_id=source_inbound_id,
+                            claim_token=claim_token)
 
-    usable = prompt is not None and prompt.is_valid()
-    carries_the_answer = usable and prompt.body.strip() == text.strip()
-
-    if not carries_the_answer:
-        result = channel.send_text(phone, text)
-        if not result.ok:
-            log.error("could not send to %s: %s", phone, result.error)
-            return False
-        inbox.record_outbound(db, phone, text, result.provider_message_id)
-
-    if not usable:
-        return True
-
-    result = channel.send_interactive(phone, prompt)
-    if result.ok:
-        inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
-        return True
-    if not result.retryable:
-        # Sending anything else now would be another message to the same guest
-        # while Meta is throttling this pair, which is counted against the same
-        # limit and deepens the block.
-        log.error("could not send the buttons to %s, and a retry would worsen "
-                  "the throttle: %s", phone, result.error)
-        return True
-    log.warning("interactive send failed for %s: %s", phone, result.error)
-    if carries_the_answer:
-        # The prompt held the only copy of the answer, so the guest has heard
-        # nothing yet. Fall back to plain text; if that fails the message stays
-        # unprocessed and can be retried.
-        result = channel.send_text(phone, text)
-        if not result.ok:
-            log.error("could not send to %s: %s", phone, result.error)
-            return False
-        inbox.record_outbound(db, phone, text, result.provider_message_id)
+    _drain(db, channel, settings=settings, private_root=private_root)
+    # The reply is durably queued (and the inbound completed) before this
+    # returns; the drain only tries to deliver it promptly.
     return True
+
+
+def _is_guest(phone: str, settings: Settings | None) -> bool:
+    """True when this number is a guest, so the interactive-only rule applies.
+
+    The owner and staff are answered in plain text: the rule is about guest
+    conversations. With no settings (a direct `_reply` caller) the sender is
+    treated as a guest.
+    """
+    if settings is None or not settings.owner_phone:
+        return True
+    role = security.role_for(phone, settings.owner_phone, set(settings.staff_phones))
+    return role == security.CUSTOMER
+
+
+def _drain(db: Database, channel: ChannelAdapter, *, settings: Settings | None,
+           private_root: str) -> dict:
+    """Send the pending outbox now so a reply reaches the guest promptly.
+
+    The outbox stays the durable record: a failure here leaves the row pending
+    for the scheduled worker to retry, so the reply is never lost.
+    """
+    from core.outbound_worker import run_batch
+    worker_settings = settings or _fallback_worker_settings(channel, private_root)
+    return run_batch(db, channel, worker_settings)
+
+
+def _fallback_worker_settings(channel: ChannelAdapter, private_root: str):
+    """Worker settings for direct `_reply` callers that have no app settings."""
+    from types import SimpleNamespace
+    return SimpleNamespace(meta_phone_number_id=channel.name, owner_phone=None,
+                           payment_proof_dir=private_root)
+
+
+def _fit_interactive(answer: str, question: str) -> str:
+    """Compose the one interactive body for a router reply."""
+    from core.channel.adapter import compose_interactive_body
+    return compose_interactive_body(answer, question)

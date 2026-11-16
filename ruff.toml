@@ -28,6 +28,7 @@ ignore = [
     "E501",   # line length: long explanatory strings are fine here
     "B008",   # call in default arg: FastAPI's Header()/Depends() pattern
     "E402",   # module import not at top: scripts must load .env before importing
+    "S311",   # random.uniform jitter for retry backoff, not a security decision
 ]
 
 [lint.per-file-ignores]

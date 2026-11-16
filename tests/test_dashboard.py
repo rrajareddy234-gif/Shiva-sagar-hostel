@@ -259,12 +259,14 @@ def test_a_bed_taken_while_waiting_is_not_silently_double_booked(db):
     """The exclusion constraint and the accept check both hold on this path."""
     from core.errors import BedUnavailable
 
+    # Both requests are made while the bed is still free; the owner confirms
+    # the first, and the second must then be refused.
     first = _waiting(db, name="Vikram Rao", phone="+919000000905", bed="6NA-B2")
+    second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
     booking.mark_proof_sent(db, first.booking_id, proof_path="/tmp/p.jpg")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
 
-    second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
     with pytest.raises(BedUnavailable):
         dashboard.approve_booking(db, second.reference, actor="owner-dashboard")
 
@@ -318,15 +320,15 @@ def test_a_tap_from_the_owner_accepts_and_says_so(client, db):
 
 def test_a_tap_on_a_bed_that_was_taken_shows_a_clear_message(client, db):
     first = _waiting(db, name="Vikram Rao", phone="+919000000905", bed="6NA-B2")
+    second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
     booking.mark_proof_sent(db, first.booking_id, proof_path="/tmp/p.jpg")
     dashboard.approve_booking(db, first.reference, actor="owner-dashboard")
-    second = _waiting(db, name="Anil Kumar", phone="+919000000906", bed="6NA-B2")
 
     client.post("/dashboard/login", data={"password": DASHBOARD_PASSWORD})
     response = client.post("/dashboard/decide",
                            data={"reference": second.reference,
                                  "decision": "approve"}, follow_redirects=True)
-    assert "taken" in response.text.lower()
+    assert "already booked" in response.text.lower()
     # The second booking is still waiting, not wrongly confirmed.
     assert dashboard.overview(db, _now())["pending"] == 1

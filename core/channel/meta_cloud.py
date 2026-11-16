@@ -13,9 +13,13 @@ from typing import Any
 
 from core.channel.adapter import (
     ChannelAdapter,
+    DeliveryStatus,
+    Flow,
+    FlowResponse,
     InboundMessage,
     Prompt,
     SendResult,
+    flow_response_data,
 )
 
 log = logging.getLogger(__name__)
@@ -89,6 +93,14 @@ class MetaCloudAdapter(ChannelAdapter):
                         # the id, which cannot be mistyped or translated away.
                         button_id = reply.get("id")
                         text = reply.get("title") or button_id
+                        # A Flow submission arrives as an interactive of type
+                        # `nfm_reply`. Its `response_json` is a string of the
+                        # guest's answers, not free text, so it is kept raw and
+                        # handled by the dispatcher's Flow branch rather than the
+                        # router.
+                        if not reply and interactive.get("type") == "nfm_reply":
+                            text = None
+                            button_id = None
                     elif msg_type in ("image", "document"):
                         # A payment screenshot usually arrives as an image, but
                         # some phones send it as a document. Both carry an id to
@@ -108,6 +120,106 @@ class MetaCloudAdapter(ChannelAdapter):
                         profile_name=names.get(_digits(msg.get("from", ""))),
                         media_id=media_id,
                         media_type=media_type,
+                    ))
+        return out
+
+    def parse_statuses(self, raw_body: bytes) -> list[DeliveryStatus]:
+        """Extract valid Meta delivery-status callbacks safely."""
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            log.warning("meta: unparseable status webhook body")
+            return []
+
+        if not isinstance(payload, dict):
+            return []
+
+        out: list[DeliveryStatus] = []
+        allowed = {"sent", "delivered", "read", "failed"}
+
+        for entry in payload.get("entry", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            for change in entry.get("changes", []) or []:
+                if not isinstance(change, dict):
+                    continue
+                value = change.get("value", {}) or {}
+                if not isinstance(value, dict):
+                    continue
+                for item in value.get("statuses", []) or []:
+                    if not isinstance(item, dict):
+                        continue
+
+                    message_id = item.get("id")
+                    status = item.get("status")
+                    if not isinstance(message_id, str) or not message_id:
+                        continue
+                    if not isinstance(status, str) or status not in allowed:
+                        continue
+
+                    timestamp = None
+                    if item.get("timestamp") is not None:
+                        try:
+                            timestamp = int(item["timestamp"])
+                        except (TypeError, ValueError):
+                            pass
+
+                    errors = item.get("errors") or []
+                    error_data = {"items": errors} if isinstance(errors, list) else {}
+
+                    out.append(DeliveryStatus(
+                        provider_message_id=message_id,
+                        status=status,
+                        timestamp=timestamp,
+                        recipient_id=item.get("recipient_id"),
+                        errors=error_data,
+                        raw=item,
+                    ))
+
+        return out
+
+    def parse_flow_responses(self, raw_body: bytes) -> list[FlowResponse]:
+        """Extract Flow submissions from a verified webhook body.
+
+        A Flow reply is an inbound interactive of type ``nfm_reply`` whose
+        ``response_json`` is a JSON *string* holding the guest's answers. It is
+        parsed defensively: a malformed or absent response is skipped, never
+        raised, so one bad payload cannot stop the rest of the webhook.
+        """
+        try:
+            payload = json.loads(raw_body.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            log.warning("meta: unparseable flow webhook body")
+            return []
+
+        if not isinstance(payload, dict):
+            return []
+
+        out: list[FlowResponse] = []
+        for entry in payload.get("entry", []) or []:
+            if not isinstance(entry, dict):
+                continue
+            for change in entry.get("changes", []) or []:
+                if not isinstance(change, dict):
+                    continue
+                value = change.get("value", {}) or {}
+                if not isinstance(value, dict):
+                    continue
+                for msg in value.get("messages", []) or []:
+                    if not isinstance(msg, dict) or msg.get("type") != "interactive":
+                        continue
+                    interactive = msg.get("interactive") or {}
+                    if interactive.get("type") != "nfm_reply":
+                        continue
+                    nfm = interactive.get("nfm_reply") or {}
+                    data = flow_response_data({"interactive": interactive})
+                    token = str(data.get("flow_token") or nfm.get("flow_token") or "")
+                    out.append(FlowResponse(
+                        provider_message_id=msg.get("id", ""),
+                        from_phone=_normalise_phone(msg.get("from", "")),
+                        flow_token=token,
+                        data=data,
+                        raw=msg,
                     ))
         return out
 
@@ -179,6 +291,47 @@ class MetaCloudAdapter(ChannelAdapter):
                 },
             }
         return self._post(body)
+
+    def send_flow(self, to_phone: str, flow: Flow) -> SendResult:
+        """Send a WhatsApp Flow message.
+
+        Meta renders the Flow's own screen (for us, a native calendar range
+        picker). `flow_action: navigate` opens the named screen; the `data` we
+        pass seeds its defaults. The guest's answers come back on the webhook as
+        an `nfm_reply`, not as a button tap.
+        """
+        if not flow.is_valid():
+            return SendResult(ok=False, error="invalid flow message", certainty="rejected")
+        parameters: dict[str, Any] = {
+            "flow_message_version": "3",
+            "flow_id": flow.flow_id,
+            "flow_cta": flow.cta[:20],
+            "flow_action": flow.mode if flow.mode in ("navigate", "data_exchange")
+            else "navigate",
+        }
+        if parameters["flow_action"] == "navigate":
+            parameters["flow_action_payload"] = {
+                "screen": flow.screen,
+                "data": flow.data or {},
+            }
+        if flow.flow_token:
+            parameters["flow_token"] = flow.flow_token
+        interactive: dict[str, Any] = {
+            "type": "flow",
+            "action": {"name": "flow", "parameters": parameters},
+        }
+        if flow.header:
+            interactive["header"] = {"type": "text", "text": flow.header[:60]}
+        if flow.body:
+            interactive["body"] = {"text": flow.body[:1024]}
+        if flow.footer:
+            interactive["footer"] = {"text": flow.footer[:60]}
+        return self._post({
+            "messaging_product": "whatsapp",
+            "to": _digits(to_phone),
+            "type": "interactive",
+            "interactive": interactive,
+        })
 
     def send_document(self, to_phone: str, filename: str, content: bytes,
                       media_type: str = "text/csv",
@@ -279,12 +432,18 @@ class MetaCloudAdapter(ChannelAdapter):
             return SendResult(ok=True, provider_message_id=msg_id)
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", "replace")[:500]
-            log.error("meta send failed: %s %s", exc.code, detail)
+            error_code = _meta_error_code(detail)
+            certainty = "unknown" if exc.code >= 500 or exc.code == 408 else "rejected"
+            log.error("meta send failed: HTTP %s, Meta error %s", exc.code,
+                      error_code or "unclassified")
             return SendResult(ok=False, error=f"HTTP {exc.code}: {detail}",
-                              retryable=not _is_rate_limited(exc.code, detail))
+                              retryable=not _is_rate_limited(exc.code, detail),
+                              certainty=certainty, error_code=error_code,
+                              http_status=exc.code,
+                              retry_after_seconds=_retry_after(exc.headers))
         except Exception as exc:  # network, timeout, DNS
-            log.error("meta send error: %s", exc)
-            return SendResult(ok=False, error=str(exc))
+            log.error("meta send error: %s", type(exc).__name__)
+            return SendResult(ok=False, error=type(exc).__name__, certainty="unknown")
 
 
 def _is_rate_limited(code: int, detail: str) -> bool:
@@ -294,7 +453,25 @@ def _is_rate_limited(code: int, detail: str) -> bool:
     too many messages from this number to the same guest in a short window.
     Sending again is counted against the same limit, so it must not be retried.
     """
-    return code == 429 or "131056" in detail
+    return code == 429 or any(meta_code in detail for meta_code in ("130429", "131056"))
+
+
+def _meta_error_code(detail: str) -> str | None:
+    try:
+        payload = json.loads(detail)
+        error = payload.get("error", {}) if isinstance(payload, dict) else {}
+        code = error.get("code") if isinstance(error, dict) else None
+        return str(code) if code is not None else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _retry_after(headers) -> int | None:
+    try:
+        value = headers.get("Retry-After") if headers else None
+        return max(1, int(value)) if value is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _digits(phone: str) -> str:

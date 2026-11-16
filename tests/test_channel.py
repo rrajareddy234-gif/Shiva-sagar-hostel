@@ -11,7 +11,7 @@ import json
 
 import pytest
 
-from core.channel.adapter import Button, Prompt, SendResult
+from core.channel.adapter import Button, DeliveryStatus, Flow, Prompt, SendResult
 from core.channel.meta_cloud import MetaCloudAdapter
 from core.channel.peach import PeachAdapter
 from core.channel.registry import build_channel
@@ -132,6 +132,56 @@ def test_parse_status_callback_yields_no_messages(adapter):
             "statuses": [{"id": "wamid.X", "status": "delivered"}]}}]}],
     }).encode()
     assert adapter.parse_inbound(payload) == []
+
+
+
+@pytest.mark.parametrize("status", ["sent", "delivered", "read", "failed"])
+def test_parse_delivery_statuses(adapter, status):
+    payload = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "statuses": [{
+                "id": "wamid.STATUS1",
+                "status": status,
+                "timestamp": "1735689600",
+                "recipient_id": "919000001000",
+                "errors": [{"code": 131047}] if status == "failed" else [],
+            }]
+        }}]}],
+    }).encode()
+
+    statuses = adapter.parse_statuses(payload)
+
+    assert len(statuses) == 1
+    assert isinstance(statuses[0], DeliveryStatus)
+    assert statuses[0].provider_message_id == "wamid.STATUS1"
+    assert statuses[0].status == status
+    assert statuses[0].timestamp == 1735689600
+    assert statuses[0].recipient_id == "919000001000"
+
+
+def test_parse_unknown_delivery_status_is_ignored(adapter):
+    payload = json.dumps({
+        "entry": [{"changes": [{"value": {
+            "statuses": [{"id": "wamid.UNKNOWN", "status": "unknown"}]
+        }}]}],
+    }).encode()
+
+    assert adapter.parse_statuses(payload) == []
+
+
+def test_parse_malformed_status_json_returns_empty(adapter):
+    assert adapter.parse_statuses(b"not json") == []
+
+
+@pytest.mark.parametrize("payload", [
+    [],
+    {"entry": ["bad-entry"]},
+    {"entry": [{"changes": ["bad-change"]}]},
+    {"entry": [{"changes": [{"value": {"statuses": ["bad-item"]}}]}]},
+])
+def test_parse_malformed_status_structures_are_ignored(adapter, payload):
+    assert adapter.parse_statuses(json.dumps(payload).encode()) == []
 
 
 def test_parse_malformed_json_returns_empty(adapter):
@@ -277,6 +327,54 @@ def test_prompt_validity_matches_the_meta_limits():
     assert Prompt(body="?").is_valid() is False
 
 
+# --- flows -----------------------------------------------------------------
+
+def _sent_flow_body(adapter, monkeypatch, flow):
+    captured = {}
+
+    def fake_post(self, body):
+        captured.update(body)
+        return SendResult(ok=True, provider_message_id="wamid.SENT")
+
+    monkeypatch.setattr(MetaCloudAdapter, "_post", fake_post)
+    result = adapter.send_flow("+919876543210", flow)
+    assert result.ok
+    return captured
+
+
+def test_send_flow_navigates_to_the_named_screen(adapter, monkeypatch):
+    flow = Flow(flow_id="123", screen="BOOKING_DATES", cta="Pick dates",
+                body="Choose your dates", data={"check_in": "2026-12-01"},
+                flow_token="bk-token")
+    body = _sent_flow_body(adapter, monkeypatch, flow)
+
+    assert body["type"] == "interactive"
+    interactive = body["interactive"]
+    assert interactive["type"] == "flow"
+    params = interactive["action"]["parameters"]
+    assert params["flow_message_version"] == "3"
+    assert params["flow_id"] == "123"
+    assert params["flow_action"] == "navigate"
+    assert params["flow_action_payload"]["screen"] == "BOOKING_DATES"
+    assert params["flow_action_payload"]["data"] == {"check_in": "2026-12-01"}
+    assert params["flow_token"] == "bk-token"
+    assert interactive["body"]["text"] == "Choose your dates"
+
+
+def test_send_flow_honours_data_exchange_mode(adapter, monkeypatch):
+    flow = Flow(flow_id="123", screen="S", cta="Open", mode="data_exchange")
+    body = _sent_flow_body(adapter, monkeypatch, flow)
+    params = body["interactive"]["action"]["parameters"]
+    assert params["flow_action"] == "data_exchange"
+    assert "flow_action_payload" not in params
+
+
+def test_an_invalid_flow_is_never_sent(adapter, monkeypatch):
+    flow = Flow(flow_id="", screen="", cta="Open")
+    result = adapter.send_flow("+919876543210", flow)
+    assert result.ok is False
+
+
 # --- documents -------------------------------------------------------------
 
 def test_send_document_uploads_then_sends(adapter, monkeypatch):
@@ -351,6 +449,18 @@ def test_a_rate_limited_send_is_marked_not_retryable(adapter, monkeypatch):
     assert result.retryable is False
 
 
+def test_phone_number_rate_limit_is_marked_not_retryable(adapter, monkeypatch):
+    """Meta's 130429 means the phone number throughput limit was hit."""
+    import urllib.request
+    monkeypatch.setattr(urllib.request, "urlopen", _failing_urlopen(
+        400, '{"error":{"code":130429,"message":"phone number rate limit hit"}}'))
+
+    result = adapter.send_text("+919876543210", "hello")
+
+    assert result.ok is False
+    assert result.retryable is False
+
+
 def test_an_ordinary_failure_stays_retryable(adapter, monkeypatch):
     import urllib.request
     monkeypatch.setattr(urllib.request, "urlopen",
@@ -376,18 +486,17 @@ def test_a_throttled_reply_is_attempted_once(db, channel):
     prompt = Prompt(body="Would you like to book a room?",
                     buttons=(Button("book", "Book"),))
 
-    sent = _reply(db, channel, "+919000009999",
+    queued = _reply(db, channel, "+919000009999",
                   "We have 4 beds free for 1 night.", prompt=prompt)
+    _drain(db, channel)
+    assert queued is True, "the message is durably queued for the worker"
+    assert channel.attempts == ["interactive"], (
+        "the answer and choices must be one interactive send, never a text "
+        "message followed by a second prompt")
 
-    assert sent is False, "the guest heard nothing, so the message must be retried"
-    assert channel.attempts == ["text"], (
-        "exactly one attempt: a second message to a throttled pair is counted "
-        "against the same limit and deepens the block")
 
-
-def test_a_failed_prompt_falls_back_to_text_when_it_holds_the_answer(db, channel):
-    """The food question sends its body as the prompt. If the prompt fails, the
-    guest has heard nothing, so the same words go out as plain text."""
+def test_a_failed_interactive_response_never_falls_back_to_plain_text(db, channel):
+    """Interactive-only conversation must not silently send a text fallback."""
     from core.channel.adapter import Button, Prompt
     from core.dispatcher import _reply
 
@@ -396,37 +505,80 @@ def test_a_failed_prompt_falls_back_to_text_when_it_holds_the_answer(db, channel
     prompt = Prompt(body=body, buttons=(Button("food:1", "With food"),
                                         Button("food:0", "Without food")))
 
-    sent = _reply(db, channel, "+919000009999", body, prompt=prompt)
+    queued = _reply(db, channel, "+919000009999", body, prompt=prompt)
+    _drain(db, channel)
+    _make_due(db)
+    _drain(db, channel)
 
-    assert sent is True
-    assert channel.attempts == ["interactive", "text"], \
-        "the prompt is tried once, then the same words as plain text"
-    assert channel.sent == [("+919000009999", body)]
+    assert queued is True
+    assert channel.attempts == ["interactive"], \
+        "a failed interactive response must not create a second text reply"
+    assert channel.sent == []
 
 
-def test_a_failed_prompt_does_not_repeat_an_answer_already_sent(db, channel):
-    """When the text carried the answer, a failed prompt is not re-sent."""
+def test_answer_and_choices_are_queued_as_one_interactive_message(db, channel):
+    """One inbound answer must produce one interactive payload containing both."""
     from core.channel.adapter import Button, Prompt
     from core.dispatcher import _reply
 
-    channel.fail_interactive = True
     prompt = Prompt(body="Would you like to book a room?",
                     buttons=(Button("book", "Book"),))
 
-    sent = _reply(db, channel, "+919000009999",
+    queued = _reply(db, channel, "+919000009999",
                   "We have 4 beds free for 1 night.", prompt=prompt)
+    _drain(db, channel)
 
-    assert sent is True
-    assert channel.attempts == ["text", "interactive"], \
-        "the answer went out; the prompt failed once and was not repeated"
+    assert queued is True
+    assert channel.attempts == ["interactive"]
+    assert len(channel.sent) == 1
+    assert channel.sent[0][1] == (
+        "We have 4 beds free for 1 night.\n\nWould you like to book a room?")
 
 
-def test_a_throttled_plain_text_reply_is_attempted_once(db, channel):
-    """With no prompt there is nothing to fall back from, so one attempt is made."""
+def test_a_guest_reply_without_a_prompt_still_goes_out_interactive(db, channel):
+    """Interactive-only: a guest reply with no question gets terminal actions.
+
+    The answer has no choices of its own, so the dispatcher attaches the
+    terminal actions. One inbound message still produces one interactive
+    message, never a bare text message.
+    """
     from core.dispatcher import _reply
 
     channel.throttle = True
-    sent = _reply(db, channel, "+919000009999", "hello")
+    queued = _reply(db, channel, "+919000009999", "hello")
+    _drain(db, channel)
 
-    assert sent is False
+    assert queued is True
+    assert channel.attempts == ["interactive"], (
+        "a guest reply is interactive even when the answer has no question")
+
+
+def test_the_owner_is_answered_in_plain_text(db, channel):
+    """The interactive-only rule is about guests; the owner gets plain text."""
+    from types import SimpleNamespace
+
+    from core.dispatcher import _reply
+
+    settings = SimpleNamespace(owner_phone="+919999999999", staff_phones=(),
+                               meta_phone_number_id="test-phone-id",
+                               payment_proof_dir="/tmp/sagar-test-proofs")
+    _reply(db, channel, "+919999999999", "3 beds free today", settings=settings)
+    _drain(db, channel)
+
     assert channel.attempts == ["text"]
+    assert channel.prompts == []
+
+
+def _worker_settings():
+    from types import SimpleNamespace
+    return SimpleNamespace(meta_phone_number_id="test-phone-id", owner_phone=None,
+                           payment_proof_dir="/tmp/sagar-test-proofs")
+
+
+def _drain(db, channel):
+    from core.outbound_worker import run_batch
+    run_batch(db, channel, _worker_settings())
+
+
+def _make_due(db):
+    db.execute("UPDATE outbound_messages SET next_attempt_at=now() WHERE state='pending'")

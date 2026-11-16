@@ -28,6 +28,8 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -44,6 +46,7 @@ from core.config import Settings, load_dotenv  # noqa: E402
 from core.db import Database  # noqa: E402
 from core.dispatcher import build_ai, dispatch  # noqa: E402
 from core.inbox import store_inbound  # noqa: E402
+from core.outbound_worker import run_batch  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DEMO_DB = "sagarpg_demo"
@@ -167,7 +170,7 @@ def reset_scratch_database() -> str:
     db = Database(_dsn())
     with db.transaction() as cur:
         for table in ("booking_extras", "payments", "invoice_lines", "invoices",
-                      "bed_holds", "bookings", "guests", "messages",
+                      "bookings", "guests", "messages",
                       "conversations", "enquiries", "audit_log", "ai_usage"):
             cur.execute(f"DELETE FROM {table}")
         cur.execute("UPDATE beds SET status = 'AVAILABLE' WHERE status <> 'AVAILABLE'")
@@ -221,6 +224,8 @@ def main() -> int:
         return 2
 
     settings = _make_settings(dsn, None)
+    settings = replace(settings,
+                       payment_proof_dir=tempfile.mkdtemp(prefix="sagar-chat-proofs-"))
     db = Database(dsn)
     channel = ConsoleChannel()
     ai = build_ai(settings)
@@ -298,6 +303,7 @@ def main() -> int:
 
         try:
             dispatch(db, channel, settings, message, ai, stored.message_id)
+            run_batch(db, channel, settings)
         except Exception as exc:  # pragma: no cover - a real failure to show
             print(f"  \033[31mERROR: {type(exc).__name__}: {exc}\033[0m")
             import traceback

@@ -44,44 +44,44 @@ def state(db: Database) -> str | None:
 
 
 def _set_state(db: Database, new_state: str) -> None:
+    changed_at = datetime.now(UTC).isoformat()
     db.execute(
         "INSERT INTO settings (key, value, updated_at) VALUES (%s, %s::jsonb, now()) "
         "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = now()",
         (STATE_KEY, json.dumps({"state": new_state,
-                                "changed_at": datetime.now(UTC).isoformat()})),
+                                "changed_at": changed_at})),
     )
+    return changed_at
 
 
-def _send(db: Database, channel: ChannelAdapter, phone: str, text: str) -> None:
-    """Send one owner message, best effort. Never raises."""
-    from core import inbox
+def _send(db: Database, channel: ChannelAdapter, phone: str, text: str,
+          idempotency_key: str) -> None:
+    """Queue one owner message, best effort. Never raises."""
+    from core import outbox
     try:
-        result = channel.send_text(phone, text)
-        if not result.ok:
-            log.error("could not alert the owner: %s", result.error)
-            return
-        inbox.record_outbound(db, phone, text, result.provider_message_id)
+        outbox.enqueue(db, recipient=phone, message_type="text",
+                       payload={"text": text}, idempotency_key=idempotency_key,
+                       source_event_type="owner_alert")
     except Exception as exc:  # an alert must never break the guest's reply
-        log.error("could not alert the owner: %s", exc)
+        log.error("could not queue owner alert: %s", type(exc).__name__)
 
 
 def _send_prompt(db: Database, channel: ChannelAdapter, phone: str,
-                 prompt: Prompt) -> None:
-    """Send an interactive message to the owner, best effort. Never raises.
+                 prompt: Prompt, idempotency_key: str) -> None:
+    """Queue an interactive owner message, best effort. Never raises.
 
     Falls back to plain text if the interactive send fails, so the owner is
     never left without the message just because buttons were rejected.
     """
-    from core import inbox
+    from core import outbox
     try:
-        result = channel.send_interactive(phone, prompt)
-        if result.ok:
-            inbox.record_outbound(db, phone, prompt.body, result.provider_message_id)
-            return
-        log.error("could not send the owner buttons: %s", result.error)
+        payload = outbox.prompt_payload(prompt)
+        payload["fallback_text"] = prompt.body
+        outbox.enqueue(db, recipient=phone, message_type="interactive",
+                       payload={"prompt": payload}, idempotency_key=idempotency_key,
+                       source_event_type="owner_alert")
     except Exception as exc:
-        log.error("could not send the owner buttons: %s", exc)
-    _send(db, channel, phone, prompt.body)
+        log.error("could not queue owner buttons: %s", type(exc).__name__)
 
 
 def notify_new_request(db: Database, *, channel: ChannelAdapter,
@@ -100,7 +100,8 @@ def notify_new_request(db: Database, *, channel: ChannelAdapter,
         return
     from core.commands import approval_prompt
     _send_prompt(db, channel, owner_phone,
-                 approval_prompt(reference, summary=summary, step=step))
+                 approval_prompt(reference, summary=summary, step=step),
+                 f"booking:{reference}:{step}:owner-prompt")
 
 
 def note_failure(db: Database, *, channel: ChannelAdapter, owner_phone: str | None,
@@ -109,7 +110,7 @@ def note_failure(db: Database, *, channel: ChannelAdapter, owner_phone: str | No
     try:
         if state(db) == DOWN:
             return
-        _set_state(db, DOWN)
+        changed_at = _set_state(db, DOWN)
     except Exception as exc:
         log.error("could not record the AI outage: %s", exc)
         return
@@ -123,7 +124,7 @@ def note_failure(db: Database, *, channel: ChannelAdapter, owner_phone: str | No
           f"Heads up: the AI assistant stopped answering{detail}. Guests are "
           f"getting a holding reply instead of real answers, so some enquiries "
           f"may be sitting unanswered. Check the AI key and quota. I will tell "
-          f"you when it recovers.")
+          f"you when it recovers.", f"ai-alert:down:{changed_at}")
 
 
 def note_recovery(db: Database, *, channel: ChannelAdapter,
@@ -132,7 +133,7 @@ def note_recovery(db: Database, *, channel: ChannelAdapter,
     try:
         if state(db) != DOWN:
             return
-        _set_state(db, UP)
+        changed_at = _set_state(db, UP)
     except Exception as exc:
         log.error("could not record the AI recovery: %s", exc)
         return
@@ -142,4 +143,4 @@ def note_recovery(db: Database, *, channel: ChannelAdapter,
 
     _send(db, channel, owner_phone,
           "Good news: the AI assistant is answering again. Guests are getting "
-          "real replies.")
+          "real replies.", f"ai-alert:up:{changed_at}")

@@ -45,9 +45,7 @@ drill has passed on the same file.
 
 The morning report covers most of it. Open WhatsApp and look for:
 
-- **No morning report.** Something is wrong. See "The app is down" below.
-- **"expired holds are still ACTIVE"** — a booking hold was not released. Beds may
-  look blocked that should be free. Check pending requests.
+- **"No morning report."** Something is wrong. See "The app is down" below.
 - **"inbound messages unprocessed"** — messages arrived but were not answered.
   Customers are waiting.
 - **"Payments to verify" above zero** — someone sent a payment screenshot. Verify
@@ -117,6 +115,13 @@ reply?"*
 
 If the message shows as received but unprocessed, the reply failed to send. The
 health check reports this after 15 minutes.
+
+The lite deployment also retries stored inbound messages that remain
+unprocessed. The scheduler checks every five minutes and reclaims a message
+after its 15-minute dispatch lease expires. A rate-limited Meta send (including
+error 130429) therefore waits before it is tried again. Check the health report
+and Meta delivery-status callbacks if a message remains stuck; retries are
+bounded to 25 messages per scheduler run.
 
 ## Pausing and resuming automatic replies
 

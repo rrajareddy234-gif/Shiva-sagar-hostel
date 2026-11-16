@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from core import hostel_facts, inbox, pricing, services
-from core.channel.adapter import Button, Prompt
+from core.channel.adapter import Button, Flow, Prompt
 from core.db import Database
 from core.errors import DomainError
 from core.pricing import money
@@ -35,6 +35,7 @@ REST_HOURS_MAX = 12
 class FlowResult:
     reply: str
     prompt: Prompt | None = None
+    flow: Flow | None = None
     events: tuple[dict, ...] = ()
 
 
@@ -86,14 +87,16 @@ def handle(db: Database, *, phone: str, text: str | None = None,
         picked = _bed_from_text(db, text, state)
         if picked:
             return _choose_bed(db, phone=phone, state=state, bed_id=picked)
-        return _ask_bed(db, state)
+        return _ask_bed(db, phone, state)
     if step == "hours":
         minutes = _hours_to_minutes(text)
         if minutes:
             state["minutes"] = minutes
-            state["step"] = "review"
+            state["step"] = "bed" if _needs_bed(db, state) else "review"
             _save(db, phone, state)
-            return _review(db, phone, state)
+            if state["step"] == "bed":
+                return _ask_bed(db, phone, state)
+            return _continue(db, phone=phone, state=state)
         return _ask_hours(db, state)
     if step == "review":
         if (text or "").strip().lower() in ("yes", "y", "ok", "okay", "submit",
@@ -147,10 +150,10 @@ def _ask_hours(db: Database, state: dict) -> FlowResult:
                       rows=rows, button_text="Pick hours"))
 
 
-def _ask_bed(db: Database, state: dict) -> FlowResult:
+def _ask_bed(db: Database, phone: str, state: dict) -> FlowResult:
     beds = _free_beds(db, state)
     if not beds:
-        _clear(db, phone="")
+        _clear(db, phone)
         return FlowResult("Sorry, no bed is free for that window right now. "
                           "Please try a shorter time or come to the counter.")
     buttons = tuple(Button(f"{_NS}bed:{bed_id}", bed_id) for bed_id in beds[:3])
@@ -206,7 +209,7 @@ def _tap(db: Database, *, phone: str, button_id: str) -> FlowResult | None:
             state["step"] = "bed" if _needs_bed(db, state) else "review"
             _save(db, phone, state)
             if state["step"] == "bed":
-                return _ask_bed(db, state)
+                return _ask_bed(db, phone, state)
             return _continue(db, phone=phone, state=state)
         return _ask_hours(db, state)
 
@@ -224,7 +227,7 @@ def _choose_bed(db: Database, *, phone: str, state: dict, bed_id: str) -> FlowRe
     if bed_id not in free:
         return FlowResult(
             f"Sorry, bed {bed_id} is not free for that window. Please pick another.",
-            prompt=_ask_bed(db, state).prompt)
+            prompt=_ask_bed(db, phone, state).prompt)
     state["bed_id"] = bed_id
     state["step"] = "review"
     _save(db, phone, state)

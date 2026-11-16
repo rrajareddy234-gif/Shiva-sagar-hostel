@@ -228,13 +228,13 @@ Why this first: it is the highest-risk, highest-value part (a double-booking or 
 
 Deliverables of this task:
 
-- `db/schema.sql` — rooms, beds, guests, bookings, bed_holds, payments, enquiries, conversations, messages, audit_log, pricing, partners, settings.
+- `db/schema.sql` — rooms, beds, guests, bookings, booking_beds, payments, enquiries, conversations, messages, audit_log, pricing, partners, settings.
 - Bed-level availability query that respects date **and time**, and all nine bed statuses.
 - Double-booking prevented by a database-level exclusion constraint (GiST + range), not by application hope.
-- Booking state machine with owner approval and time-limited holds.
+- Booking state machine with owner approval. No temporary holds: a bed is occupied only by a CONFIRMED or CHECKED_IN booking.
 - Pricing engine with AC/non-AC, food/no-food, dormitory, hourly, discounts, advance/partial/refund.
 - Payment ledger where a screenshot is never proof.
-- Tests for overlapping reservations, simultaneous same-bed requests, hold expiry, cleaning/maintenance states, same-day checkout-and-arrival, and payment edge cases.
+- Tests for overlapping reservations, simultaneous same-bed requests, the absence of time-based expiry, cleaning/maintenance states, same-day checkout-and-arrival, and payment edge cases.
 
 ---
 

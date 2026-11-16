@@ -16,6 +16,7 @@ import argparse
 import html
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -25,6 +26,7 @@ from core.config import Settings, load_dotenv  # noqa: E402
 from core.db import Database  # noqa: E402
 from core.dispatcher import dispatch  # noqa: E402
 from core.inbox import store_inbound  # noqa: E402
+from core.outbound_worker import run_batch  # noqa: E402
 from scripts.chat import DEMO_DB, _admin_dsn, build_scratch_database  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -207,6 +209,7 @@ def _run_timeline(db, channel, settings, ai) -> dict:
             stored = store_inbound(db, message)
             dispatch(db, channel, settings, message, ai,
                      stored.message_id if stored else None)
+            run_batch(db, channel, settings)
         except Exception as exc:  # keep the page buildable
             CURRENT["replies"].append(
                 {"type": "text", "text": f"[engine error: {type(exc).__name__}: {exc}]"})
@@ -246,6 +249,7 @@ def build_page(out_path: Path) -> Path:
         ai_provider=settings.ai_provider, ai_model=settings.ai_model,
         ai_api_key=settings.ai_api_key, ai_base_url=settings.ai_base_url,
         ai_timeout=settings.ai_timeout, staff_phones=settings.staff_phones,
+        payment_proof_dir=tempfile.mkdtemp(prefix="sagar-demo-proofs-"),
     )
     # No AI on this page: every answer comes from the router and the database,
     # so the page shows exactly the deterministic behaviour, not a model's mood.

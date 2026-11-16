@@ -54,6 +54,7 @@ class Job:
     path: str
     every_minutes: int | None = None
     at: str | None = None
+    method: str = "GET"
 
     def due(self, now: datetime, last_run: datetime | None) -> bool:
         """Is this job due at ``now``, given when it last ran?"""
@@ -79,11 +80,23 @@ class Job:
 JOBS: tuple[Job, ...] = (
     Job("health-check", "/jobs/health-check", every_minutes=10),
     Job("pending-requests", "/jobs/pending-requests", every_minutes=15),
-    Job("expire-holds", "/jobs/expire-holds", every_minutes=15),
     Job("unanswered-enquiries", "/jobs/unanswered-enquiries", every_minutes=30),
+    Job("retry-unprocessed", "/jobs/retry-unprocessed", every_minutes=5, method="POST"),
     Job("daily-report", "/jobs/daily-report", at="07:30"),
     Job("upcoming", "/jobs/upcoming", at="20:00"),
 )
+
+OUTBOUND_JOBS: tuple[Job, ...] = (
+    Job("send-outbound", "/jobs/send-outbound", every_minutes=1, method="POST"),
+    Job("outbound-retention", "/jobs/outbound-retention", every_minutes=1440, method="POST"),
+)
+
+
+def scheduled_jobs() -> tuple[Job, ...]:
+    """Keep outbound sends opt-in until production has been explicitly activated."""
+    enabled = os.environ.get("OUTBOUND_SCHEDULER_ENABLED", "").strip().lower() in {
+        "1", "true", "yes", "on"}
+    return JOBS + OUTBOUND_JOBS if enabled else JOBS
 
 
 def due_jobs(now: datetime, last_runs: dict[str, datetime],
@@ -119,7 +132,7 @@ class Scheduler:
         and only an unparseable one becomes a generic error.
         """
         try:
-            return self._request("GET", f"{self.app_url}{job.path}")
+            return self._request(job.method, f"{self.app_url}{job.path}")
         except urllib.error.HTTPError as exc:
             body = exc.read().decode(errors="ignore")
             try:
@@ -132,9 +145,10 @@ class Scheduler:
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             return {"error": f"{job.name} could not be reached: {exc}"}
 
-    def notify_owner(self, text: str) -> bool:
+    def notify_owner(self, text: str, idempotency_key: str) -> bool:
         try:
-            self._request("POST", f"{self.app_url}/jobs/notify-owner", {"text": text})
+            self._request("POST", f"{self.app_url}/jobs/notify-owner",
+                          {"text": text, "idempotency_key": idempotency_key})
             return True
         except (urllib.error.URLError, TimeoutError, OSError, ValueError) as exc:
             print(f"notify failed: {exc}", file=sys.stderr)
@@ -157,7 +171,14 @@ class Scheduler:
             return
         if self.notify:
             print(f"{job.name}: notifying the owner")
-            self.notify_owner(text)
+            now = datetime.now()
+            if job.every_minutes is not None:
+                width = job.every_minutes * 60
+                slot = int(now.timestamp()) // width
+                key = f"scheduled-report:{job.name}:{slot}"
+            else:
+                key = f"scheduled-report:{job.name}:{now.date().isoformat()}"
+            self.notify_owner(text, key)
         else:
             print(f"{job.name}: would notify the owner (--no-notify):\n{text}")
 
@@ -216,7 +237,7 @@ def main() -> int:
 
     while True:
         now = datetime.now(tz)
-        for job in due_jobs(now, last_runs):
+        for job in due_jobs(now, last_runs, scheduled_jobs()):
             scheduler.run_job(job)
             # Recorded after the run so a crash mid-job retries it next tick
             # rather than skipping it for a whole interval.

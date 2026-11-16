@@ -16,7 +16,7 @@ from dataclasses import dataclass
 from ai.adapter import AIClient, AIUnavailable
 from ai.prompts import CUSTOMER_SYSTEM, OWNER_SYSTEM, STAFF_SYSTEM
 from core import commands, hostel_facts, memory, router, security, tools
-from core.channel.adapter import Prompt
+from core.channel.adapter import Flow, Prompt
 from core.db import Database
 from core.export import DataFile
 
@@ -36,6 +36,9 @@ class Outcome:
     tool_calls: tuple[str, ...] = ()
     # Tappable answers to send alongside the reply, when the router offered them.
     prompt: Prompt | None = None
+    # A native Flow (e.g. the check-in / check-out calendar) to send instead of
+    # buttons, when the router or booking flow prepared one.
+    flow: Flow | None = None
     # A data file to send alongside the reply, e.g. an owner export.
     file: DataFile | None = None
     # Side effects a tool performed that the caller should act on, such as a
@@ -47,7 +50,9 @@ class Outcome:
 def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | None,
                    ai: AIClient | None = None, history: list[dict] | None = None,
                    button_id: str | None = None,
-                   staff_phones: tuple[str, ...] = ()) -> Outcome:
+                   staff_phones: tuple[str, ...] = (),
+                   flow_id: str | None = None,
+                   flow_screen: str | None = None) -> Outcome:
     """Produce the reply for one inbound message."""
     role = security.role_for(phone, owner_phone, set(staff_phones) or None)
 
@@ -89,21 +94,24 @@ def handle_message(db: Database, *, phone: str, text: str, owner_phone: str | No
         # submit here creates the request in code, which is what makes the owner
         # notification reliable.
         from core import booking_flow, service_flow, sticky
-        flow = booking_flow.handle(db, phone=phone, text=text, button_id=button_id)
+        flow = booking_flow.handle(db, phone=phone, text=text, button_id=button_id,
+                                   flow_id=flow_id, flow_screen=flow_screen)
         if flow is not None:
             return Outcome(reply=flow.reply, handled_by="router", intent="book",
-                           prompt=flow.prompt, events=flow.events)
+                           prompt=flow.prompt, flow=flow.flow, events=flow.events)
 
         flow = service_flow.handle(db, phone=phone, text=text, button_id=button_id)
         if flow is not None:
             return Outcome(reply=flow.reply, handled_by="router", intent="service",
-                           prompt=flow.prompt, events=flow.events)
+                           prompt=flow.prompt, flow=flow.flow, events=flow.events)
 
         customer_reply = router.route(db, text, role=role, button_id=button_id,
-                                      phone=phone)
+                                      phone=phone, flow_id=flow_id,
+                                      flow_screen=flow_screen)
         if customer_reply.handled:
             return Outcome(reply=customer_reply.text, handled_by="router",
-                           intent=customer_reply.intent, prompt=customer_reply.prompt)
+                           intent=customer_reply.intent, prompt=customer_reply.prompt,
+                           flow=customer_reply.flow)
 
         # The guest has a live request and the router had nothing to say about
         # this message. Rather than let the AI promise a bed or invent an amount,

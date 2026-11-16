@@ -142,22 +142,72 @@ def health_check(request: Request, x_job_token: str | None = Header(default=None
     if not problems:
         stale = db.query_one(
             """
-            SELECT count(*) AS n FROM messages
-            WHERE direction = 'IN' AND processed_at IS NULL
-              AND received_at < now() - interval '15 minutes'
+            SELECT count(*) AS n FROM messages m
+            LEFT JOIN inbound_processing p ON p.message_id = m.message_id
+            WHERE m.direction = 'IN' AND m.processed_at IS NULL
+              AND COALESCE(p.state, 'pending') <> 'failed'
+              AND (p.message_id IS NULL
+                   OR (p.state = 'pending'
+                       AND (p.next_retry_at IS NULL OR p.next_retry_at <= now()))
+                   OR (p.state = 'processing' AND p.claimed_until <= now()))
+              AND m.received_at < now() - interval '15 minutes'
             """)
         if stale and stale["n"]:
             problems.append(f"{stale['n']} inbound messages unprocessed for over 15 minutes")
 
-        expired_holds = db.query_one(
-            "SELECT count(*) AS n FROM bed_holds "
-            "WHERE status = 'ACTIVE' AND expires_at < now()")
-        if expired_holds and expired_holds["n"]:
-            problems.append(f"{expired_holds['n']} expired holds are still ACTIVE")
+        failed_inbound = db.query_one(
+            "SELECT count(*) AS n FROM inbound_processing WHERE state = 'failed'")
+        if failed_inbound and failed_inbound["n"]:
+            problems.append(f"{failed_inbound['n']} inbound messages exhausted retry processing")
 
     payload = {"ok": not problems, "problems": problems}
     payload["text"] = reports.health_check_text(payload)
     return JSONResponse(payload, status_code=200 if not problems else 503)
+
+
+@router.post("/retry-unprocessed")
+def retry_unprocessed(request: Request,
+                      x_job_token: str | None = Header(default=None)) -> dict:
+    """Retry inbound messages whose dispatch lease expired without completion."""
+    _authorise(x_job_token)
+    from core import inbox
+    from core.dispatcher import dispatch
+
+    db: Database = request.app.state.db
+    rows = inbox.claim_stale_unprocessed(db)
+    succeeded = 0
+    failed = 0
+    for row in rows:
+        token = row["claim_token"]
+        try:
+            message = inbox.inbound_from_row(db, row)
+            dispatch(db, request.app.state.channel,
+                     request.app.state.settings, message,
+                     request.app.state.ai, str(row["message_id"]),
+                     claim_token=token)
+            current = db.query_one(
+                "SELECT state FROM inbound_processing WHERE message_id = %s",
+                (row["message_id"],),
+            )
+            if current and current["state"] == "processed":
+                succeeded += 1
+                continue
+            state = inbox.fail_inbound_attempt(
+                db, str(row["message_id"]), token,
+                RuntimeError("dispatch did not complete"), retryable=True,
+            )
+            if state == "failed":
+                failed += 1
+        except Exception as exc:
+            log.exception("retry dispatch failed for stored message")
+            state = inbox.fail_inbound_attempt(
+                db, str(row["message_id"]), token, exc,
+                retryable=inbox.inbound_error_is_retryable(exc),
+            )
+            if state == "failed":
+                failed += 1
+    return {"claimed": len(rows), "completed": succeeded,
+            "failed": failed, "still_pending": len(rows) - succeeded - failed}
 
 
 @router.get("/pending-requests")
@@ -179,28 +229,6 @@ def pending_requests(request: Request, x_job_token: str | None = Header(default=
     return payload
 
 
-@router.post("/expire-holds")
-def expire_holds(request: Request, x_job_token: str | None = Header(default=None)) -> dict:
-    """Release beds whose hold has lapsed, and expire the bookings that held them.
-
-    A bed is held while a guest is deciding and while they are paying. Neither
-    hold may last for ever: an owner who accepts a request and a guest who never
-    pays must not keep the bed off the market. This sweep is what makes that
-    true, and it is the reason `accept()` can promise that an unpaid acceptance
-    lets the bed go.
-
-    Two steps, in this order: the lapsed holds are marked EXPIRED, then the
-    REQUESTED and ACCEPTED bookings with no live hold left are marked EXPIRED.
-    Doing the holds first means the booking sweep sees the true state.
-    """
-    _authorise(x_job_token)
-    db: Database = request.app.state.db
-
-    holds = availability.expire_stale_holds(db)
-    bookings = booking.expire_lapsed_requests(db)
-    return {"holds_expired": holds, "bookings_expired": bookings}
-
-
 @router.post("/notify-owner")
 def notify_owner(request: Request, payload: dict,
                  x_job_token: str | None = Header(default=None)) -> dict:
@@ -220,11 +248,31 @@ def notify_owner(request: Request, payload: dict,
     if not text:
         raise HTTPException(status_code=422, detail="text is required")
 
-    from core import inbox
-    result = request.app.state.channel.send_text(settings.owner_phone, text)
-    if not result.ok:
-        log.error("owner notification failed: %s", result.error)
-        raise HTTPException(status_code=502, detail=f"send failed: {result.error}")
+    import uuid
 
-    inbox.record_outbound(db, settings.owner_phone, text, result.provider_message_id)
-    return {"sent": True, "to": settings.owner_phone}
+    from core import outbox
+    key = (payload or {}).get("idempotency_key") or f"job-notification:{uuid.uuid4()}"
+    outbox.enqueue(db, recipient=settings.owner_phone, message_type="text",
+                   payload={"text": text}, idempotency_key=key,
+                   source_event_type="scheduled_notification")
+    return {"queued": True, "to": settings.owner_phone, "idempotency_key": key}
+
+
+@router.post("/send-outbound")
+def send_outbound(request: Request, x_job_token: str | None = Header(default=None)) -> dict:
+    """Send due durable outbox messages. The scheduler is the only caller."""
+    _authorise(x_job_token)
+    from core.outbound_worker import run_batch
+    return run_batch(request.app.state.db, request.app.state.channel,
+                     request.app.state.settings)
+
+
+@router.post("/outbound-retention")
+def outbound_retention(request: Request,
+                       x_job_token: str | None = Header(default=None)) -> dict:
+    """Scrub expired message bodies and private proof copies."""
+    _authorise(x_job_token)
+    from core import outbox
+    count = outbox.scrub_expired_payloads(request.app.state.db,
+                                           request.app.state.settings.payment_proof_dir)
+    return {"scrubbed": count}

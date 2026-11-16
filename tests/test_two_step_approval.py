@@ -60,19 +60,19 @@ def test_proof_cannot_be_recorded_before_acceptance(db):
         booking.mark_proof_sent(db, request.booking_id, proof_path="/tmp/p.jpg")
 
 
-def test_an_unpaid_acceptance_lets_the_bed_go(db):
-    """The whole point of expiring ACCEPTED: a bed is not blocked for ever."""
+def test_an_unpaid_acceptance_is_not_released_on_a_clock(db):
+    """No automatic hold expiry: an accepted booking stays until the owner acts."""
     request = _request(db)
     booking.accept(db, request.booking_id, actor=OWNER)
 
-    # Move the hold into the past, as a lapsed payment window would. The hold's
-    # own rule is that it expires after it was created, so both move together.
-    db.execute("UPDATE bed_holds SET created_at = now() - interval '2 hours', "
-               "expires_at = now() - interval '1 hour' WHERE status = 'ACTIVE'")
+    # Age the booking well past any former payment window. Nothing expires it.
+    db.execute("UPDATE bookings SET created_at = now() - interval '30 days' "
+               "WHERE booking_id = %s", (request.booking_id,))
+    assert booking.get_booking(db, request.booking_id)["status"] == "ACCEPTED"
 
-    expired = booking.expire_lapsed_requests(db)
-    assert expired == 1
-    assert booking.get_booking(db, request.booking_id)["status"] == "EXPIRED"
+    # The owner releases the bed by rejecting the booking, and only then.
+    booking.reject(db, request.booking_id, actor=OWNER, reason="never paid")
+    assert booking.get_booking(db, request.booking_id)["status"] == "REJECTED"
 
 
 # --- what the guest is told ------------------------------------------------

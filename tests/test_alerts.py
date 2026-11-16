@@ -57,10 +57,20 @@ def _owner_messages(channel):
     return [text for phone, text in channel.sent if phone == OWNER]
 
 
+def _flush(db, channel):
+    from types import SimpleNamespace
+
+    from core.outbound_worker import run_batch
+    run_batch(db, channel, SimpleNamespace(meta_phone_number_id="test-phone-id",
+                                          owner_phone=OWNER,
+                                          payment_proof_dir="/tmp/sagar-test-proofs"))
+
+
 # --- the outage alert ------------------------------------------------------
 
 def test_the_owner_is_told_when_the_ai_goes_down(db, channel):
     _dispatch(db, channel, GOES_TO_AI, BrokenAI())
+    _flush(db, channel)
     messages = _owner_messages(channel)
     assert len(messages) == 1
     assert "stopped answering" in messages[0]
@@ -68,6 +78,7 @@ def test_the_owner_is_told_when_the_ai_goes_down(db, channel):
 
 def test_the_guest_still_gets_a_reply_when_the_ai_is_down(db, channel):
     _dispatch(db, channel, GOES_TO_AI, BrokenAI())
+    _flush(db, channel)
     guest_messages = [text for phone, text in channel.sent if phone == GUEST]
     assert guest_messages, "the guest was left without any reply"
     assert "check with the owner" in guest_messages[0]
@@ -76,6 +87,7 @@ def test_the_guest_still_gets_a_reply_when_the_ai_is_down(db, channel):
 def test_the_owner_is_told_once_per_outage_not_once_per_message(db, channel):
     for _ in range(3):
         _dispatch(db, channel, GOES_TO_AI, BrokenAI())
+    _flush(db, channel)
     assert len(_owner_messages(channel)) == 1
 
 
@@ -83,6 +95,7 @@ def test_recovery_is_announced_once(db, channel):
     _dispatch(db, channel, GOES_TO_AI, BrokenAI())
     _dispatch(db, channel, GOES_TO_AI, WorkingAI())
     _dispatch(db, channel, GOES_TO_AI, WorkingAI())
+    _flush(db, channel)
     messages = _owner_messages(channel)
     assert len(messages) == 2
     assert "answering again" in messages[1]
@@ -97,6 +110,7 @@ def test_a_second_outage_is_reported_after_a_recovery(db, channel):
     _dispatch(db, channel, GOES_TO_AI, BrokenAI())
     _dispatch(db, channel, GOES_TO_AI, WorkingAI())
     _dispatch(db, channel, GOES_TO_AI, BrokenAI())
+    _flush(db, channel)
     messages = _owner_messages(channel)
     assert len(messages) == 3
     assert "stopped answering" in messages[2]

@@ -194,9 +194,12 @@ def test_a_local_env_file_is_ignored_by_git(tmp_path):
     if created:
         env.write_text("PLACEHOLDER=1\n")
     try:
-        result = subprocess.run(
-            ["git", "check-ignore", ".env"], cwd=root,
-            capture_output=True, text=True, timeout=30)
+        try:
+            result = subprocess.run(
+                ["git", "check-ignore", ".env"], cwd=root,
+                capture_output=True, text=True, timeout=30)
+        except FileNotFoundError:
+            pytest.skip("git is not installed in the test environment")
         if result.returncode not in (0, 1):
             pytest.skip("git check-ignore unavailable")
         assert result.returncode == 0, ".env is not git-ignored"

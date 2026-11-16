@@ -16,6 +16,7 @@ from core import availability, booking
 from core.errors import (
     BedUnavailable,
     BookingConflict,
+    DuplicateGuestBooking,
     InvalidTransition,
     NotFound,
     ValidationError,
@@ -46,15 +47,16 @@ def booking_start():
 
 # --- happy path ------------------------------------------------------------
 
-def test_request_creates_requested_booking_and_hold(db):
+def test_request_creates_requested_booking_and_no_hold(db):
     request = _request(db, food_included=True)
     assert request.status == "REQUESTED"
     assert request.reference.startswith("SPG-")
-    assert request.hold_id is not None
     # Two nights in a non-AC room with food at the owner's 250 a night.
     assert request.charges_total == Decimal("500.00")
-    hold = db.query_one("SELECT status FROM bed_holds WHERE hold_id = %s", (request.hold_id,))
-    assert hold["status"] == "ACTIVE"
+    # There is no temporary hold: a mere request does not block the bed for
+    # anyone else.
+    assert availability.bed_is_available(db, "1NA-B1", request.check_in_at,
+                                         request.check_out_at) is True
 
 
 def test_request_without_food_uses_the_no_food_rate(db):
@@ -85,20 +87,21 @@ def test_approved_request_becomes_confirmed(db):
     assert row["approved_at"] is not None
 
 
-def test_approval_converts_the_hold(db):
+def test_approval_confirms_the_booking(db):
     request = _request(db)
     booking.approve(db, request.booking_id, actor=OWNER)
-    hold = db.query_one("SELECT status FROM bed_holds WHERE hold_id = %s", (request.hold_id,))
-    assert hold["status"] == "CONVERTED"
+    row = booking.get_booking(db, request.booking_id)
+    assert row["status"] == "CONFIRMED"
+    # The bed is now blocked by the confirmed booking, not by any hold.
+    assert availability.bed_is_available(db, "1NA-B1", row["check_in_at"],
+                                         row["check_out_at"]) is False
 
 
-def test_rejection_releases_the_bed(db):
+def test_rejection_frees_the_bed(db):
     request = _request(db)
     booking.reject(db, request.booking_id, actor=OWNER, reason="no vacancy that week")
     row = booking.get_booking(db, request.booking_id)
     assert row["status"] == "REJECTED"
-    hold = db.query_one("SELECT status FROM bed_holds WHERE hold_id = %s", (request.hold_id,))
-    assert hold["status"] == "RELEASED"
     assert availability.bed_is_available(db, "1NA-B1", row["check_in_at"], row["check_out_at"])
 
 
@@ -131,17 +134,37 @@ def test_checkout_before_checkin_rejected(db):
             bed_id="1NA-B1", check_in_at=start, check_out_at=start - timedelta(hours=1))
 
 
-def test_zero_length_hold_rejected(db):
+def test_zero_guests_rejected(db):
     with pytest.raises(ValidationError):
-        _request(db, hold_minutes=0)
+        _request(db, guests_count=0)
 
 
 # --- conflicts -------------------------------------------------------------
 
-def test_second_request_for_a_held_bed_is_refused(db):
+def test_second_request_for_the_same_bed_is_allowed(db):
+    # No temporary hold: a second guest may ask for the same bed. Only the
+    # owner's confirmation claims it.
     _request(db, phone="+919000000102")
-    with pytest.raises(BedUnavailable, match="held"):
+    second = _request(db, phone="+919000000103")
+    assert second.status == "REQUESTED"
+
+
+def test_a_request_for_an_already_confirmed_bed_is_refused(db):
+    first = _request(db, phone="+919000000102")
+    booking.approve(db, first.booking_id, actor=OWNER)
+    # The bed is now confirmed for that window, so a fresh request for it is
+    # refused up front rather than left to disappoint the guest at approval.
+    with pytest.raises(BedUnavailable, match="already booked"):
         _request(db, phone="+919000000103")
+
+
+def test_two_requests_may_coexist_but_only_one_can_be_confirmed(db):
+    first = _request(db, phone="+919000000102")
+    second = _request(db, phone="+919000000103")
+    assert second.status == "REQUESTED"
+    booking.approve(db, first.booking_id, actor=OWNER)
+    with pytest.raises(BedUnavailable):
+        booking.approve(db, second.booking_id, actor=OWNER)
 
 
 def test_a_deadlock_is_reported_as_a_conflict_not_a_raw_database_error(db):
@@ -165,17 +188,11 @@ def test_a_deadlock_is_reported_as_a_conflict_not_a_raw_database_error(db):
 
 
 def test_approving_a_taken_bed_is_refused(db):
-    """Guest A is approved, then guest B's request for the same window is approved."""
+    """Guest A is confirmed, then guest B's pending request for the same window."""
+    second = _request(db, phone="+919000000105")
     first = _request(db, phone="+919000000104")
     booking.approve(db, first.booking_id, actor=OWNER)
-
-    # A second request can only exist because the bed was not held for it; force
-    # the situation by requesting a different bed, then moving it onto the taken
-    # bed. `booking_beds` is the source of truth for which beds a stay holds.
-    second = _request(db, bed_id="1NA-B2", phone="+919000000105")
-    db.execute("UPDATE booking_beds SET bed_id = '1NA-B1' WHERE booking_id = %s",
-               (second.booking_id,))
-    with pytest.raises(BedUnavailable, match="taken"):
+    with pytest.raises(BedUnavailable, match="already booked"):
         booking.approve(db, second.booking_id, actor=OWNER)
 
 
@@ -199,17 +216,15 @@ def test_owner_override_places_guest_on_a_bed_under_maintenance(db):
 
 def test_override_cannot_bypass_a_confirmed_double_booking(db):
     """The no-overlap guarantee is absolute. An override must not defeat it."""
+    second = _request(db, phone="+919000000109")
     first = _request(db, phone="+919000000108")
     booking.approve(db, first.booking_id, actor=OWNER)
-    second = _request(db, bed_id="1NA-B2", phone="+919000000109")
-    db.execute("UPDATE bookings SET bed_id = '1NA-B1' WHERE booking_id = %s",
-               (second.booking_id,))
     with pytest.raises(BedUnavailable):
         booking.approve(db, second.booking_id, actor=OWNER, override=True, reason="trying")
 
 
 def test_two_guests_requesting_the_same_bed_at_once(db):
-    """Concurrent requests: at most one may hold the bed."""
+    """Concurrent requests: both may be created, because a request holds nothing."""
     start = booking_start()
     end = start + timedelta(days=2)
     results: list[str] = []
@@ -222,8 +237,6 @@ def test_two_guests_requesting_the_same_bed_at_once(db):
                 bed_id="1NA-B1", check_in_at=start, check_out_at=end,
                 food_included=True)
             outcome = f"ok:{request.booking_id}"
-        except BedUnavailable:
-            outcome = "refused"
         except Exception as exc:  # surface unexpected errors
             outcome = f"error:{type(exc).__name__}"
         with lock:
@@ -236,11 +249,10 @@ def test_two_guests_requesting_the_same_bed_at_once(db):
     for thread in threads:
         thread.join()
 
-    accepted = [r for r in results if r.startswith("ok:")]
-    assert len(accepted) == 1, f"expected exactly one hold, got {results}"
-    active_holds = db.query_all(
-        "SELECT hold_id FROM bed_holds WHERE bed_id = '1NA-B1' AND status = 'ACTIVE'")
-    assert len(active_holds) == 1
+    # No hold means no contention: every request is accepted, and the bed stays
+    # free until the owner confirms exactly one of them.
+    assert all(r.startswith("ok:") for r in results), results
+    assert availability.bed_is_available(db, "1NA-B1", start, end) is True
 
 
 def test_database_blocks_two_confirmed_bookings_on_one_bed(db):
@@ -306,28 +318,31 @@ def test_unknown_booking_raises(db):
         booking.get_booking(db, "00000000-0000-0000-0000-000000000000")
 
 
-# --- expiry ----------------------------------------------------------------
+# --- no time-based expiry --------------------------------------------------
 
-def test_lapsed_hold_expires_the_request(db):
+def test_a_request_never_expires_on_a_clock(db):
     request = _request(db)
-    db.execute(
-        "UPDATE bed_holds SET expires_at = now() - interval '1 minute', "
-        "created_at = now() - interval '1 hour' WHERE hold_id = %s", (request.hold_id,))
-    assert booking.expire_lapsed_requests(db) == 1
-    assert booking.get_booking(db, request.booking_id)["status"] == "EXPIRED"
+    # Age the request well past any former hold window. It stays REQUESTED: the
+    # only thing that can change it is an owner decision.
+    db.execute("UPDATE bookings SET created_at = now() - interval '30 days' "
+               "WHERE booking_id = %s", (request.booking_id,))
+    assert booking.get_booking(db, request.booking_id)["status"] == "REQUESTED"
+    assert availability.bed_is_available(db, "1NA-B1", request.check_in_at,
+                                         request.check_out_at) is True
 
 
-def test_live_hold_does_not_expire_the_request(db):
+def test_an_undecided_request_never_blocks_the_bed(db):
     _request(db)
-    assert booking.expire_lapsed_requests(db) == 0
+    # Nobody confirmed, so the bed is still free for another guest to request
+    # and for the owner to confirm.
+    assert availability.bed_is_available(
+        db, "1NA-B1", booking_start(), booking_start() + timedelta(days=2)) is True
 
 
-def test_expired_request_can_still_be_confirmed_by_the_owner(db):
+def test_an_aged_request_can_still_be_confirmed_by_the_owner(db):
     request = _request(db)
-    db.execute(
-        "UPDATE bed_holds SET expires_at = now() - interval '1 minute', "
-        "created_at = now() - interval '1 hour' WHERE hold_id = %s", (request.hold_id,))
-    booking.expire_lapsed_requests(db)
+    db.execute("UPDATE bookings SET created_at = now() - interval '30 days' "
+               "WHERE booking_id = %s", (request.booking_id,))
     booking.approve(db, request.booking_id, actor=OWNER)
     assert booking.get_booking(db, request.booking_id)["status"] == "CONFIRMED"
 
@@ -360,3 +375,38 @@ def test_audit_trail_records_every_step(db):
         "SELECT action FROM audit_log WHERE entity = 'booking' AND entity_id = %s "
         "ORDER BY id", (request.booking_id,))]
     assert actions == ["booking_requested", "booking_approved"]
+
+
+# --- one active overlapping booking per guest ------------------------------
+
+def test_same_guest_cannot_request_overlapping_dates_on_another_bed(db):
+    start = booking_start()
+    end = start + timedelta(days=2)
+    _request(db, bed_id="1NA-B1", phone="+919000000501",
+             start=start, end=end)
+
+    with pytest.raises(DuplicateGuestBooking, match="overlapping dates"):
+        _request(db, bed_id="DORM-M1", phone="+919000000501",
+                 start=start + timedelta(hours=1), end=end + timedelta(days=1))
+
+
+def test_same_guest_can_request_a_different_date(db):
+    start = booking_start()
+    _request(db, bed_id="1NA-B1", phone="+919000000502",
+             start=start, end=start + timedelta(days=2))
+
+    later_start = start + timedelta(days=3)
+    later = _request(db, bed_id="1NA-B1", phone="+919000000502",
+                     start=later_start, end=later_start + timedelta(days=2))
+    assert later.status == "REQUESTED"
+
+
+def test_rejected_booking_does_not_block_same_guest(db):
+    start = booking_start()
+    first = _request(db, bed_id="1NA-B1", phone="+919000000503",
+                     start=start, end=start + timedelta(days=2))
+    booking.reject(db, first.booking_id, actor=OWNER, reason="test rejection")
+
+    second = _request(db, bed_id="1NA-B1", phone="+919000000503",
+                      start=start, end=start + timedelta(days=2))
+    assert second.status == "REQUESTED"

@@ -54,17 +54,18 @@ lower rate must speak to the owner.
 
 | Room | Type | Beds |
 |---|---|---:|
-| 1NA | Non-AC | 5 |
+| 1NA | Non-AC | 4 |
 | 4NA | Non-AC | 5 |
 | 5NA | Non-AC | 5 |
-| 6NA | Non-AC | 12 |
-| 7NA | Non-AC | 4 |
+| 6NA | Non-AC | 10 |
+| 7NA | Non-AC | 5 |
 | 2AC | AC | 7 |
-| 3AC | AC | 10 |
+| 3AC | AC | 11 |
 | DORM | Dormitory | 20 (mat spaces) |
 
-Totals: Non-AC 31 beds across 5 rooms, AC 17 beds across 2 rooms, dormitory 20
-mat spaces. 68 beds in all.
+Totals: Non-AC 29 beds across 5 rooms, AC 18 beds across 2 rooms, dormitory 20
+mat spaces. 67 beds in all.
 
-Room 5NA was confirmed by the owner. The other seven rooms are the historic
-list and are still marked unconfirmed in `db/seed.sql`.
+These counts are the owner's confirmed figures and match `db/seed.sql`. Room 5NA
+was confirmed by the owner. The other seven rooms are the historic list and are
+still marked unconfirmed in `db/seed.sql`.

@@ -33,6 +33,12 @@ class BookingConflict(DomainError):
     code = "booking_conflict"
 
 
+class DuplicateGuestBooking(DomainError):
+    """The guest already has an active booking for overlapping dates."""
+
+    code = "duplicate_guest_booking"
+
+
 class InvalidTransition(DomainError):
     code = "invalid_transition"
 

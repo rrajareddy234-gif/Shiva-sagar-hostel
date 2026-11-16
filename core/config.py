@@ -83,6 +83,11 @@ class Settings:
     # bookings, availability and payments are untouched -- only the automatic
     # reply to the guest is held back.
     auto_reply_enabled: bool = True
+    # The published WhatsApp Flow for the check-in / check-out calendar. Blank
+    # until the Flow is published, in which case the booking date steps keep
+    # their quick-reply buttons.
+    whatsapp_flow_id: str | None = None
+    whatsapp_flow_calendar_screen: str | None = None
 
     @staticmethod
     def from_env() -> Settings:
@@ -96,6 +101,8 @@ class Settings:
             meta_access_token=_env("META_ACCESS_TOKEN"),
             meta_phone_number_id=_env("META_PHONE_NUMBER_ID"),
             meta_verify_token=_env("META_VERIFY_TOKEN"),
+            whatsapp_flow_id=_env("WHATSAPP_FLOW_ID"),
+            whatsapp_flow_calendar_screen=_env("WHATSAPP_FLOW_CALENDAR_SCREEN"),
             ai_provider=_env("AI_PROVIDER", "gemini"),
             ai_model=_env("AI_MODEL", "gemini-flash-lite-latest"),
             ai_api_key=_env("AI_API_KEY"),

@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
-from deploy.scheduler import JOBS, Job, Scheduler, due_jobs
+from deploy.scheduler import JOBS, Job, Scheduler, due_jobs, scheduled_jobs
 
 IST = ZoneInfo("Asia/Kolkata")
 
@@ -54,7 +54,7 @@ def test_every_shipped_job_is_due_on_a_fresh_start():
     """A restart must not silently skip today's report."""
     due = {job.name for job in due_jobs(_at(23, 0), {})}
     assert {"health-check", "pending-requests", "unanswered-enquiries",
-            "daily-report", "upcoming"} <= due
+            "retry-unprocessed", "daily-report", "upcoming"} <= due
 
 
 def test_jobs_are_deduplicated_by_their_recorded_run_time():
@@ -66,7 +66,22 @@ def test_jobs_are_deduplicated_by_their_recorded_run_time():
 def test_the_health_check_keeps_running_while_the_rest_sleep():
     runs = {job.name: _at(23, 0) for job in JOBS}
     due = {job.name for job in due_jobs(_at(23, 10), runs)}
-    assert due == {"health-check"}
+    assert due == {"health-check", "retry-unprocessed"}
+
+
+def test_outbound_jobs_are_opt_in(monkeypatch):
+    monkeypatch.delenv("OUTBOUND_SCHEDULER_ENABLED", raising=False)
+    assert "send-outbound" not in {job.name for job in scheduled_jobs()}
+    monkeypatch.setenv("OUTBOUND_SCHEDULER_ENABLED", "true")
+    assert {"send-outbound", "outbound-retention"} <= {
+        job.name for job in scheduled_jobs()}
+
+
+def test_unprocessed_retry_job_uses_post_and_runs_every_five_minutes():
+    job = next(job for job in JOBS if job.name == "retry-unprocessed")
+    assert job.method == "POST"
+    assert job.due(_at(9, 5), _at(9, 0)) is True
+    assert job.due(_at(9, 4), _at(9, 0)) is False
 
 
 # --- whether a message is sent --------------------------------------------
@@ -76,7 +91,7 @@ def test_a_job_with_nothing_to_say_sends_nothing(monkeypatch):
     scheduler = Scheduler("http://app", "token", notify=True)
     monkeypatch.setattr(scheduler, "fetch", lambda job: {"ok": True, "text": None})
     sent = []
-    monkeypatch.setattr(scheduler, "notify_owner", sent.append)
+    monkeypatch.setattr(scheduler, "notify_owner", lambda text, key: sent.append(text))
 
     scheduler.run_job(Job("health", "/jobs/health-check"))
 
@@ -87,7 +102,7 @@ def test_a_job_with_something_to_say_sends_it(monkeypatch):
     scheduler = Scheduler("http://app", "token", notify=True)
     monkeypatch.setattr(scheduler, "fetch", lambda job: {"text": "2 requests waiting"})
     sent = []
-    monkeypatch.setattr(scheduler, "notify_owner", sent.append)
+    monkeypatch.setattr(scheduler, "notify_owner", lambda text, key: sent.append(text))
 
     scheduler.run_job(Job("pending", "/jobs/pending-requests"))
 
@@ -99,7 +114,7 @@ def test_no_notify_still_runs_the_job_but_sends_nothing(monkeypatch):
     scheduler = Scheduler("http://app", "token", notify=False)
     monkeypatch.setattr(scheduler, "fetch", lambda job: {"text": "hello"})
     sent = []
-    monkeypatch.setattr(scheduler, "notify_owner", sent.append)
+    monkeypatch.setattr(scheduler, "notify_owner", lambda text, key: sent.append(text))
 
     scheduler.run_job(Job("pending", "/jobs/pending-requests"))
 
@@ -111,7 +126,7 @@ def test_a_failed_fetch_becomes_a_readable_alert_not_a_traceback(monkeypatch):
     monkeypatch.setattr(scheduler, "fetch", lambda job: {
         "error": "pending-requests could not be reached: refused"})
     sent = []
-    monkeypatch.setattr(scheduler, "notify_owner", sent.append)
+    monkeypatch.setattr(scheduler, "notify_owner", lambda text, key: sent.append(text))
 
     scheduler.run_job(Job("pending", "/jobs/pending-requests"))
 
@@ -129,7 +144,7 @@ def test_an_alert_body_is_still_delivered(monkeypatch):
         "ok": False, "problems": ["database: down"],
         "text": "Sagar PG alert: database: down"})
     sent = []
-    monkeypatch.setattr(scheduler, "notify_owner", sent.append)
+    monkeypatch.setattr(scheduler, "notify_owner", lambda text, key: sent.append(text))
 
     scheduler.run_job(Job("health", "/jobs/health-check"))
 

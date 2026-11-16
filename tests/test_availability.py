@@ -2,7 +2,7 @@
 
 Covers the brief's availability matrix: one bed free, one bed occupied, a full
 room, a full hostel, different-day stays, same-day turnover, overlapping
-reservations, temporary hold expiry, and cleaning/maintenance states.
+reservations, the absence of temporary holds, and cleaning/maintenance states.
 """
 
 from __future__ import annotations
@@ -140,48 +140,26 @@ def test_inactive_bed_is_excluded(db, tomorrow):
     assert "1NA-B1" not in {b.bed_id for b in beds}
 
 
-# --- holds -----------------------------------------------------------------
+# --- no holds --------------------------------------------------------------
 
-def test_active_hold_blocks_bed(db, tomorrow):
-    guest = booking.get_or_create_guest(db, phone="+919000000020")
-    db.execute(
-        """
-        INSERT INTO bed_holds (bed_id, guest_id, start_at, end_at, expires_at, status)
-        VALUES ('1NA-B1', %s, %s, %s, now() + interval '30 minutes', 'ACTIVE')
-        """,
-        (guest, tomorrow, tomorrow + timedelta(days=1)),
-    )
-    assert availability.bed_is_available(
-        db, "1NA-B1", tomorrow, tomorrow + timedelta(days=1)) is False
-
-
-def test_expired_hold_does_not_block_bed(db, tomorrow):
-    guest = booking.get_or_create_guest(db, phone="+919000000021")
-    db.execute(
-        """
-        INSERT INTO bed_holds (bed_id, guest_id, start_at, end_at, expires_at, status, created_at)
-        VALUES ('1NA-B1', %s, %s, %s, now() - interval '1 minute', 'ACTIVE',
-                now() - interval '30 minutes')
-        """,
-        (guest, tomorrow, tomorrow + timedelta(days=1)),
-    )
+def test_an_unconfirmed_request_does_not_block_the_bed(db, tomorrow):
+    # A REQUESTED booking never blocks a bed; only CONFIRMED or CHECKED_IN do.
+    booking.create_request(
+        db, phone="+919000000020", full_name="Dummy", gender="MALE",
+        bed_id="1NA-B1", check_in_at=tomorrow, check_out_at=tomorrow + timedelta(days=1),
+        food_included=True)
     assert availability.bed_is_available(
         db, "1NA-B1", tomorrow, tomorrow + timedelta(days=1)) is True
 
 
-def test_expire_stale_holds_marks_them_expired(db, tomorrow):
-    guest = booking.get_or_create_guest(db, phone="+919000000022")
-    db.execute(
-        """
-        INSERT INTO bed_holds (bed_id, guest_id, start_at, end_at, expires_at, status, created_at)
-        VALUES ('1NA-B1', %s, %s, %s, now() - interval '1 minute', 'ACTIVE',
-                now() - interval '30 minutes')
-        """,
-        (guest, tomorrow, tomorrow + timedelta(days=1)),
-    )
-    assert availability.expire_stale_holds(db) == 1
-    row = db.query_one("SELECT status FROM bed_holds")
-    assert row["status"] == "EXPIRED"
+def test_a_confirmed_booking_blocks_the_bed(db, tomorrow):
+    request = booking.create_request(
+        db, phone="+919000000021", full_name="Dummy", gender="MALE",
+        bed_id="1NA-B1", check_in_at=tomorrow, check_out_at=tomorrow + timedelta(days=1),
+        food_included=True)
+    booking.approve(db, request.booking_id, actor="+919999999999")
+    assert availability.bed_is_available(
+        db, "1NA-B1", tomorrow, tomorrow + timedelta(days=1)) is False
 
 
 # --- filtering and summary -------------------------------------------------

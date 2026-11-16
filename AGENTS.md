@@ -25,11 +25,14 @@ AC bed total and the non-AC bed total.
     DORM      20 mats   (mat spaces, no cots)
     TOTAL     67 beds
 
-Monthly rates, per bed, by food option (night and full-day are the same):
+Monthly rates, per bed, by food option and stay mode:
 
-    AC         7500 with food   5000 without
-    Non-AC     5000 with food   3000 without
-    Dormitory  4500 with food   2500 without
+    AC         8000/night 11000/day with food   5000/night 7000/day without
+    Non-AC     5500 with food   4000 without
+    Dormitory  4500 with food   3500 without
+
+Only AC charges more for a full day; Non-AC and dormitory are the same either
+way. These figures are the owner's confirmed rates and live in `db/seed.sql`.
 
 Extras: Towel 100/item, Bedsheet 50/item, Pillow 50/item, Locker 50/month.
 Walk-in: fresh-up 50 (no bed), rest 3 hours 100 (holds a bed).
@@ -242,7 +245,7 @@ The dev database contains leftover rows from earlier manual runs
   setup (rooms, beds, rate plans, extras, settings) and the record of real
   inbound contact (conversations, messages, enquiries). Dry-run by default;
   `--yes` to apply. Also frees every bed and restarts `booking_ref_seq` at 1.
-- Demo data has been cleared: 0 guests/bookings/payments, 68 beds AVAILABLE,
+- Demo data has been cleared: 0 guests/bookings/payments, 67 beds AVAILABLE,
   next booking is SPG-2026-000001. Backup at `backups/` (gitignored).
 
 ## Workspace resets wipe the runtime (2026-11-04)
@@ -661,7 +664,7 @@ So the guest saw only the question. Measured, that is:
 
 | the guest asked | the router's answer | the guest saw |
 | --- | --- | --- |
-| `do you have a room free` | 156 chars: "We have 68 beds free... - AC: 17 free" | "Would you like to book a room?" |
+| `do you have a room free` | 156 chars: "We have 67 beds free... - AC: 18 free" | "Would you like to book a room?" |
 | `what are your prices` | 798 chars: the whole rate card | "Our rates are per bed. Which room type?" |
 
 The router had done its job every time. The answer was computed, then thrown

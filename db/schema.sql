@@ -227,32 +227,14 @@ ALTER TABLE bookings ADD CONSTRAINT bookings_advance_due_check
 
 
 -- ---------------------------------------------------------------------------
--- Temporary bed holds (expire automatically so beds are never blocked forever)
+-- (removed) Temporary bed holds
+--
+-- There are no temporary holds. A REQUESTED booking does not block a bed; only
+-- a CONFIRMED or CHECKED_IN booking occupies one, and nothing is released on a
+-- clock. The old `bed_holds` table is no longer created. If an existing
+-- database still has it, it is unused and may be dropped in a maintenance
+-- window (see docs/SCHEMA_STRATEGY.md).
 -- ---------------------------------------------------------------------------
-CREATE TABLE IF NOT EXISTS bed_holds (
-    hold_id     uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    bed_id      text NOT NULL REFERENCES beds(bed_id) ON DELETE CASCADE,
-    guest_id    uuid REFERENCES guests(guest_id) ON DELETE SET NULL,
-    enquiry_id  uuid REFERENCES enquiries(enquiry_id) ON DELETE SET NULL,
-    start_at    timestamptz NOT NULL,
-    end_at      timestamptz NOT NULL,
-    expires_at  timestamptz NOT NULL,
-    status      text NOT NULL DEFAULT 'ACTIVE' CHECK (status IN ('ACTIVE','RELEASED','EXPIRED','CONVERTED')),
-    created_at  timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT holds_dates_ordered CHECK (end_at > start_at),
-    -- A hold for a future stay legitimately expires before that stay begins,
-    -- so expiry is checked against creation time, not against the stay start.
-    CONSTRAINT holds_expiry_after_creation CHECK (expires_at > created_at)
-);
--- Two live holds may not overlap on the same bed.
-ALTER TABLE bed_holds DROP CONSTRAINT IF EXISTS holds_no_overlap;
-ALTER TABLE bed_holds ADD CONSTRAINT holds_no_overlap
-    EXCLUDE USING gist (
-        bed_id WITH =,
-        tstzrange(start_at, end_at, '[)') WITH &&
-    )
-    WHERE (status = 'ACTIVE');
-CREATE INDEX IF NOT EXISTS idx_holds_active ON bed_holds(status, expires_at);
 
 -- ---------------------------------------------------------------------------
 -- Payments — a screenshot is never proof. Only an authorised verifier or a
@@ -300,9 +282,55 @@ CREATE TABLE IF NOT EXISTS messages (
     body            text,
     payload         jsonb,
     received_at     timestamptz NOT NULL DEFAULT now(),
-    processed_at    timestamptz
+    processed_at    timestamptz,
+    dispatch_claimed_at timestamptz
 );
+ALTER TABLE messages
+    ADD COLUMN IF NOT EXISTS dispatch_claimed_at timestamptz;
 CREATE INDEX IF NOT EXISTS idx_messages_unprocessed ON messages(processed_at) WHERE processed_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_messages_retry
+    ON messages(dispatch_claimed_at, received_at)
+    WHERE direction = 'IN' AND processed_at IS NULL;
+
+-- Durable inbound processing retries. Outbound delivery remains on the
+-- existing channel path and is deliberately not represented here.
+CREATE TABLE IF NOT EXISTS inbound_processing (
+    processing_id   bigserial PRIMARY KEY,
+    message_id      uuid NOT NULL UNIQUE REFERENCES messages(message_id) ON DELETE CASCADE,
+    state           text NOT NULL DEFAULT 'pending'
+                    CHECK (state IN ('pending', 'processing', 'processed', 'failed')),
+    attempt_count   integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_retry_at   timestamptz,
+    last_error_code text,
+    last_error      text,
+    claim_token     uuid,
+    claimed_until   timestamptz,
+    dispatch_started_at timestamptz,
+    processed_at    timestamptz,
+    failed_at       timestamptz,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    updated_at      timestamptz NOT NULL DEFAULT now(),
+    CHECK ((state = 'processing') = (claim_token IS NOT NULL AND claimed_until IS NOT NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_inbound_processing_due
+    ON inbound_processing(next_retry_at, processing_id)
+    WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS idx_inbound_processing_expired
+    ON inbound_processing(claimed_until, processing_id)
+    WHERE state = 'processing';
+INSERT INTO inbound_processing (message_id, state, attempt_count, processed_at,
+                                next_retry_at, created_at, updated_at)
+SELECT message_id,
+       CASE WHEN processed_at IS NULL THEN 'pending' ELSE 'processed' END,
+       0, processed_at,
+       CASE WHEN processed_at IS NULL AND dispatch_claimed_at IS NOT NULL
+              THEN GREATEST(dispatch_claimed_at + interval '15 minutes', now())
+            WHEN processed_at IS NULL THEN GREATEST(received_at + interval '15 minutes', now())
+            ELSE NULL END,
+       now(), now()
+FROM messages
+WHERE direction = 'IN'
+ON CONFLICT (message_id) DO NOTHING;
 
 -- ---------------------------------------------------------------------------
 -- Partner referrals (income tracked separately from hostel revenue)
@@ -596,8 +624,9 @@ CREATE INDEX IF NOT EXISTS idx_guest_reviews_published
 --   CONFIRMED   the owner checked the money and confirmed the booking
 --
 -- The no-double-booking exclusion still only counts CONFIRMED and CHECKED_IN:
--- an ACCEPTED booking holds its bed through `bed_holds`, exactly as a
--- REQUESTED one did, so widening the status list does not widen the guarantee.
+-- an ACCEPTED booking does not block the bed, because there are no holds. The
+-- owner claims the bed only by confirming, and the exclusion constraint makes
+-- that the single hard guarantee.
 -- ---------------------------------------------------------------------------
 ALTER TABLE bookings DROP CONSTRAINT IF EXISTS bookings_status_check;
 ALTER TABLE bookings ADD CONSTRAINT bookings_status_check
@@ -710,4 +739,114 @@ CREATE TABLE IF NOT EXISTS promotions (
     created_at   timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT promotions_window_ordered CHECK (ends_on >= starts_on)
 );
+
 CREATE INDEX IF NOT EXISTS idx_promotions_active ON promotions(active, starts_on, ends_on);
+
+-- WhatsApp delivery-status history, linked by Meta's outgoing message ID.
+CREATE TABLE IF NOT EXISTS message_status_events (
+    status_event_id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    wa_message_id text NOT NULL,
+    status text NOT NULL CHECK (status IN ('sent', 'delivered', 'read', 'failed')),
+    status_timestamp timestamptz,
+    recipient_id text,
+    errors jsonb NOT NULL DEFAULT '{}'::jsonb,
+    received_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_message_status_events_wa_id
+    ON message_status_events(wa_message_id);
+
+CREATE INDEX IF NOT EXISTS idx_message_status_events_received_at
+    ON message_status_events(received_at);
+
+-- Durable outbound WhatsApp queue. Sending is deliberately separate from
+-- inbound dispatch; workers only send persisted payloads and never run business logic.
+CREATE TABLE IF NOT EXISTS outbound_recipient_sequences (
+    recipient       text PRIMARY KEY,
+    next_sequence   bigint NOT NULL DEFAULT 1 CHECK (next_sequence > 0)
+);
+
+CREATE TABLE IF NOT EXISTS outbound_messages (
+    outbound_id       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+    idempotency_key   text NOT NULL UNIQUE,
+    source_inbound_id uuid REFERENCES messages(message_id) ON DELETE SET NULL,
+    source_event_type text,
+    source_event_id   text,
+    recipient         text NOT NULL,
+    recipient_sequence bigint NOT NULL,
+    ordering_key      text,
+    message_type      text NOT NULL
+                      CHECK (message_type IN ('text','interactive','template','document','booking_notice','flow')),
+    payload_version   smallint NOT NULL DEFAULT 1 CHECK (payload_version > 0),
+    payload           jsonb,
+    state             text NOT NULL DEFAULT 'pending'
+                      CHECK (state IN ('pending','sending','accepted','delivered','read',
+                                       'failed','unknown','cancelled')),
+    attempt_count     integer NOT NULL DEFAULT 0 CHECK (attempt_count >= 0),
+    next_attempt_at   timestamptz NOT NULL DEFAULT now(),
+    claim_token       uuid,
+    claimed_until     timestamptz,
+    attempt_id        uuid,
+    send_started_at   timestamptz,
+    provider_message_id text UNIQUE,
+    last_error_code   text,
+    last_error_class  text,
+    last_error        text,
+    accepted_at       timestamptz,
+    delivered_at      timestamptz,
+    read_at           timestamptz,
+    failed_at         timestamptz,
+    payload_expires_at timestamptz,
+    expires_at        timestamptz,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    updated_at        timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (recipient, recipient_sequence),
+    CHECK ((state = 'sending') = (claim_token IS NOT NULL AND claimed_until IS NOT NULL)),
+    CHECK (state <> 'sending' OR attempt_id IS NOT NULL)
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_due
+    ON outbound_messages(next_attempt_at, created_at)
+    WHERE state = 'pending';
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_expired_claim
+    ON outbound_messages(claimed_until)
+    WHERE state = 'sending';
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_ordering
+    ON outbound_messages(recipient, ordering_key, recipient_sequence)
+    WHERE ordering_key IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_outbound_messages_retention
+    ON outbound_messages(payload_expires_at)
+    WHERE payload IS NOT NULL AND payload_expires_at IS NOT NULL;
+
+-- One atomic phone-wide send slot plus per-recipient gates. Lease ownership is
+-- acquired in the same transaction that claims an outbox row.
+CREATE TABLE IF NOT EXISTS outbound_send_gates (
+    scope_type  text NOT NULL CHECK (scope_type IN ('phone','recipient')),
+    scope_key   text NOT NULL,
+    blocked_until timestamptz,
+    lease_token uuid,
+    lease_until timestamptz,
+    updated_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (scope_type, scope_key),
+    CHECK ((lease_token IS NULL) = (lease_until IS NULL))
+);
+
+-- Deduplicated callback receipt; legacy message_status_events remains an
+-- append-only history and is not destructively rewritten by this migration.
+CREATE TABLE IF NOT EXISTS outbound_delivery_events (
+    event_key text PRIMARY KEY,
+    provider_message_id text NOT NULL,
+    status text NOT NULL CHECK (status IN ('sent','delivered','read','failed')),
+    status_timestamp timestamptz,
+    recipient_id text,
+    error_code text,
+    received_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_outbound_delivery_events_provider
+    ON outbound_delivery_events(provider_message_id, status_timestamp);
+
+-- Additive migrations: a column or constraint added in code must reach a
+-- database that already exists, without a drop-and-recreate. Each line is safe
+-- to run again.
+ALTER TABLE outbound_messages DROP CONSTRAINT IF EXISTS outbound_messages_message_type_check;
+ALTER TABLE outbound_messages ADD CONSTRAINT outbound_messages_message_type_check
+    CHECK (message_type IN ('text','interactive','template','document','booking_notice','flow'));

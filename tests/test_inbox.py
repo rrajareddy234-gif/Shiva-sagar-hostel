@@ -6,7 +6,9 @@ booking. This is enforced by a UNIQUE constraint on the provider message id.
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
+from threading import Barrier
 
 import pytest
 
@@ -64,6 +66,151 @@ def test_processing_can_be_marked_done(db):
     row = db.query_one("SELECT processed_at FROM messages WHERE message_id = %s",
                        (stored.message_id,))
     assert row["processed_at"] is not None
+
+
+def test_stale_unprocessed_message_is_claimed_atomically(db):
+    stored = inbox.store_inbound(db, _message())
+    db.execute("UPDATE inbound_processing SET next_retry_at = now() - interval '20 minutes' "
+               "WHERE message_id = %s", (stored.message_id,))
+
+    claimed = inbox.claim_stale_unprocessed(db)
+    assert [str(row["message_id"]) for row in claimed] == [stored.message_id]
+    assert inbox.claim_stale_unprocessed(db) == []
+    assert claimed[0]["claim_token"]
+
+
+def test_duplicate_delivery_creates_one_inbound_retry_job(db):
+    first = inbox.store_inbound(db, _message())
+    second = inbox.store_inbound(db, _message())
+    assert first is not None and second is None
+    assert db.query_one("SELECT count(*) AS n FROM inbound_processing")["n"] == 1
+
+
+def test_retry_uses_bounded_exponential_backoff(db, monkeypatch):
+    stored = inbox.store_inbound(db, _message())
+    claimed = inbox.claim_inbound(db, message_id=stored.message_id, force=True)[0]
+    monkeypatch.setattr(inbox.random, "uniform", lambda low, high: high)
+
+    state = inbox.fail_inbound_attempt(db, stored.message_id, claimed["claim_token"],
+                                       TimeoutError("sensitive detail"))
+    row = db.query_one("SELECT * FROM inbound_processing WHERE message_id = %s",
+                       (stored.message_id,))
+    assert state == "pending"
+    assert row["attempt_count"] == 1
+    assert row["last_error_code"] == "TimeoutError"
+    assert row["last_error"] == "TimeoutError"
+    assert row["next_retry_at"] >= row["updated_at"] + timedelta(seconds=35)
+    assert inbox.claim_inbound(db, message_id=stored.message_id) == []
+
+
+def test_expired_claim_is_recovered_and_old_token_is_fenced(db):
+    stored = inbox.store_inbound(db, _message())
+    old = inbox.claim_inbound(db, message_id=stored.message_id, force=True)[0]
+    db.execute("UPDATE inbound_processing SET claimed_until = now() - interval '1 second' "
+               "WHERE message_id = %s", (stored.message_id,))
+
+    new = inbox.claim_inbound(db, message_id=stored.message_id)[0]
+    assert new["claim_token"] != old["claim_token"]
+    assert new["attempt_count"] == 2
+    assert inbox.mark_processed(db, stored.message_id, old["claim_token"]) is False
+    row = db.query_one("SELECT state, claim_token FROM inbound_processing WHERE message_id = %s",
+                       (stored.message_id,))
+    assert row["state"] == "processing"
+    assert str(row["claim_token"]) == new["claim_token"]
+
+
+def test_concurrent_workers_cannot_claim_the_same_inbound_job(db):
+    stored = inbox.store_inbound(db, _message())
+    db.execute("UPDATE inbound_processing SET next_retry_at = now() - interval '1 second' "
+               "WHERE message_id = %s", (stored.message_id,))
+    barrier = Barrier(2)
+
+    def claim():
+        barrier.wait()
+        return inbox.claim_inbound(db, limit=1)
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        claims = list(pool.map(lambda _: claim(), range(2)))
+    assert sum(len(batch) for batch in claims) == 1
+
+
+def test_crash_after_business_side_effect_is_not_replayed(db):
+    from datetime import datetime, timedelta
+
+    from core import booking
+    from tests.conftest import IST
+
+    stored = inbox.store_inbound(db, _message())
+    claim = inbox.claim_inbound(db, message_id=stored.message_id, force=True)[0]
+    assert inbox.mark_dispatch_started(db, stored.message_id, claim["claim_token"])
+    start = (datetime.now(IST) + timedelta(days=1)).replace(
+        hour=10, minute=0, second=0, microsecond=0)
+    booking.create_request(db, phone="+919000000700", full_name="Retry Guest",
+                           gender="MALE", bed_id="1NA-B1", check_in_at=start,
+                           check_out_at=start + timedelta(days=1), food_included=True)
+
+    db.execute("UPDATE inbound_processing SET claimed_until = now() - interval '1 second' "
+               "WHERE message_id = %s", (stored.message_id,))
+    assert inbox.claim_inbound(db, message_id=stored.message_id) == []
+    state = db.query_one("SELECT state, last_error_code FROM inbound_processing "
+                         "WHERE message_id = %s", (stored.message_id,))
+    assert state["state"] == "failed"
+    assert state["last_error_code"] == "worker_lease_expired_after_dispatch_started"
+    assert db.query_one("SELECT count(*) AS n FROM bookings")["n"] == 1
+
+
+def test_inbound_retry_exhaustion_is_terminal(db):
+    stored = inbox.store_inbound(db, _message())
+    for attempt in range(inbox.INBOUND_MAX_ATTEMPTS):
+        claimed = inbox.claim_inbound(db, message_id=stored.message_id, force=True)
+        assert len(claimed) == 1
+        state = inbox.fail_inbound_attempt(db, stored.message_id,
+                                           claimed[0]["claim_token"], TimeoutError())
+        if attempt < inbox.INBOUND_MAX_ATTEMPTS - 1:
+            db.execute("UPDATE inbound_processing SET next_retry_at = now() - interval '1 second' "
+                       "WHERE message_id = %s", (stored.message_id,))
+            assert state == "pending"
+        else:
+            assert state == "failed"
+    assert inbox.claim_inbound(db, message_id=stored.message_id, force=True) == []
+    row = db.query_one("SELECT state, attempt_count, failed_at FROM inbound_processing "
+                       "WHERE message_id = %s", (stored.message_id,))
+    assert row["state"] == "failed"
+    assert row["attempt_count"] == inbox.INBOUND_MAX_ATTEMPTS
+    assert row["failed_at"] is not None
+
+
+def test_permanent_inbound_error_fails_without_retry(db):
+    stored = inbox.store_inbound(db, _message())
+    claimed = inbox.claim_inbound(db, message_id=stored.message_id, force=True)[0]
+    state = inbox.fail_inbound_attempt(db, stored.message_id, claimed["claim_token"],
+                                       ValueError("bad input"), retryable=False)
+    row = db.query_one("SELECT state, next_retry_at, failed_at FROM inbound_processing "
+                       "WHERE message_id = %s", (stored.message_id,))
+    assert state == "failed"
+    assert row["state"] == "failed"
+    assert row["next_retry_at"] is None
+    assert row["failed_at"] is not None
+
+
+def test_stored_interactive_message_can_be_rebuilt_for_retry(db):
+    message = InboundMessage(
+        provider_message_id="wamid.tap", from_phone="+919000000700",
+        text="AC", message_type="interactive", button_id="price:room:AC",
+        timestamp=1735689600,
+        raw={"id": "wamid.tap", "type": "interactive", "timestamp": "1735689600",
+             "interactive": {"button_reply": {"id": "price:room:AC", "title": "AC"}}},
+    )
+    stored = inbox.store_inbound(db, message)
+    row = db.query_one("SELECT message_id, wa_message_id, body, payload, received_at, "
+                       "conversation_id FROM messages WHERE message_id = %s",
+                       (stored.message_id,))
+
+    rebuilt = inbox.inbound_from_row(db, row)
+    assert rebuilt.provider_message_id == message.provider_message_id
+    assert rebuilt.from_phone == message.from_phone
+    assert rebuilt.button_id == message.button_id
+    assert rebuilt.message_type == "interactive"
 
 
 # --- enquiry tracking ------------------------------------------------------

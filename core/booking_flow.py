@@ -12,13 +12,14 @@ from __future__ import annotations
 
 import logging
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from core import availability, billing, booking, hostel_facts, inbox, pricing
-from core.channel.adapter import Button, Prompt
+from core.channel.adapter import Button, Flow, Prompt
 from core.db import Database
-from core.errors import BedUnavailable, BookingConflict, DomainError
+from core.errors import BedUnavailable, BookingConflict, DomainError, DuplicateGuestBooking
 from core.pricing import money
 
 log = logging.getLogger(__name__)
@@ -46,7 +47,12 @@ DEFAULT_UPI = "8688397996@postbank"
 class FlowResult:
     reply: str
     prompt: Prompt | None = None
+    flow: Flow | None = None
     events: tuple[dict, ...] = ()
+    # Internal: this result is the check-in / check-out question, so a published
+    # calendar Flow may be offered in place of the quick-reply buttons. The
+    # entry points read it and attach the Flow; callers never set it.
+    asks_dates: bool = False
 
 
 # --- state -----------------------------------------------------------------
@@ -74,8 +80,23 @@ def is_active(db: Database, phone: str) -> bool:
 # --- entry point -----------------------------------------------------------
 
 def handle(db: Database, *, phone: str, text: str | None = None,
-           button_id: str | None = None) -> FlowResult | None:
-    """Advance a booking. None means the message is not ours to answer."""
+           button_id: str | None = None,
+           flow_id: str | None = None,
+           flow_screen: str | None = None) -> FlowResult | None:
+    """Advance a booking. None means the message is not ours to answer.
+
+    When a calendar Flow is published (`flow_id`/`flow_screen`), the date
+    question is asked with that Flow instead of quick-reply buttons. Everything
+    else about the conversation is unchanged.
+    """
+    result = _handle(db, phone=phone, text=text, button_id=button_id)
+    return _offer_flow(db, result, phone=phone, flow_id=flow_id,
+                       flow_screen=flow_screen)
+
+
+def _handle(db: Database, *, phone: str, text: str | None = None,
+            button_id: str | None = None) -> FlowResult | None:
+    """The booking state machine, before any Flow is attached."""
     if button_id and button_id.startswith(_NS):
         return _tap(db, phone=phone, button_id=button_id)
 
@@ -193,7 +214,8 @@ def handle(db: Database, *, phone: str, text: str | None = None,
     return None
 
 
-def start(db: Database, *, phone: str, text: str | None = None) -> FlowResult:
+def start(db: Database, *, phone: str, text: str | None = None,
+          flow_id: str | None = None, flow_screen: str | None = None) -> FlowResult:
     """Begin a booking, using whatever the guest already told us.
 
     A guest who opens with "book from 1 December for 2 nights, AC with food" has
@@ -206,7 +228,81 @@ def start(db: Database, *, phone: str, text: str | None = None) -> FlowResult:
         _prefill(db, state, text)
     state["step"] = "date"
     _save(db, phone, state)
-    return _first_missing(db, phone=phone, state=state)
+    result = _first_missing(db, phone=phone, state=state)
+    return _offer_flow(db, result, phone=phone, flow_id=flow_id,
+                       flow_screen=flow_screen)
+
+
+# --- the calendar Flow -----------------------------------------------------
+
+def _offer_flow(db: Database, result: FlowResult | None, *, phone: str,
+                flow_id: str | None, flow_screen: str | None) -> FlowResult | None:
+    """Swap the date question's buttons for a calendar Flow when one is published."""
+    if result is None or result.flow is not None or not result.asks_dates:
+        return result
+    if not (flow_id and flow_screen):
+        return result
+    check_in = _date_of(_load(db, phone).get("check_in"))
+    flow = Flow(
+        flow_id=flow_id,
+        screen=flow_screen,
+        cta="Pick dates",
+        body=("Choose your check-in and check-out on the calendar. Any dates "
+              "are fine, even a stay of one or two months."),
+        # A unique token ties the guest's submission back to this conversation.
+        flow_token=f"bk-{phone.lstrip('+')}-{uuid.uuid4().hex[:8]}",
+        data=_flow_prefill(check_in),
+    )
+    if not flow.is_valid():
+        return result
+    return FlowResult(reply=flow.body, prompt=None, flow=flow, events=result.events)
+
+
+def _flow_prefill(check_in) -> dict:
+    """Seed the calendar with the dates we already hold, so it opens where the
+    guest left off. Empty when we hold nothing, so no wrong default is shown."""
+    if check_in is None:
+        return {}
+    return {"check_in": check_in.date().isoformat()}
+
+
+def apply_flow_dates(db: Database, *, phone: str, check_in: str,
+                     check_out: str, flow_id: str | None = None,
+                     flow_screen: str | None = None) -> FlowResult:
+    """Fold a submitted calendar range into the booking and ask the next question.
+
+    The dates are the guest's own choice from the calendar, so they are not read
+    back for confirmation. A check-out that is not after the check-in is
+    rejected and the calendar is asked for again.
+    """
+    state = _load(db, phone)
+    start_date = _parse_iso(check_in)
+    end_date = _parse_iso(check_out)
+    if start_date is None or end_date is None or end_date <= start_date:
+        state["step"] = "date"
+        state.pop("check_in", None)
+        state.pop("check_out", None)
+        _save(db, phone, state)
+        result = FlowResult(
+            "Sorry, those dates did not work: the check-out must be after the "
+            "check-in. Please pick the dates again.",
+            asks_dates=True)
+        return _offer_flow(db, result, phone=phone, flow_id=flow_id,
+                           flow_screen=flow_screen)
+    state["check_in"] = start_date.isoformat()
+    state["check_out"] = end_date.isoformat()
+    state.pop("step", None)
+    _save(db, phone, state)
+    result = _first_missing(db, phone=phone, state=state)
+    return _offer_flow(db, result, phone=phone, flow_id=flow_id,
+                       flow_screen=flow_screen)
+
+
+def _parse_iso(value: str | None):
+    try:
+        return datetime.fromisoformat((value or "").strip()).date()
+    except (TypeError, ValueError):
+        return None
 
 
 def _prefill(db: Database, state: dict, text: str) -> None:
@@ -319,7 +415,8 @@ def _ask_date(db: Database) -> FlowResult:
         "Tap below, or type a date like 2026-11-20. Any date is fine, however "
         "far ahead, including a stay of one or two months.",
         prompt=Prompt(body="When would you like to check in?",
-                      rows=rows, button_text="Pick a date"))
+                      rows=rows, button_text="Pick a date"),
+        asks_dates=True)
 
 
 def _ask_checkout(db: Database, state: dict) -> FlowResult:
@@ -910,6 +1007,9 @@ def _submit(db: Database, *, phone: str, state: dict) -> FlowResult:
             stay_mode=state.get("stay_mode") or "NIGHT",
             payment_terms=state.get("terms") or "ADVANCE", guests_count=guests,
             source="WHATSAPP", name_source=state.get("name_source") or "GUEST_TYPED")
+    except DuplicateGuestBooking as exc:
+        _clear(db, phone)
+        return FlowResult(exc.message)
     except (BookingConflict, BedUnavailable):
         # Someone else won the race for the same bed by a hair. The guest did
         # nothing wrong and their details are still in hand, so try once more on

@@ -173,18 +173,25 @@ class FakeChannel(ChannelAdapter):
     name = "fake"
 
     def __init__(self, *, fail: bool = False, fail_interactive: bool = False,
-                 fail_document: bool = False, throttle: bool = False):
+                 fail_document: bool = False, fail_flow: bool = False,
+                 throttle: bool = False):
         self.sent: list[tuple[str, str]] = []
         self.prompts: list[tuple[str, object]] = []
         self.documents: list[tuple[str, str, bytes]] = []
+        self.flows: list[tuple[str, object]] = []
         self.fail = fail
         self.fail_interactive = fail_interactive
         self.fail_document = fail_document
+        self.fail_flow = fail_flow
         self.throttle = throttle
         # Every outbound attempt, whether or not it succeeded. A test that only
         # looks at successes cannot tell "did not try" from "tried and failed",
         # and the whole point of the throttle guard is not to try twice.
         self.attempts: list[str] = []
+        # Plain-text sends, by recipient. Kept separate from `sent` (which also
+        # holds interactive bodies) so a test can assert that a guest received no
+        # bare text message at all -- the interactive-only contract.
+        self.texts: list[tuple[str, str]] = []
 
     def _meta(self):
         from core.channel.meta_cloud import MetaCloudAdapter
@@ -197,16 +204,21 @@ class FakeChannel(ChannelAdapter):
     def parse_inbound(self, raw_body):
         return self._meta().parse_inbound(raw_body)
 
+    def parse_statuses(self, raw_body):
+        return self._meta().parse_statuses(raw_body)
+
     def verify_challenge(self, query):
         return self._meta().verify_challenge(query)
 
     def send_text(self, to_phone, text):
         self.attempts.append("text")
         if self.throttle:
-            return SendResult(ok=False, retryable=False,
+            return SendResult(ok=False, retryable=False, certainty="rejected",
+                              error_code="131056", http_status=400,
                               error="HTTP 400: (#131056) pair rate limit hit")
         if self.fail:
             return SendResult(ok=False, error="simulated outage")
+        self.texts.append((to_phone, text))
         self.sent.append((to_phone, text))
         return SendResult(ok=True, provider_message_id=f"out.{len(self.sent)}")
 
@@ -216,12 +228,37 @@ class FakeChannel(ChannelAdapter):
     def send_interactive(self, to_phone, prompt):
         self.attempts.append("interactive")
         if self.throttle:
-            return SendResult(ok=False, retryable=False,
+            return SendResult(ok=False, retryable=False, certainty="rejected",
+                              error_code="131056", http_status=400,
                               error="HTTP 400: (#131056) pair rate limit hit")
-        if self.fail or self.fail_interactive:
-            return SendResult(ok=False, error="simulated interactive failure")
+        if self.fail:
+            # An outage is transient: the same interactive is retried later, so
+            # no plain-text fallback and no second message.
+            return SendResult(ok=False, error="simulated outage")
+        if self.fail_interactive:
+            # A rejected interactive is a permanent 4xx from Meta (malformed or
+            # disallowed), so it is not retried and never replaced by text.
+            return SendResult(ok=False, retryable=False, certainty="rejected",
+                              error_code="131009", http_status=400,
+                              error="simulated interactive rejection")
+        # An interactive message IS the guest's reply, not a decoration around a
+        # separate text message, so its body is recorded as a guest-facing send.
         self.prompts.append((to_phone, prompt))
+        self.sent.append((to_phone, prompt.body))
         return SendResult(ok=True, provider_message_id=f"btn.{len(self.prompts)}")
+
+    def send_flow(self, to_phone, flow):
+        self.attempts.append("flow")
+        if self.throttle:
+            return SendResult(ok=False, retryable=False, certainty="rejected",
+                              error_code="131056", http_status=400,
+                              error="HTTP 400: (#131056) pair rate limit hit")
+        if self.fail or self.fail_flow:
+            return SendResult(ok=False, retryable=False, certainty="rejected",
+                              error_code="131009", http_status=400,
+                              error="simulated flow rejection")
+        self.flows.append((to_phone, flow))
+        return SendResult(ok=True, provider_message_id=f"flow.{len(self.flows)}")
 
     def send_document(self, to_phone, filename, content, media_type="text/csv",
                       caption=None):
@@ -246,7 +283,7 @@ def channel() -> FakeChannel:
 
 
 @pytest.fixture
-def client(db, channel, seeded, monkeypatch):
+def client(db, channel, seeded, monkeypatch, tmp_path):
     """A TestClient against the real database with a fake WhatsApp channel."""
     from fastapi.testclient import TestClient
 
@@ -267,5 +304,13 @@ def client(db, channel, seeded, monkeypatch):
         ai_model="gemini-2.5-flash",
         ai_api_key=None,
         ai_base_url=None,
+        payment_proof_dir=str(tmp_path / "payment-proofs"),
     )
     return TestClient(create_app(settings, channel=channel, ai=None))
+
+
+def flush_outbox(client, *, limit: int = 100) -> dict:
+    """Drive the isolated sender explicitly in tests that assert provider output."""
+    from core.outbound_worker import run_batch
+    app = client.app
+    return run_batch(app.state.db, app.state.channel, app.state.settings, limit=limit)

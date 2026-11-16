@@ -23,8 +23,12 @@ def _now():
     return datetime.now(IST)
 
 
-def _confirmed(db, bed_id="1NA-B1", phone="+919000000800", food=True):
-    start = _now().replace(hour=12, minute=0, second=0, microsecond=0) + timedelta(days=1)
+def _confirmed(db, bed_id="1NA-B1", phone="+919000000800", food=True,
+               check_in_at=None):
+    start = check_in_at or (
+        _now().replace(hour=12, minute=0, second=0, microsecond=0)
+        + timedelta(days=1)
+    )
     request = booking.create_request(
         db, phone=phone, full_name="Dummy Guest", gender="MALE", bed_id=bed_id,
         check_in_at=start, check_out_at=start + timedelta(days=2), food_included=food)
@@ -301,7 +305,7 @@ def test_owner_vacancy_count(db):
 
 
 def test_owner_vacancy_reflects_a_booking(db):
-    _confirmed(db)
+    _confirmed(db, check_in_at=_now() + timedelta(minutes=1))
     reply = router.owner_answer(db, "how many beds are vacant?")
     assert "9 of 10" in reply.text
 
@@ -448,7 +452,7 @@ def test_owner_full_status_is_answered_without_ai(db):
 
 
 def test_owner_full_status_shows_the_live_numbers(db):
-    request = _confirmed(db)
+    request = _confirmed(db, check_in_at=_now() + timedelta(minutes=1))
     reply = router.owner_answer(db, "show me the full hostel status")
     assert "9 free of 10" in reply.text
     assert "1 occupied" in reply.text

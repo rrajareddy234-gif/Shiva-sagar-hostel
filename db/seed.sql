@@ -110,13 +110,13 @@ DO UPDATE SET name = EXCLUDED.name,
 -- ---------------------------------------------------------------------------
 -- Monthly (PG) plans, confirmed by the owner 2026-11-07.
 --
--- The owner quotes one monthly figure per room type and food option. A bed is
--- booked, not a room, so the same rate applies whether the stay is taken as a
--- night-only or a full-day arrangement.
+-- The owner quotes a monthly figure per room type, food option, and stay mode.
+-- AC differs between night-only and full-day stays; Non-AC and dormitory have
+-- the same figure for both modes.
 --
---   AC        with food 7500      no food 5000
---   Non-AC    with food 5000      no food 3000
---   Dormitory with food 4500      no food 2500
+--   AC        with food 8000/night, 11000/day; no food 5000/night, 7000/day
+--   Non-AC    with food 5500; no food 4000
+--   Dormitory with food 4500; no food 3500
 --
 -- These are the same for every guest. There is no student concession; anyone
 -- who wants a lower rate must speak to the owner.
@@ -125,18 +125,18 @@ INSERT INTO monthly_plans (name, room_type, food_included, plan_kind, stay_mode,
 SELECT v.name, v.room_type, v.food_included, v.plan_kind, v.stay_mode, v.monthly_rate,
        'confirmed by the owner'
 FROM (VALUES
-    ('Monthly AC with food, night',        'AC',     true,  'STANDARD', 'NIGHT',  7500.00),
-    ('Monthly AC with food, full day',     'AC',     true,  'STANDARD', 'DAY',    7500.00),
+    ('Monthly AC with food, night',        'AC',     true,  'STANDARD', 'NIGHT',  8000.00),
+    ('Monthly AC with food, full day',     'AC',     true,  'STANDARD', 'DAY',   11000.00),
     ('Monthly AC no food, night',          'AC',     false, 'STANDARD', 'NIGHT',  5000.00),
-    ('Monthly AC no food, full day',       'AC',     false, 'STANDARD', 'DAY',    5000.00),
-    ('Monthly Non-AC with food',           'NON_AC', true,  'STANDARD', 'NIGHT',  5000.00),
-    ('Monthly Non-AC with food, full day', 'NON_AC', true,  'STANDARD', 'DAY',    5000.00),
-    ('Monthly Non-AC no food',             'NON_AC', false, 'STANDARD', 'NIGHT',  3000.00),
-    ('Monthly Non-AC no food, full day',   'NON_AC', false, 'STANDARD', 'DAY',    3000.00),
+    ('Monthly AC no food, full day',       'AC',     false, 'STANDARD', 'DAY',    7000.00),
+    ('Monthly Non-AC with food',           'NON_AC', true,  'STANDARD', 'NIGHT',  5500.00),
+    ('Monthly Non-AC with food, full day', 'NON_AC', true,  'STANDARD', 'DAY',    5500.00),
+    ('Monthly Non-AC no food',             'NON_AC', false, 'STANDARD', 'NIGHT',  4000.00),
+    ('Monthly Non-AC no food, full day',   'NON_AC', false, 'STANDARD', 'DAY',    4000.00),
     ('Monthly dormitory with food',        'DORM',   true,  'STANDARD', 'NIGHT',  4500.00),
     ('Monthly dormitory with food, full day','DORM', true,  'STANDARD', 'DAY',    4500.00),
-    ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  2500.00),
-    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    2500.00)
+    ('Monthly dormitory no food',          'DORM',   false, 'STANDARD', 'NIGHT',  3500.00),
+    ('Monthly dormitory no food, full day','DORM',   false, 'STANDARD', 'DAY',    3500.00)
 ) AS v(name, room_type, food_included, plan_kind, stay_mode, monthly_rate)
 ON CONFLICT (plan_kind, room_type, food_included, stay_mode) WHERE active
 DO UPDATE SET name = EXCLUDED.name,

@@ -15,7 +15,7 @@ from datetime import datetime, timedelta
 from decimal import Decimal
 
 from core import availability, booking, faq, hostel_facts, inbox, payments, pricing, reviews
-from core.channel.adapter import Button, Prompt
+from core.channel.adapter import Button, Flow, Prompt
 from core.db import Database
 
 HELP = (
@@ -34,6 +34,9 @@ class Reply:
     # When set, the guest is offered tappable answers instead of typing. `text`
     # is still the fallback body, so a channel without buttons keeps working.
     prompt: Prompt | None = None
+    # When set, a native Flow (e.g. the calendar range picker) replaces the
+    # prompt. A Flow is its own single message.
+    flow: Flow | None = None
 
 
 def _day_bounds(day: datetime) -> tuple[datetime, datetime]:
@@ -124,7 +127,9 @@ def route(db: Database, text: str | None, *, role: str = "customer",
           now: datetime | None = None, room_type: str | None = None,
           food_included: bool | None = None,
           nights: int | None = None, button_id: str | None = None,
-          phone: str | None = None) -> Reply:
+          phone: str | None = None,
+          flow_id: str | None = None,
+          flow_screen: str | None = None) -> Reply:
     """Answer if the question is one we handle deterministically.
 
     Returns `needs_ai=True` when the message should go to the AI layer instead.
@@ -132,7 +137,8 @@ def route(db: Database, text: str | None, *, role: str = "customer",
     the id is stable, where the label the guest saw is not.
     """
     if button_id:
-        tapped = (_menu_button(db, button_id, phone=phone)
+        tapped = (_menu_button(db, button_id, phone=phone, flow_id=flow_id,
+                               flow_screen=flow_screen)
                   or _service_button(db, button_id, phone=phone)
                   or _price_button(db, button_id))
         if tapped is not None:
@@ -167,8 +173,10 @@ def route(db: Database, text: str | None, *, role: str = "customer",
         held = sticky.reply_for(db, phone=phone)
         if held is not None:
             return Reply(held, handled=True, intent=intent)
-        flow = booking_flow.start(db, phone=phone, text=text)
-        return Reply(flow.reply, handled=True, intent=intent, prompt=flow.prompt)
+        flow = booking_flow.start(db, phone=phone, text=text,
+                                  flow_id=flow_id, flow_screen=flow_screen)
+        return Reply(flow.reply, handled=True, intent=intent, prompt=flow.prompt,
+                     flow=flow.flow)
 
     if intent == "service":
         if not phone:
@@ -393,7 +401,9 @@ def _guest_first_name(db: Database, phone: str | None) -> str | None:
 
 
 def _menu_button(db: Database, button_id: str, *,
-                 phone: str | None = None) -> Reply | None:
+                 phone: str | None = None,
+                 flow_id: str | None = None,
+                 flow_screen: str | None = None) -> Reply | None:
     """Answer a menu tap. Returns None if the id is not ours."""
     if not button_id.startswith(_MENU):
         return None
@@ -417,8 +427,10 @@ def _menu_button(db: Database, button_id: str, *,
         held = sticky.reply_for(db, phone=phone)
         if held is not None:
             return Reply(held, handled=True, intent="booking_status")
-        flow = booking_flow.start(db, phone=phone)
-        return Reply(flow.reply, handled=True, intent="book", prompt=flow.prompt)
+        flow = booking_flow.start(db, phone=phone,
+                                  flow_id=flow_id, flow_screen=flow_screen)
+        return Reply(flow.reply, handled=True, intent="book", prompt=flow.prompt,
+                     flow=flow.flow)
     if what == "bookings":
         if not phone:
             return None
@@ -623,6 +635,32 @@ def _book_prompt() -> Prompt:
     """One 'Book a Room' button, offered under the availability answer."""
     return Prompt(body="Would you like to book a room?",
                   buttons=(Button("menu:book", "Book a Room"),))
+
+
+# The actions offered under an answer that has no question of its own -- an
+# informational reply, an acknowledgement, an error. Guest conversations are
+# interactive-only, so every reply is one interactive message; a terminal set of
+# actions gives the guest somewhere to go next without a second message. The ids
+# are the menu's own, so a tap is handled by `_menu_button` like any other.
+_TERMINAL_ACTIONS = (
+    ("menu:book", "Book a Room"),
+    ("menu:availability", "Check Availability"),
+    ("menu:price", "Rooms & Prices"),
+    ("menu:location", "Location & Directions"),
+    ("menu:talk", "Talk to Staff"),
+)
+
+
+def terminal_prompt() -> Prompt:
+    """The actions under an answer that ends the exchange, as a tappable list.
+
+    Five actions, so they are shown as a WhatsApp list: three is the most a
+    plain button message allows.
+    """
+    return Prompt(
+        body="What would you like to do next?",
+        rows=tuple(Button(bid, title) for bid, title in _TERMINAL_ACTIONS),
+        button_text="Choose")
 
 
 def _availability(db: Database, text: str, now: datetime | None,
@@ -1048,7 +1086,7 @@ def _full_status(db: Database, now: datetime) -> Reply:
         f"Hostel status, {now:%d %b %Y %H:%M}",
         "",
         f"Beds: {summary['available_beds']} free of {summary['total_beds']} "
-        f"({summary['occupied_beds']} occupied, {summary['held_beds']} held, "
+        f"({summary['occupied_beds']} occupied, "
         f"{summary['blocked_beds']} blocked)",
         f"Full rooms: {', '.join(summary['full_rooms']) or 'none'}",
         f"Guests in house: {len(in_house)}",
@@ -1083,8 +1121,8 @@ _STAFF_MENU_TITLES = (
 
 def _staff_menu() -> Reply:
     body = ("Front desk. What do you need?\n"
-            "To record a payment, send the reference, the amount and the method, "
-            "for example: SPG-2026-000012 paid 500 by UPI.")
+            "You can see arrivals, departures and free beds. Only the owner can "
+            "record payments or change a booking.")
     return Reply(
         body, handled=True, intent="staff_menu",
         prompt=Prompt(

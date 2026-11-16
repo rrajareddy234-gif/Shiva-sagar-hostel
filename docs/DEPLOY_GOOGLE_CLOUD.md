@@ -181,13 +181,13 @@ chmod 600 /opt/sagar/.env
 
 ```bash
 cd /opt/sagar
-docker compose -f deploy/docker-compose.lite.yml up -d --build
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml up -d --build
 ```
 
 The first build takes 2–4 minutes. When it finishes:
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml ps
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml ps
 ```
 
 You should see four containers, all `Up`: `postgres`, `app`, `scheduler`,
@@ -199,15 +199,15 @@ You should see four containers, all `Up`: `postgres`, `app`, `scheduler`,
 
 ```bash
 cd /opt/sagar
-docker compose -f deploy/docker-compose.lite.yml exec -T postgres \
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/schema.sql
 ```
 
-Then the room list. **Read `db/seed.sql` first** — every row is marked
-unconfirmed, and you must check the rooms and rates before going live:
+Then the owner-confirmed room list and rates. On an existing installation,
+review and apply the focused reconciliation script instead of reseeding:
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml exec -T postgres \
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml exec -T postgres \
   psql -U sagar -d sagarpg < db/seed.sql
 ```
 
@@ -229,8 +229,8 @@ If it does not answer, wait 60 seconds (Caddy is fetching the HTTPS
 certificate), then check the logs:
 
 ```bash
-docker compose -f deploy/docker-compose.lite.yml logs caddy --tail 30
-docker compose -f deploy/docker-compose.lite.yml logs app --tail 30
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml logs caddy --tail 30
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml logs app --tail 30
 ```
 
 ---
@@ -283,7 +283,7 @@ Save and exit. The dumps land in `/opt/sagar/backups`.
 cd /opt/sagar
 ./deploy/backup.sh
 git pull
-docker compose -f deploy/docker-compose.lite.yml up -d --build
+sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml up -d --build
 ```
 
 The database volume is untouched, so no booking is lost.
@@ -294,7 +294,7 @@ The database volume is untouched, so no booking is lost.
 
 | Symptom | Check |
 |---|---|
-| `/health` gives 502 | `docker compose -f deploy/docker-compose.lite.yml logs app --tail 30` |
+| `/health` gives 502 | `sudo docker compose --env-file .env -f deploy/docker-compose.lite.yml logs app --tail 30` |
 | HTTPS will not work | The A record is not pointing at the server yet, or port 443 is closed |
 | Container keeps restarting | Missing value in `.env` — the app refuses to start half-configured |
 | Bot does not reply | Webhook not verified in Step 10, or `AUTO_REPLY_ENABLED=false` |

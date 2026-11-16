@@ -13,7 +13,8 @@ set -u
 REPO="https://github.com/rrajareddy234-gif/Shiva-sagar-hostel.git"
 BRANCH="fix/remove-unused-imports"
 APP_DIR="/opt/sagar"
-COMPOSE="docker compose -f deploy/docker-compose.lite.yml"
+COMPOSE=(sudo docker compose --env-file "$APP_DIR/.env" \
+    -f "$APP_DIR/deploy/docker-compose.lite.yml")
 
 say() { printf '\n\033[1m==> %s\033[0m\n' "$1"; }
 
@@ -46,7 +47,7 @@ fi
 
 # The group change above only applies to a new login. Re-running this script is
 # safe, so the cleanest fix is to stop and ask for a reconnect.
-if ! docker info >/dev/null 2>&1; then
+if ! sudo docker info >/dev/null 2>&1; then
     cat <<'EOF'
 
     Docker is installed but this shell is not in the docker group yet.
@@ -127,14 +128,14 @@ read -r -p "    Press Enter once .env is filled in and saved... " _
 
 say "6/7  Build and start"
 cd "$APP_DIR" || exit 1
-$COMPOSE up -d --build
+"${COMPOSE[@]}" up -d --build
 
 say "7/7  Database"
-$COMPOSE exec -T postgres psql -U sagar -d sagarpg < db/schema.sql
-$COMPOSE exec -T postgres psql -U sagar -d sagarpg < db/seed.sql
+"${COMPOSE[@]}" exec -T postgres psql -U sagar -d sagarpg < db/schema.sql
+"${COMPOSE[@]}" exec -T postgres psql -U sagar -d sagarpg < db/seed.sql
 
 printf '\n\033[1mDone.\033[0m Check it with:\n\n'
 HOST="$(grep '^SAGAR_HOST=' "$APP_DIR/.env" | cut -d= -f2)"
 echo "    curl https://${HOST}/health"
-echo "    $COMPOSE ps"
+echo "    ${COMPOSE[*]} ps"
 echo

@@ -78,6 +78,13 @@ def test_the_owner_gets_approve_reject_with_no_ai(db, channel):
         provider_message_id="wamid.submit", from_phone=GUEST,
         message_type="interactive", text="", button_id="bk:submit"), ai=None)
 
+    from types import SimpleNamespace
+
+    from core.outbound_worker import run_batch
+    run_batch(db, channel, SimpleNamespace(meta_phone_number_id="test-phone-id",
+                                           owner_phone=OWNER,
+                                           payment_proof_dir="/tmp/sagar-test-proofs"))
+
     owner_prompts = [p for phone, p in channel.prompts if phone == OWNER]
     assert owner_prompts, "the owner was never told about the request"
     titles = [b.title for b in owner_prompts[-1].buttons]

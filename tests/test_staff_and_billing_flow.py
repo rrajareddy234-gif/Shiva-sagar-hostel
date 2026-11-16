@@ -1,7 +1,8 @@
 """Staff, owner lookup and the guest's own bill.
 
-The line these tests defend: staff can record money but never verify it, and a
-guest can only ever see their own bill.
+The line these tests defend: staff are read-only -- they can see the day's work
+but cannot record money, add extras, issue invoices, create or change a booking.
+Only the owner does those things, and a guest can only ever see their own bill.
 """
 
 from __future__ import annotations
@@ -59,11 +60,19 @@ def test_a_staff_member_cannot_see_owner_tools():
     assert "hostel_summary" not in names
 
 
-def test_a_staff_member_can_record_and_add_but_not_verify():
+def test_a_staff_member_is_read_only():
+    """Staff cannot record money, add extras, issue invoices or create bookings."""
     names = [t.name for t in tools.TOOLS if t.allows(security.STAFF)]
-    assert "record_payment" in names
-    assert "add_extra" in names
-    assert "issue_invoice" in names
+    assert "record_payment" not in names
+    assert "add_extra" not in names
+    assert "issue_invoice" not in names
+    assert "create_booking_request" not in names
+
+
+def test_the_owner_alone_can_change_a_booking_or_money():
+    names = {t.name for t in tools.TOOLS if t.allows(security.OWNER)}
+    assert {"record_payment", "add_extra", "issue_invoice",
+            "create_booking_request"} <= names
 
 
 def test_a_customer_cannot_reach_a_staff_tool():
@@ -74,9 +83,10 @@ def test_a_customer_cannot_reach_a_staff_tool():
     assert "who_is" not in names
 
 
-def test_the_owner_sees_every_tool():
-    names = [t.name for t in tools.TOOLS if t.allows(security.OWNER)]
-    assert {"who_is", "record_payment", "add_extra", "issue_invoice"} <= set(names)
+def test_a_customer_can_still_make_their_own_request():
+    """A guest's own booking request is not an owner action; it stays available."""
+    names = [t.name for t in tools.TOOLS if t.allows(security.CUSTOMER)]
+    assert "create_booking_request" in names
 
 
 # --- staff view ------------------------------------------------------------
@@ -109,9 +119,20 @@ def test_a_staff_answer_never_shows_revenue(db):
 
 # --- recording a payment ---------------------------------------------------
 
-def test_recording_a_payment_leaves_it_unverified(db):
+def test_staff_cannot_record_a_payment(db):
+    """Recording money is an owner action; a staff member is refused."""
     request = _confirmed(db)
     ctx = tools.ToolContext(db=db, phone=STAFF, role=security.STAFF)
+    result = tools.execute(ctx, "record_payment",
+                           {"reference": request.reference, "amount": "200",
+                            "method": "UPI"})
+    assert "error" in result
+    assert db.query_one("SELECT count(*) AS n FROM payments")["n"] == 0
+
+
+def test_recording_a_payment_leaves_it_unverified(db):
+    request = _confirmed(db)
+    ctx = tools.ToolContext(db=db, phone=OWNER, role=security.OWNER)
     result = tools.execute(ctx, "record_payment",
                            {"reference": request.reference, "amount": "200",
                             "method": "UPI"})
@@ -125,7 +146,7 @@ def test_recording_a_payment_leaves_it_unverified(db):
 
 def test_an_advance_is_recorded_as_not_refundable(db):
     request = _confirmed(db, terms="ADVANCE", guests=2)
-    ctx = tools.ToolContext(db=db, phone=STAFF, role=security.STAFF)
+    ctx = tools.ToolContext(db=db, phone=OWNER, role=security.OWNER)
     tools.execute(ctx, "record_payment",
                   {"reference": request.reference, "amount": "200",
                    "method": "UPI", "refundable": False})

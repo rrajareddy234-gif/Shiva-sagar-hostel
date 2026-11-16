@@ -24,6 +24,7 @@ Or let scripts/watch_app.sh start it for you.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import subprocess
@@ -110,7 +111,7 @@ def restart_app() -> tuple[bool, str]:
     return done.returncode == 0, " | ".join(lines[-4:])
 
 
-def notify_owner(text: str) -> tuple[bool, str]:
+def notify_owner(text: str, idempotency_key: str | None = None) -> tuple[bool, str]:
     """Send the owner one WhatsApp message through the app's tested code path.
 
     Reusing the app's own channel and inbox means the message is recorded
@@ -118,8 +119,7 @@ def notify_owner(text: str) -> tuple[bool, str]:
     WhatsApp credentials live.
     """
     try:
-        from core import inbox
-        from core.channel.registry import build_channel
+        from core import outbox
         from core.config import Settings, load_dotenv
         from core.db import Database
 
@@ -127,18 +127,12 @@ def notify_owner(text: str) -> tuple[bool, str]:
         settings = Settings.from_env()
         if not settings.owner_phone:
             return False, "OWNER_PHONE is not set, so nobody could be told"
-        channel = build_channel(settings.channel_provider,
-                                **settings.channel_credentials())
-        result = channel.send_text(settings.owner_phone, text)
-        if not result.ok:
-            return False, f"send failed: {result.error}"
-        try:
-            inbox.record_outbound(Database(settings.database_url),
-                                  settings.owner_phone, text,
-                                  result.provider_message_id)
-        except Exception as exc:  # the message went out; the record is a bonus
-            return True, f"sent, but could not record it: {exc}"
-        return True, "sent"
+        db = Database(settings.database_url)
+        key = idempotency_key or f"watchdog:{hashlib.sha256(text.encode()).hexdigest()}"
+        outbox.enqueue(db, recipient=settings.owner_phone, message_type="text",
+                       payload={"text": text}, idempotency_key=key,
+                       source_event_type="watchdog_alert")
+        return True, "queued"
     except Exception as exc:
         return False, f"could not send: {exc}"
 
@@ -188,7 +182,7 @@ def handle_down(state: dict, reason: str, *, restart: bool, notify: bool,
                 "If guests message and get no reply, check the server. "
                 "I will tell you when it is healthy again."
             )
-            ok, detail = notify_owner(message)
+            ok, detail = notify_owner(message, f"watchdog:down:{state['since']}")
             record("notify", stage="down", ok=ok, detail=detail)
             state["notified_down"] = ok
     else:
@@ -226,7 +220,7 @@ def handle_up(state: dict, *, notify: bool) -> dict:
             "Good news: the hostel app is answering again "
             f"(it was down since {down_since})."
         )
-        ok, detail = notify_owner(message)
+        ok, detail = notify_owner(message, f"watchdog:up:{down_since}")
         record("notify", stage="up", ok=ok, detail=detail)
         state["notified_up"] = ok
 

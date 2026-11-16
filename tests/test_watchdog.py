@@ -38,7 +38,7 @@ def _events(state_dir: Path) -> list[dict]:
 def test_a_first_failure_alerts_once_and_restarts(state_dir, monkeypatch):
     sends, restarts = [], []
     monkeypatch.setattr(watchdog, "notify_owner",
-                        lambda text: (sends.append(text), (True, "sent"))[1])
+                        lambda text, key=None: (sends.append(text), (True, "sent"))[1])
     monkeypatch.setattr(watchdog, "restart_app",
                         lambda: (restarts.append(1), (True, "ok"))[1])
 
@@ -55,7 +55,7 @@ def test_a_first_failure_alerts_once_and_restarts(state_dir, monkeypatch):
 def test_a_failure_that_continues_alerts_only_once(state_dir, monkeypatch):
     sends, restarts = [], []
     monkeypatch.setattr(watchdog, "notify_owner",
-                        lambda text: (sends.append(text), (True, "sent"))[1])
+                        lambda text, key=None: (sends.append(text), (True, "sent"))[1])
     monkeypatch.setattr(watchdog, "restart_app",
                         lambda: (restarts.append(1), (True, "ok"))[1])
 
@@ -72,7 +72,7 @@ def test_a_failure_that_continues_alerts_only_once(state_dir, monkeypatch):
 
 def test_a_restart_is_retried_after_the_retry_window(state_dir, monkeypatch):
     restarts = []
-    monkeypatch.setattr(watchdog, "notify_owner", lambda text: (True, "sent"))
+    monkeypatch.setattr(watchdog, "notify_owner", lambda text, key=None: (True, "sent"))
     monkeypatch.setattr(watchdog, "restart_app",
                         lambda: (restarts.append(1), (True, "ok"))[1])
 
@@ -90,7 +90,7 @@ def test_a_restart_is_retried_after_the_retry_window(state_dir, monkeypatch):
 def test_recovery_alerts_once_and_only_after_an_outage(state_dir, monkeypatch):
     sends = []
     monkeypatch.setattr(watchdog, "notify_owner",
-                        lambda text: (sends.append(text), (True, "sent"))[1])
+                        lambda text, key=None: (sends.append(text), (True, "sent"))[1])
 
     # Never went down: no recovery message.
     state = watchdog.handle_up({"status": "up"}, notify=True)
@@ -108,7 +108,7 @@ def test_recovery_alerts_once_and_only_after_an_outage(state_dir, monkeypatch):
 
 def test_the_outage_is_recorded_before_anything_else(state_dir, monkeypatch):
     # Even if the restart and the message both fail, the failure is on disk.
-    monkeypatch.setattr(watchdog, "notify_owner", lambda text: (False, "no net"))
+    monkeypatch.setattr(watchdog, "notify_owner", lambda text, key=None: (False, "no net"))
     monkeypatch.setattr(watchdog, "restart_app", lambda: (False, "no docker"))
 
     watchdog.handle_down({"status": "up"}, "HTTP 503",
