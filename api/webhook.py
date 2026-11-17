@@ -95,11 +95,12 @@ def create_app(settings: Settings, *, channel=None, ai=None) -> FastAPI:
     def health() -> dict:
         try:
             db.query_one("SELECT 1 AS ok")
-            from core import auto_reply, owner_email
+            from core import auto_reply, owner_email, send_policy
             paused = auto_reply.is_paused(
                 db, default_enabled=settings.auto_reply_enabled)
             return {"status": "ok", "database": "ok", "channel": channel.name,
                     "auto_reply": "paused" if paused else "enabled",
+                    "sending": send_policy.blocked_summary(db, settings),
                     "owner_email": "on" if owner_email.enabled() else "off"}
         except Exception as exc:  # pragma: no cover - depends on live database
             log.error("health check failed: %s", exc)

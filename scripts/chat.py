@@ -189,6 +189,9 @@ def _make_settings(dsn: str, owner_phone: str | None) -> Settings:
         ai_provider=base.ai_provider, ai_model=base.ai_model,
         ai_api_key=base.ai_api_key, ai_base_url=base.ai_base_url,
         ai_timeout=base.ai_timeout, staff_phones=base.staff_phones,
+        # A local console tool: nothing leaves the machine, so the send gate is
+        # opened here explicitly rather than inherited from the environment.
+        send_enabled=True,
     )
 
 

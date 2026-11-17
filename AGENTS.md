@@ -946,3 +946,28 @@ owner's, straight from the table -- the rule holds.
 "How many nights?"; it now asks for a check-out date, matching the code. The
 generated `docs/demo.html` was already correct, because it is built from the
 engine.
+
+## The outbound send gate (2026-11-16)
+- New deployment-wide master switch **`SEND_ENABLED`**, default **false** and
+  read from the environment only. A guest WhatsApp message now needs BOTH
+  `SEND_ENABLED=true` AND the owner's pause switch resumed. Owner/staff notices
+  use the separate `OWNER_NOTIFY_ENABLED` (default true) and still need
+  `SEND_ENABLED`; the owner must hear about a booking while guests are paused.
+- The decision lives in `core/send_policy.py`; enforcement is in the **delivery
+  layer**, not only the dispatcher: `core/outbound_worker.run_batch` computes the
+  gate and pushes it into `core/outbox.claim_next` (SQL audience filter), with a
+  per-item backstop and `outbox.release_claim` for anything that slips through.
+  `core/dispatcher.auto_replies_go_out` also checks it early, so a disabled
+  deployment never even builds a guest reply.
+- A blocked row is **never claimed**: it stays `pending`, its attempt is not
+  counted, and there is no retry loop. It goes out once when both keys are on.
+- The dashboard Resume button and the owner's `resume replies` lift only the
+  pause; they can never raise `SEND_ENABLED`. Resume says so plainly when the
+  deployment is not allowed to send. `GET /health` now includes a `sending` line
+  (`blocked: SEND_ENABLED is not true` / `sending on (...)`).
+- Tests: `tests/test_send_gate.py`. Test fixtures opt in with `send_enabled=True`
+  explicitly (conftest `client`, per-file `Settings(...)`, and the
+  `SimpleNamespace` worker shims) because the default is now false. Full suite:
+  **948 passed, 2 skipped**; `ruff` clean.
+- Dev test procedure (use a Meta test number, never a real guest): see
+  `docs/SEND_GATE.md`.

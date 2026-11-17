@@ -226,6 +226,7 @@ def test_env_example_has_no_real_values():
                                # Non-secret defaults, safe to show.
                                "POSTGRES_USER", "POSTGRES_DB", "N8N_USER",
                                "AI_TIMEOUT", "AUTO_REPLY_ENABLED",
+                               "SEND_ENABLED", "OWNER_NOTIFY_ENABLED",
                                "SAGAR_APP_URL", "SCHEDULER_INTERVAL",
                                "SMTP_PORT", "PAYMENT_PROOF_DIR"):
                 continue

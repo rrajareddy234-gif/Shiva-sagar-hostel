@@ -169,36 +169,66 @@ def _esc(value) -> str:
     return html.escape(str(value if value is not None else ""))
 
 
-_CONTROL_ON = """<div class="control">
+_CONTROL = """<div class="control">
   <div>
-    <div class="state on">Automatic replies: ON</div>
-    <div class="hint">Guests are answered automatically. Pausing stops replies
-    to guests only. Messages are still saved, bookings and payments still work,
-    and you are still told about new booking requests.</div>
+    <div class="state {replies_css}">Automatic replies: {replies_state}</div>
+    <div class="hint">{replies_hint}</div>
+    <div class="state {sending_css}">WhatsApp sending: {sending_state}</div>
+    <div class="hint">{sending_hint}</div>
   </div>
   <form method="post" action="/dashboard/auto-reply">
-    <input type="hidden" name="action" value="pause">
-    <button class="pause" type="submit">Pause replies</button>
+    <input type="hidden" name="action" value="{action}">
+    <button class="{button}" type="submit">{label}</button>
   </form>
 </div>"""
 
-_CONTROL_PAUSED = """<div class="control">
-  <div>
-    <div class="state paused">Automatic replies: PAUSED</div>
-    <div class="hint">Guests are not being answered automatically. Messages are
-    still saved, bookings and payments still work, and you are still told about
-    new booking requests.</div>
-  </div>
-  <form method="post" action="/dashboard/auto-reply">
-    <input type="hidden" name="action" value="resume">
-    <button class="resume" type="submit">Resume replies</button>
-  </form>
-</div>"""
+
+def _control_block(*, paused: bool, sending: bool) -> str:
+    """The switch panel: the pause state, and whether sending is allowed at all.
+
+    Two separate facts, shown as two lines on purpose. "Automatic replies: ON" is
+    the database pause; "WhatsApp sending: BLOCKED" is the deployment master
+    switch. The first must never be read as the second -- an owner who sees ON but
+    gets no messages needs to see why, so a blocked deployment says so plainly.
+    """
+    if paused:
+        replies_state, replies_css = "PAUSED", "paused"
+        replies_hint = ("Guests are not being answered automatically. Messages are "
+                        "still saved, bookings and payments still work, and you are "
+                        "still told about new booking requests.")
+        action, label, button = "resume", "Resume replies", "resume"
+    else:
+        replies_state, replies_css = "ON", "on"
+        replies_hint = ("Guests are answered automatically. Pausing stops replies to "
+                        "guests only. Messages are still saved, bookings and payments "
+                        "still work, and you are still told about new booking requests.")
+        action, label, button = "pause", "Pause replies", "pause"
+
+    if sending:
+        sending_state, sending_css = "ENABLED", "on"
+        sending_hint = ("This deployment is allowed to send WhatsApp messages. A guest "
+                        "is messaged only when automatic replies are also ON.")
+    else:
+        sending_state, sending_css = "BLOCKED", "paused"
+        sending_hint = ("Sending is switched off on the server (SEND_ENABLED is not "
+                        "true). No outbound WhatsApp messages can leave this "
+                        "deployment while SEND_ENABLED is disabled. This holds even "
+                        "while automatic replies are ON. Ask whoever runs the server "
+                        "to turn sending on.")
+    return _CONTROL.format(replies_state=replies_state, replies_css=replies_css,
+                           replies_hint=replies_hint, sending_state=sending_state,
+                           sending_css=sending_css, sending_hint=sending_hint,
+                           action=action, label=label, button=button)
 
 
 def render(db, *, now: datetime | None = None, search: str | None = None,
-           notice: str = "", failed: bool = False) -> str:
-    """The whole page as one HTML string."""
+           notice: str = "", failed: bool = False, settings=None) -> str:
+    """The whole page as one HTML string.
+
+    ``settings`` is optional and used only to read the deployment send switch. With
+    no settings the master switch is treated as off, so the page reports sending as
+    BLOCKED rather than guessing it is allowed.
+    """
     now = now or datetime.now().astimezone()
     numbers = dashboard.overview(db, now)
     guests = dashboard.guests(db, search=search)
@@ -219,9 +249,9 @@ def render(db, *, now: datetime | None = None, search: str | None = None,
     if search and not guests:
         count = f"No guest matches {search!r}"
 
-    from core import auto_reply
+    from core import auto_reply, send_policy
     paused = auto_reply.is_paused(db)
-    control = _CONTROL_PAUSED if paused else _CONTROL_ON
+    control = _control_block(paused=paused, sending=send_policy.env_allows(settings))
 
     rows = "".join(
         _ROW.format(name=_esc(g.name), phone=_esc(g.phone), booking=_esc(g.booking),

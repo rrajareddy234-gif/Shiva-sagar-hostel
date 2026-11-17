@@ -133,8 +133,19 @@ def enqueue_many(db: Database, messages: list[dict], *, source_inbound_id: str |
 
 
 def claim_next(db: Database, *, phone_scope: str, owner_phone: str | None = None,
-               lease: timedelta = SEND_LEASE) -> dict | None:
-    """Claim one send with atomic global and recipient gates and per-recipient order."""
+               lease: timedelta = SEND_LEASE,
+               owner_identities: list[str] | None = None,
+               guest_ok: bool = True, owner_ok: bool = True) -> dict | None:
+    """Claim one send with atomic global and recipient gates and per-recipient order.
+
+    ``owner_identities`` turns on the send gate at the query itself: when it is
+    a list of digit strings, only rows whose audience is currently allowed are
+    eligible. A guest row is eligible only when ``guest_ok``, an owner/staff row
+    only when ``owner_ok``. Filtering here -- rather than claiming and dropping
+    -- means a blocked message is never selected, so it cannot spin the worker
+    and cannot starve a message that is allowed to go out. ``None`` disables the
+    filter, which is what the outbox's own tests use.
+    """
     token = str(uuid.uuid4())
     with db.transaction() as cur:
         cur.execute(
@@ -189,6 +200,13 @@ def claim_next(db: Database, *, phone_scope: str, owner_phone: str | None = None
                WHERE o.state='pending' AND o.payload IS NOT NULL
                  AND o.next_attempt_at <= now()
                  AND (o.expires_at IS NULL OR o.expires_at > now())
+                 AND (
+                     %(gated)s = false
+                     OR (regexp_replace(o.recipient, '[^0-9]', '', 'g') = ANY(%(owners)s::text[])
+                         AND %(owner_ok)s)
+                     OR (NOT (regexp_replace(o.recipient, '[^0-9]', '', 'g') = ANY(%(owners)s::text[]))
+                         AND %(guest_ok)s)
+                 )
                  AND NOT EXISTS (
                      SELECT 1 FROM outbound_messages older
                      WHERE older.recipient=o.recipient
@@ -202,7 +220,10 @@ def claim_next(db: Database, *, phone_scope: str, owner_phone: str | None = None
                        AND ((rg.blocked_until IS NOT NULL AND rg.blocked_until > now())
                          OR (rg.lease_until IS NOT NULL AND rg.lease_until > now())))
                ORDER BY o.created_at, o.recipient_sequence
-               LIMIT 1 FOR UPDATE OF o SKIP LOCKED"""
+               LIMIT 1 FOR UPDATE OF o SKIP LOCKED""",
+            {"gated": owner_identities is not None,
+             "owners": owner_identities or [],
+             "guest_ok": guest_ok, "owner_ok": owner_ok},
         )
         item = cur.fetchone()
         if item is None:
@@ -246,6 +267,32 @@ def mark_send_started(db: Database, item: dict) -> bool:
             (item["outbound_id"], item["claim_token"], item["attempt_id"]),
         )
         return cur.rowcount == 1
+
+
+def release_claim(db: Database, item: dict) -> bool:
+    """Return a claimed-but-unsent message to 'pending', undoing the attempt.
+
+    Used by the send gate when a row was claimed and then found to be blocked.
+    The attempt is not counted and the message is not sent, so it is neither
+    marked delivered nor charged against the retry budget. It waits, pending,
+    for the switches; nothing re-selects it in the meantime.
+    """
+    with db.transaction() as cur:
+        cur.execute(
+            """UPDATE outbound_messages
+               SET state='pending', attempt_count=GREATEST(attempt_count - 1, 0),
+                   claim_token=NULL, claimed_until=NULL, attempt_id=NULL,
+                   send_started_at=NULL, next_attempt_at=now(), updated_at=now()
+               WHERE outbound_id=%s AND state='sending' AND claim_token=%s
+                 AND attempt_id=%s""",
+            (item["outbound_id"], item["claim_token"], item["attempt_id"]),
+        )
+        released = cur.rowcount == 1
+        if released:
+            cur.execute(
+                "UPDATE outbound_send_gates SET lease_token=NULL, lease_until=NULL, "
+                "updated_at=now() WHERE lease_token=%s", (item["claim_token"],))
+        return released
 
 
 def _backoff(attempt: int, *, base: int = BASE_BACKOFF_SECONDS,

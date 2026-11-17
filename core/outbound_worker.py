@@ -6,31 +6,54 @@ import json
 import logging
 from pathlib import Path
 
-from core import outbox
-from core.channel.adapter import Button, Flow, Prompt
+from core import outbox, send_policy
+from core.channel.adapter import Button, Flow, Prompt, SendResult
 from core.config import Settings
 from core.db import Database
 
 log = logging.getLogger(__name__)
 
 
+def _owner_identities(settings: Settings) -> list[str]:
+    """The owner and staff numbers as bare digit strings, for the claim gate."""
+    from core.security import normalise_phone
+    numbers = [getattr(settings, "owner_phone", None)]
+    numbers += list(getattr(settings, "staff_phones", None) or ())
+    return [d for d in (normalise_phone(n).lstrip("+") for n in numbers) if d]
+
+
 def run_batch(db: Database, channel, settings: Settings, *, limit: int = 20) -> dict:
     phone_scope = settings.meta_phone_number_id or channel.name
-    completed = failed = unknown = 0
+    completed = failed = unknown = blocked = 0
     claimed_count = 0
+    # The two-key send gate, evaluated once per batch and pushed into the claim
+    # query. A blocked message is never selected, so it cannot be sent and
+    # cannot be retried in a loop; it simply waits, pending, for the switches.
+    # The master switch covers every message, so it gates the owner side too.
+    guest_ok = send_policy.guest_replies_allowed(db, settings)
+    owner_ok = (send_policy.env_allows(settings)
+                and send_policy.owner_notify_allowed(settings))
+    owner_ids = _owner_identities(settings)
     for _ in range(max(0, limit)):
         item = outbox.claim_next(db, phone_scope=phone_scope,
-                                 owner_phone=settings.owner_phone)
+                                 owner_phone=settings.owner_phone,
+                                 owner_identities=owner_ids,
+                                 guest_ok=guest_ok, owner_ok=owner_ok)
         if item is None:
             break
         claimed_count += 1
+        # Belt and braces: the claim already filtered by audience, but a message
+        # that somehow reaches here while its gate is off is held, not sent.
+        if not send_policy.may_send(db, settings, item["recipient"]):
+            outbox.release_claim(db, item)
+            blocked += 1
+            continue
         if item["message_type"] == "booking_notice":
             try:
                 _materialize_booking_notice(db, item)
             except Exception as exc:
-                from core.channel.adapter import SendResult
                 result = SendResult(ok=False, error=type(exc).__name__, certainty="rejected",
-                                   error_code="booking_notice_render_failed", http_status=500)
+                                    error_code="booking_notice_render_failed", http_status=500)
                 state = outbox.complete_attempt(db, item, result, phone_scope=phone_scope,
                                                 owner_phone=settings.owner_phone)
                 failed += state == "failed"
@@ -42,7 +65,6 @@ def run_batch(db: Database, channel, settings: Settings, *, limit: int = 20) -> 
         except Exception as exc:
             # The provider may have received the request before the exception.
             # Unknown is deliberately terminal: no blind duplicate send.
-            from core.channel.adapter import SendResult
             result = SendResult(ok=False, error=type(exc).__name__, certainty="unknown")
             log.exception("outbound worker send raised for outbox item %s",
                           item["outbound_id"])
@@ -56,7 +78,8 @@ def run_batch(db: Database, channel, settings: Settings, *, limit: int = 20) -> 
         elif state == "unknown":
             unknown += 1
     return {"claimed": claimed_count, "accepted": completed,
-            "failed": failed, "unknown": unknown}
+            "failed": failed, "unknown": unknown, "blocked": blocked,
+            "sending": send_policy.blocked_summary(db, settings)}
 
 
 def _materialize_booking_notice(db: Database, item: dict) -> None:

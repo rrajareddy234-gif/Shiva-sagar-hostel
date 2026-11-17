@@ -44,7 +44,7 @@ def _settings():
         timezone="Asia/Kolkata", meta_app_secret=APP_SECRET,
         meta_access_token="t", meta_phone_number_id="1",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
-        ai_model="fake-1", ai_api_key="k", ai_base_url=None)
+        ai_model="fake-1", ai_api_key="k", ai_base_url=None, send_enabled=True)
 
 
 def _dispatch(db, channel, text, ai, sender=GUEST):
@@ -63,7 +63,8 @@ def _flush(db, channel):
     from core.outbound_worker import run_batch
     run_batch(db, channel, SimpleNamespace(meta_phone_number_id="test-phone-id",
                                           owner_phone=OWNER,
-                                          payment_proof_dir="/tmp/sagar-test-proofs"))
+                                          payment_proof_dir="/tmp/sagar-test-proofs",
+                                          send_enabled=True, owner_notify_enabled=True))
 
 
 # --- the outage alert ------------------------------------------------------

@@ -208,7 +208,7 @@ def _worker_settings(owner_phone, proof_dir="payment_proofs"):
         meta_access_token="t", meta_phone_number_id="1",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
         ai_model="gemini-2.5-flash", ai_api_key=None, ai_base_url=None,
-        payment_proof_dir=str(proof_dir))
+        payment_proof_dir=str(proof_dir), send_enabled=True)
 
 
 def test_a_guest_document_failure_is_reported_interactively(db, channel, tmp_path):

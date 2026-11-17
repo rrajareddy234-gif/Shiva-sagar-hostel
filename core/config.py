@@ -83,6 +83,18 @@ class Settings:
     # bookings, availability and payments are untouched -- only the automatic
     # reply to the guest is held back.
     auto_reply_enabled: bool = True
+    # The deployment-wide master switch on outbound WhatsApp messages. False by
+    # default, and read only from the environment, so a fresh clone, a test run
+    # and a development box cannot message anyone by accident. Turning it on is
+    # deliberate and belongs with the real credentials; see docs/SEND_GATE.md.
+    # Sending to a guest needs this AND the owner's live pause switch resumed.
+    send_enabled: bool = False
+    # The separate policy for owner-facing operational notifications (booking
+    # requests, AI outage alerts, scheduled reports). Default True so the owner
+    # is told what is happening; independent of the guest pause, so a booking
+    # request still reaches the owner while guest replies are paused. Sending
+    # any of these still needs send_enabled above.
+    owner_notify_enabled: bool = True
     # The published WhatsApp Flow for the check-in / check-out calendar. Blank
     # until the Flow is published, in which case the booking date steps keep
     # their quick-reply buttons.
@@ -111,6 +123,8 @@ class Settings:
             staff_phones=tuple(p.strip() for p in raw_staff.split(",") if p.strip()),
             payment_proof_dir=_env("PAYMENT_PROOF_DIR", "payment_proofs"),
             auto_reply_enabled=_env_bool("AUTO_REPLY_ENABLED", True),
+            send_enabled=_env_bool("SEND_ENABLED", False),
+            owner_notify_enabled=_env_bool("OWNER_NOTIFY_ENABLED", True),
         )
 
     def channel_credentials(self) -> dict:

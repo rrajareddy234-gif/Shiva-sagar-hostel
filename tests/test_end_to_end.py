@@ -277,7 +277,8 @@ def test_an_outage_does_not_lose_the_reply_or_replay_the_message(client, db):
         owner_phone=OWNER, timezone="Asia/Kolkata", meta_app_secret=APP_SECRET,
         meta_access_token="t", meta_phone_number_id="123456789",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
-        ai_model="gemini-2.5-flash", ai_api_key=None, ai_base_url=None)
+        ai_model="gemini-2.5-flash", ai_api_key=None, ai_base_url=None,
+        send_enabled=True)
     broken_client = TestClient(create_app(settings, channel=broken, ai=None))
 
     send(broken_client, "what are your prices?")

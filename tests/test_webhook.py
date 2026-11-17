@@ -276,7 +276,7 @@ def test_a_rejected_interactive_is_never_resent_as_text(db, seeded, tmp_path):
         meta_phone_number_id="123456789", meta_verify_token=VERIFY_TOKEN,
         ai_provider="gemini", ai_model="gemini-flash-lite-latest",
         ai_api_key=None, ai_base_url=None,
-        payment_proof_dir=str(tmp_path / "proofs"))
+        payment_proof_dir=str(tmp_path / "proofs"), send_enabled=True)
     failing = FakeChannel(fail_interactive=True)
     client = TestClient(create_app(settings, channel=failing, ai=None))
 

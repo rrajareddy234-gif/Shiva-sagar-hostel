@@ -250,6 +250,8 @@ def build_page(out_path: Path) -> Path:
         ai_api_key=settings.ai_api_key, ai_base_url=settings.ai_base_url,
         ai_timeout=settings.ai_timeout, staff_phones=settings.staff_phones,
         payment_proof_dir=tempfile.mkdtemp(prefix="sagar-demo-proofs-"),
+        # The demo captures sends to an in-memory page; nothing reaches a phone.
+        send_enabled=True,
     )
     # No AI on this page: every answer comes from the router and the database,
     # so the page shows exactly the deterministic behaviour, not a model's mood.

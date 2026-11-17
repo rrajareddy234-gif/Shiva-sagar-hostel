@@ -55,7 +55,7 @@ def _settings(*, auto_reply: bool) -> Settings:
         meta_access_token="t", meta_phone_number_id="123456789",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
         ai_model="fake-1", ai_api_key=None, ai_base_url=None,
-        auto_reply_enabled=auto_reply)
+        auto_reply_enabled=auto_reply, send_enabled=True)
 
 
 def _client(settings, channel) -> TestClient:

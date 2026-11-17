@@ -72,7 +72,8 @@ def dashboard_home(request: Request, q: str | None = None,
     if not _authorised(request):
         return HTMLResponse(_login_page())
     page = dashboard_page.render(request.app.state.db, search=q,
-                                 notice=notice, failed=(failed == "1"))
+                                 notice=notice, failed=(failed == "1"),
+                                 settings=request.app.state.settings)
     return HTMLResponse(page)
 
 
@@ -149,7 +150,7 @@ async def dashboard_auto_reply(request: Request) -> Response:
     if not _authorised(request):
         return RedirectResponse("/dashboard", status_code=303)
 
-    from core import auto_reply
+    from core import auto_reply, send_policy
 
     fields = parse_qs((await request.body()).decode())
     action = (fields.get("action") or [""])[0]
@@ -159,6 +160,14 @@ async def dashboard_auto_reply(request: Request) -> Response:
                      "resume. Messages, bookings and payments keep working.", False)
     if action == "resume":
         auto_reply.set_paused(request.app.state.db, False, actor="owner-dashboard")
+        # Resuming lifts the owner's pause, but it can never lift the deployment
+        # master switch. Say so plainly rather than promising a reply that will
+        # not go out -- the guest half of the gate needs SEND_ENABLED too.
+        if not send_policy.env_allows(request.app.state.settings):
+            return _back("Automatic replies are on again, but this deployment is "
+                         "not allowed to send (SEND_ENABLED is not true), so no "
+                         "guest message will go out until that is changed on the "
+                         "server.", False)
         return _back("Automatic replies are on again.", False)
     return _back("Unknown action.", True)
 

@@ -572,7 +572,9 @@ def test_the_owner_is_answered_in_plain_text(db, channel):
 def _worker_settings():
     from types import SimpleNamespace
     return SimpleNamespace(meta_phone_number_id="test-phone-id", owner_phone=None,
-                           payment_proof_dir="/tmp/sagar-test-proofs")
+                           payment_proof_dir="/tmp/sagar-test-proofs",
+                           send_enabled=True, owner_notify_enabled=True,
+                           auto_reply_enabled=True)
 
 
 def _drain(db, channel):

@@ -305,6 +305,10 @@ def client(db, channel, seeded, monkeypatch, tmp_path):
         ai_api_key=None,
         ai_base_url=None,
         payment_proof_dir=str(tmp_path / "payment-proofs"),
+        # Tests exercise the real delivery path against a FakeChannel, so the
+        # master send switch is turned on here explicitly. Production leaves it
+        # off by default; the gate's own tests cover the off case.
+        send_enabled=True,
     )
     return TestClient(create_app(settings, channel=channel, ai=None))
 

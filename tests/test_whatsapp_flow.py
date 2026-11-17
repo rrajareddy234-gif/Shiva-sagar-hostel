@@ -226,7 +226,8 @@ def _flow_client(channel, tmp_path):
         ai_provider="gemini", ai_model="gemini-flash-lite-latest",
         ai_api_key=None, ai_base_url=None,
         payment_proof_dir=str(tmp_path / "proofs"),
-        whatsapp_flow_id=FLOW_ID, whatsapp_flow_calendar_screen=SCREEN)
+        whatsapp_flow_id=FLOW_ID, whatsapp_flow_calendar_screen=SCREEN,
+        send_enabled=True)
     return TestClient(create_app(settings, channel=channel, ai=None))
 
 

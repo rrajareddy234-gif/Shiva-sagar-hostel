@@ -40,11 +40,18 @@ def auto_replies_go_out(db: Database, settings: Settings, from_phone: str) -> bo
     member needs to keep working. Reading the switch from the database means the
     dashboard button and the WhatsApp command take effect immediately, with no
     restart.
+
+    A guest also needs the deployment master switch (``SEND_ENABLED``). This is
+    the dispatcher's early check, so a disabled deployment does not even build a
+    guest reply; the delivery layer (``core.outbound_worker``) enforces the same
+    gate again, which is what actually stops the send.
     """
     role = security.role_for(from_phone, settings.owner_phone, set(settings.staff_phones))
     if role in (security.OWNER, security.STAFF):
         return True
-    from core import auto_reply
+    from core import auto_reply, send_policy
+    if not send_policy.env_allows(settings):
+        return False
     return not auto_reply.is_paused(db, default_enabled=settings.auto_reply_enabled)
 
 
@@ -557,10 +564,24 @@ def _drain(db: Database, channel: ChannelAdapter, *, settings: Settings | None,
 
 
 def _fallback_worker_settings(channel: ChannelAdapter, private_root: str):
-    """Worker settings for direct `_reply` callers that have no app settings."""
+    """Worker settings for direct `_reply` callers that have no app settings.
+
+    This shim is reached only when a caller invokes `_reply`/`_drain` with no
+    `Settings` at all -- a low-level or test caller, never the running app, whose
+    dispatcher always passes real settings. The send gate is still read from the
+    environment here, so even a direct caller cannot message a guest unless
+    `SEND_ENABLED` is explicitly true; the defaults stay closed.
+    """
     from types import SimpleNamespace
-    return SimpleNamespace(meta_phone_number_id=channel.name, owner_phone=None,
-                           payment_proof_dir=private_root)
+
+    from core.config import _env_bool
+    return SimpleNamespace(
+        meta_phone_number_id=channel.name, owner_phone=None, staff_phones=(),
+        payment_proof_dir=private_root,
+        send_enabled=_env_bool("SEND_ENABLED", False),
+        owner_notify_enabled=_env_bool("OWNER_NOTIFY_ENABLED", True),
+        auto_reply_enabled=_env_bool("AUTO_REPLY_ENABLED", True),
+    )
 
 
 def _fit_interactive(answer: str, question: str) -> str:

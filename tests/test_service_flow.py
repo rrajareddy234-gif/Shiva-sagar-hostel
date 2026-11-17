@@ -26,7 +26,7 @@ def _settings():
         timezone="Asia/Kolkata", meta_app_secret=APP_SECRET,
         meta_access_token="t", meta_phone_number_id="1",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
-        ai_model="fake-1", ai_api_key="k", ai_base_url=None)
+        ai_model="fake-1", ai_api_key="k", ai_base_url=None, send_enabled=True)
 
 
 def _step(db, *, bid=None, text="", phone=GUEST):

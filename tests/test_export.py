@@ -178,7 +178,7 @@ def _settings():
         timezone="Asia/Kolkata", meta_app_secret=APP_SECRET,
         meta_access_token="t", meta_phone_number_id="1",
         meta_verify_token=VERIFY_TOKEN, ai_provider="gemini",
-        ai_model="gemini-2.5-flash", ai_api_key=None, ai_base_url=None)
+        ai_model="gemini-2.5-flash", ai_api_key=None, ai_base_url=None, send_enabled=True)
 
 
 def _dispatch(db, channel, text, sender=OWNER):
