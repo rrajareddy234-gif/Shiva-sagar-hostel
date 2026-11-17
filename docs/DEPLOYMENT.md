@@ -134,6 +134,23 @@ Restore, tested as a rehearsal rather than assumed:
 /opt/sagar/deploy/restore.sh backups/sagarpg-2026-11-03.sql.gz
 ```
 
+## Where the data lives
+
+Both the production and the development databases keep their data in a named
+Docker volume, not inside the container. The container can be stopped, removed
+and recreated without losing a single booking. This was checked by destroying the
+container and confirming the rows were still there.
+
+- Production: `pgdata`, from `deploy/docker-compose.yml`
+- Development: `sagarpg-dev-data`, from `deploy/docker-compose.dev.yml`
+
+Never start the database with a bare `docker run`. A container created that way
+has no volume, so its data dies with the container. The volume is the only thing
+standing between a restart and an empty database.
+
+The volume is not a backup. It protects against a restart, not against a deleted
+volume, a corrupt disk or a mistake. The nightly dump is what protects the data.
+
 ## Rolling back
 
 Before any change to a live system:

@@ -75,7 +75,8 @@ def test_availability_after_a_booking(seeded):
     start = datetime(2026, 12, 1, 10, tzinfo=IST)
     booking.create_request(seeded, phone="+919000002001", full_name="Holder",
                            gender="MALE", bed_id="1NA-B1",
-                           check_in_at=start, check_out_at=start + timedelta(days=2))
+                           check_in_at=start, check_out_at=start + timedelta(days=2),
+                           food_included=True)
     result = run(seeded, "check_availability",
                  {"check_in": "2026-12-01", "check_out": "2026-12-03"})
     # A request alone does not confirm, so the bed is still free but held.
@@ -98,22 +99,28 @@ def test_availability_rejects_a_bad_date(seeded):
 
 def test_prices_come_from_the_rate_plans(seeded):
     result = run(seeded, "get_prices")
-    rates = {(r["room_type"], r["stay_mode"]): r for r in result["rates"]}
-    assert rates[("NON_AC", "NIGHT")]["per_day"] == "200.00"
-    assert rates[("NON_AC", "DAY")]["per_day"] == "250.00"
-    assert rates[("AC", "NIGHT")]["per_day"] == "300.00"
-    assert rates[("AC", "DAY")]["per_day"] == "350.00"
-    assert rates[("DORM", "NIGHT")]["per_day"] == "100.00"
-    assert rates[("DORM", "DAY")]["per_day"] == "150.00"
+    rates = {(r["room_type"], r["food_included"], r["stay_mode"]): r for r in result["rates"]}
+    assert rates[("NON_AC", True, "NIGHT")]["per_day"] == "250.00"
+    assert rates[("NON_AC", True, "DAY")]["per_day"] == "350.00"
+    assert rates[("NON_AC", False, "NIGHT")]["per_day"] == "200.00"
+    assert rates[("NON_AC", False, "DAY")]["per_day"] == "250.00"
+    assert rates[("AC", True, "NIGHT")]["per_day"] == "350.00"
+    assert rates[("AC", True, "DAY")]["per_day"] == "450.00"
+    assert rates[("AC", False, "NIGHT")]["per_day"] == "300.00"
+    assert rates[("AC", False, "DAY")]["per_day"] == "350.00"
+    assert rates[("DORM", True, "NIGHT")]["per_day"] == "200.00"
+    assert rates[("DORM", True, "DAY")]["per_day"] == "300.00"
+    assert rates[("DORM", False, "NIGHT")]["per_day"] == "150.00"
+    assert rates[("DORM", False, "DAY")]["per_day"] == "200.00"
 
 
 def test_prices_include_the_extras(seeded):
     result = run(seeded, "get_prices")
     extras = {e["name"]: e["price"] for e in result["extras"]}
-    assert extras["New bedsheet"] == "50.00"
-    assert extras["New towel"] == "100.00"
-    assert extras["New pillow"] == "50.00"
-    assert extras["Locker"] == "30.00"
+    assert extras["Bedsheet"] == "50.00"
+    assert extras["Towel"] == "50.00"
+    assert extras["Pillow"] == "50.00"
+    assert extras["Locker"] == "50.00"
 
 
 def test_prices_are_empty_when_no_plans_exist(db):
@@ -133,49 +140,66 @@ def test_facilities_lists_only_real_room_types(seeded):
 def test_quote_computes_the_total(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-03",
-                  "room_type": "NON_AC"})
+                  "room_type": "NON_AC", "food_included": True})
     assert result["units"] == 2
     assert result["stay_mode"] == "NIGHT"
-    assert result["total"] == "400.00"
+    assert result["total"] == "500.00"
+
+
+def test_quote_requires_the_food_choice(seeded):
+    """Every room type offers both, so a missing food choice is refused."""
+    result = run(seeded, "quote_stay",
+                 {"check_in": "2026-12-01", "check_out": "2026-12-03",
+                  "room_type": "NON_AC"})
+    assert "error" in result
 
 
 def test_quote_for_ac_with_food(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "AC"})
-    assert result["total"] == "300.00"
+                  "room_type": "AC", "food_included": True})
+    assert result["total"] == "350.00"
     assert result["food_included"] is True
 
 
 def test_quote_uses_the_day_rate_when_asked(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "AC", "stay_mode": "DAY"})
+                  "room_type": "AC", "food_included": True, "stay_mode": "DAY"})
     assert result["stay_mode"] == "DAY"
-    assert result["total"] == "350.00"
+    assert result["total"] == "450.00"
 
 
 def test_quote_adds_extras_to_the_total(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "NON_AC",
-                  "extras": {"New towel": 1, "Locker": 1}})
-    # 200 for the night, plus a 100 towel and a 30 locker.
-    assert result["total"] == "330.00"
-    assert result["accommodation_total"] == "200.00"
+                  "room_type": "NON_AC", "food_included": True,
+                  "extras": {"Towel": 1, "Locker": 1}})
+    # 250 for the night, plus a 50 towel and a 50 locker.
+    assert result["total"] == "350.00"
+    assert result["accommodation_total"] == "250.00"
 
 
 def test_quote_refuses_an_unknown_extra(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "NON_AC", "extras": {"Helicopter": 1}})
+                  "room_type": "NON_AC", "food_included": True,
+                  "extras": {"Helicopter": 1}})
     assert "error" in result
+
+
+def test_quote_for_dormitory_with_food(seeded):
+    result = run(seeded, "quote_stay",
+                 {"check_in": "2026-12-01", "check_out": "2026-12-02",
+                  "room_type": "DORM", "food_included": True})
+    assert result["total"] == "200.00"
+    assert result["food_included"] is True
 
 
 def test_quote_fails_clearly_when_no_rate_exists(seeded):
     result = run(seeded, "quote_stay",
                  {"check_in": "2026-12-01", "check_out": "2026-12-02",
-                  "room_type": "DORM", "food_included": True})
+                  "room_type": "SUITE"})
     assert "error" in result
 
 
@@ -184,7 +208,8 @@ def test_quote_fails_clearly_when_no_rate_exists(seeded):
 def test_creating_a_request_makes_a_request_not_a_booking(seeded):
     result = run(seeded, "create_booking_request",
                  {"full_name": "Test Guest", "check_in": "2026-12-01",
-                  "check_out": "2026-12-03", "room_type": "NON_AC"})
+                  "check_out": "2026-12-03", "room_type": "NON_AC",
+                  "food_included": True})
     assert result["status"] == "REQUESTED"
     assert "not a confirmed booking" in result["note"]
     row = seeded.query_one("SELECT status FROM bookings WHERE reference = %s",
@@ -194,7 +219,8 @@ def test_creating_a_request_makes_a_request_not_a_booking(seeded):
 
 def test_creating_a_request_needs_a_name(seeded):
     result = run(seeded, "create_booking_request",
-                 {"check_in": "2026-12-01", "check_out": "2026-12-03"})
+                 {"check_in": "2026-12-01", "check_out": "2026-12-03",
+                  "food_included": True})
     assert "error" in result
     assert seeded.query_one("SELECT count(*) AS n FROM bookings")["n"] == 0
 
@@ -206,11 +232,13 @@ def test_creating_a_request_when_full(seeded):
         req = booking.create_request(seeded, phone=f"+91900000210{i}",
                                      full_name=f"G{i}", gender="MALE", bed_id=bed,
                                      check_in_at=start,
-                                     check_out_at=start + timedelta(days=2))
+                                     check_out_at=start + timedelta(days=2),
+                                     food_included=True)
         booking.approve(seeded, req.booking_id, actor="+919999999999")
     result = run(seeded, "create_booking_request",
                  {"full_name": "Too Late", "check_in": "2026-12-01",
-                  "check_out": "2026-12-03", "room_type": "AC"})
+                  "check_out": "2026-12-03", "room_type": "AC",
+                  "food_included": True})
     assert "error" in result
 
 
@@ -218,7 +246,7 @@ def test_a_request_does_not_promise_a_confirmed_bed(seeded):
     """The note must steer the model away from claiming a confirmed booking."""
     result = run(seeded, "create_booking_request",
                  {"full_name": "Test Guest", "check_in": "2026-12-01",
-                  "check_out": "2026-12-03"})
+                  "check_out": "2026-12-03", "food_included": True})
     assert result["status"] == "REQUESTED"
     assert "not a confirmed booking" in result["note"]
     assert "Do not say the booking is confirmed" in result["note"]
@@ -235,7 +263,8 @@ def test_my_bookings_only_shows_the_callers(seeded):
     start = datetime(2026, 12, 1, 10, tzinfo=IST)
     booking.create_request(seeded, phone="+919000002999", full_name="Someone Else",
                            gender="MALE", bed_id="1NA-B1",
-                           check_in_at=start, check_out_at=start + timedelta(days=1))
+                           check_in_at=start, check_out_at=start + timedelta(days=1),
+                           food_included=True)
     result = run(seeded, "my_bookings", phone="+919000002000")
     assert result["bookings"] == []
 
@@ -245,7 +274,8 @@ def test_my_bookings_finds_my_own(seeded):
     start = datetime(2026, 12, 1, 10, tzinfo=IST)
     booking.create_request(seeded, phone="+919000002000", full_name="Me",
                            gender="MALE", bed_id="1NA-B1",
-                           check_in_at=start, check_out_at=start + timedelta(days=1))
+                           check_in_at=start, check_out_at=start + timedelta(days=1),
+                           food_included=True)
     result = run(seeded, "my_bookings", phone="+919000002000")
     assert len(result["bookings"]) == 1
     assert result["bookings"][0]["status"] == "REQUESTED"
@@ -344,9 +374,9 @@ def test_the_owner_gets_the_owner_tool(seeded):
 def test_a_customer_calling_an_owner_tool_gets_an_error_not_data(seeded):
     from core import handler
     ai = ScriptedAI([[("hostel_summary", {})], "I cannot share that."])
-    outcome = handler.handle_message(seeded, phone="+919000002000",
-                                     text="what is the occupancy right now",
-                                     owner_phone="+919999999999", ai=ai)
+    handler.handle_message(seeded, phone="+919000002000",
+                           text="what is the occupancy right now",
+                           owner_phone="+919999999999", ai=ai)
     tool_messages = [m for m in ai.seen_messages if m.get("role") == "tool"]
     assert "error" in tool_messages[0]["content"]
     assert "total_beds" not in tool_messages[0]["content"]

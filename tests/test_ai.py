@@ -14,8 +14,10 @@ import pytest
 
 from ai import prompts, registry, usage
 from ai.adapter import AIClient, AIResponse, ToolSpec
-from ai.gemini import _parse as parse_gemini, _to_gemini
-from ai.openai_compatible import _parse as parse_openai, _to_openai
+from ai.gemini import _parse as parse_gemini
+from ai.gemini import _to_gemini
+from ai.openai_compatible import _parse as parse_openai
+from ai.openai_compatible import _to_openai
 
 pytestmark = pytest.mark.usefixtures("seeded")
 

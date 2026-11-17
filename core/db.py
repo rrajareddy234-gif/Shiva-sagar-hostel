@@ -9,8 +9,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from collections.abc import Iterator
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
@@ -50,10 +51,9 @@ class Database:
                 raise _translate(exc) from exc
 
     def query_all(self, sql: str, params: tuple | dict = ()) -> list[dict[str, Any]]:
-        with self.connect() as conn:
-            with conn.cursor() as cur:
-                cur.execute(sql, params)
-                return cur.fetchall()
+        with self.connect() as conn, conn.cursor() as cur:
+            cur.execute(sql, params)
+            return cur.fetchall()
 
     def query_one(self, sql: str, params: tuple | dict = ()) -> dict[str, Any] | None:
         rows = self.query_all(sql, params)
@@ -80,6 +80,14 @@ def _translate(exc: Exception) -> Exception:
 
     diag = getattr(exc, "diag", None)
     constraint = getattr(diag, "constraint_name", None) or ""
+
+    # Two guests racing for the last bed can deadlock while both check the
+    # no-overlap constraint. The database protects the bed either way, so this
+    # is a "try again", not a failure -- left untranslated it reached the guest
+    # as a raw database error and their request was silently dropped.
+    if isinstance(exc, (psycopg.errors.DeadlockDetected,
+                        psycopg.errors.SerializationFailure)):
+        return BookingConflict("that bed was taken just now; please try again")
 
     if isinstance(exc, psycopg.errors.ExclusionViolation):
         if constraint == "bookings_no_overlap":

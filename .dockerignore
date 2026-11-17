@@ -1,0 +1,8 @@
+.git
+.env
+backups/
+payment_proofs/
+__pycache__/
+*.pyc
+.pytest_cache/
+.agent_tmp/

@@ -23,7 +23,7 @@ reused, what was tested, what is still missing, and what is needed from the owne
 - **Phase 1 audit** — `docs/PHASE1_AUDIT_AND_ARCHITECTURE.md`
 - **Phase 2 architecture and costs** — same document, plus
   `docs/ADR-001-whatsapp-channel.md` for the WhatsApp channel decision
-- **Phases 3 and 4 build and test** — 345 tests pass against a real PostgreSQL.
+- **Phases 3 and 4 build and test** — 718 tests pass against a real PostgreSQL.
   See `docs/TEST_PLAN.md` for what is covered and what is not.
 - **Phase 5 deployment preparation** — `docs/DEPLOYMENT.md`,
   `docs/OPERATIONS.md`, `docs/COST_REPORT.md`, `deploy/`
@@ -34,18 +34,40 @@ reused, what was tested, what is still missing, and what is needed from the owne
 ```bash
 pip install -r requirements.txt
 
-# A database to develop against
-sudo docker run -d --name sagarpg-pg -e POSTGRES_USER=sagar \
-  -e POSTGRES_PASSWORD=devpass -e POSTGRES_DB=sagarpg -p 5432:5432 postgres:16
+# A database to develop against. Data lives in a named volume, so it survives
+# container restarts and recreations.
+docker compose -f deploy/docker-compose.dev.yml up -d
 
-# Schema and the owner's historic room list
-sudo docker exec -i sagarpg-pg psql -U sagar -d sagarpg < db/schema.sql
-sudo docker exec -i sagarpg-pg psql -U sagar -d sagarpg < db/seed.sql
+# Schema and the room list
+docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+  psql -U sagar -d sagarpg < db/schema.sql
+docker compose -f deploy/docker-compose.dev.yml exec -T postgres \
+  psql -U sagar -d sagarpg < db/seed.sql
 
-python -m pytest            # 303 tests
+python -m pytest            # 605 tests
 cp .env.example .env        # then fill in the values
 uvicorn api.main:app --reload
 ```
+
+## Try it without WhatsApp
+
+`scripts/chat.py` drives the real code path — the same router, pricing engine and
+booking flow the webhook uses — and prints the replies instead of sending them.
+It runs against a throwaway database seeded from `db/seed.sql`, so it can never
+touch real guests or bookings.
+
+```bash
+python scripts/chat.py
+```
+
+Then type as a guest would: `hi`, `what are your prices`, or
+`I want to book from 1 December for 2 nights`. Type a label in brackets to tap a
+button (`[AC]`, `[With food]`) — the simulator sends the button's id, exactly as
+WhatsApp does. `/owner` switches to the owner's number for owner commands,
+`/reset` clears the scratch database, `/quit` leaves.
+
+Do not use `docker run` for the database. A container created that way has no
+volume, so its data is lost the moment the container is recreated.
 
 ## Layout
 
@@ -75,3 +97,26 @@ WhatsApp -> Meta -> webhook -> verify signature -> dedupe -> store
 ```
 
 Most questions never reach a model, which is what keeps the running cost low.
+
+## Pausing automatic replies
+
+The owner can make the system go quiet for a while without taking anything down.
+Messages are still received and saved, bookings, availability and payments keep
+working, and the owner is still told about new booking requests. Only the
+automatic reply to the guest stops.
+
+Three ways, in order of ease:
+
+- **Text the hostel number**: `pause replies` / `resume replies` /
+  `auto reply status`. Plain English works too ("stop replying for now"). Only
+  the owner's number can change it.
+- **The dashboard**: a Pause/Resume button at the top of
+  `/dashboard`, behind the owner's password.
+- **The server**, as a fallback: `AUTO_REPLY_ENABLED=false` in `.env`, then
+  restart the app.
+
+The choice is stored in the database, so it survives a restart and takes effect
+at once — no restart, no file editing. `/health` reports `auto_reply` as
+`enabled` or `paused`, following a change made anywhere. `AUTO_REPLY_ENABLED` in
+`.env` is only the starting value, used before the owner has ever chosen. See
+`docs/OPERATIONS.md`.

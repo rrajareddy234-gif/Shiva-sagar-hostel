@@ -129,14 +129,25 @@ answered, because the AI must never invent a price or a bed.
 2. ~~The rates.~~ **Done.** You confirmed these on 2026-11-03 and they are now
    live in the database and quoted to customers:
 
-   | Room | A night | A day |
+   | Room | With food (night / day) | Without food (night / day) |
    |---|---:|---:|
-   | Non-AC, with food | Rs 200 | Rs 250 |
-   | AC, with food | Rs 300 | Rs 350 |
-   | Dormitory mat, no food | Rs 100 | Rs 150 |
+   | AC | Rs 350 / Rs 450 | Rs 300 / Rs 350 |
+   | Non-AC | Rs 250 / Rs 350 | Rs 200 / Rs 250 |
+   | Dormitory | Rs 200 / Rs 300 | Rs 150 / Rs 200 |
 
-   Extras: new bedsheet Rs 50, new towel Rs 100, new pillow Rs 50, locker Rs 30
-   a month.
+   Extras: bedsheet Rs 50, towel Rs 100, pillow Rs 50, locker Rs 50 a month.
+
+   Monthly (PG) stays:
+
+   | Room | With food (night / full day) | Without food (night / full day) |
+   |---|---:|---:|
+   | AC | Rs 8,000 / Rs 11,000 | Rs 5,000 / Rs 7,000 |
+   | Non-AC | Rs 5,500 / Rs 5,500 | Rs 4,000 / Rs 4,000 |
+   | Dormitory | Rs 4,500 / Rs 4,500 | Rs 3,500 / Rs 3,500 |
+
+   These rates are the same for every guest. There is no concession.
+
+   If a guest wants a lower rate, they must speak to you.
 
 ## The order I suggest
 

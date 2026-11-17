@@ -4,8 +4,12 @@ This is deterministic code and SQL. No AI is involved in deciding whether a bed
 is free. Availability is derived from the authoritative records:
 
   * bookings with status CONFIRMED or CHECKED_IN block the bed
-  * bed_holds with status ACTIVE and an unexpired expires_at block the bed
   * beds in CLEANING, MAINTENANCE or UNAVAILABLE are blocked regardless
+
+There are no temporary holds: a REQUESTED booking does not block a bed, so
+several guests may ask for the same bed and the owner decides. A bed is only
+ever occupied by a confirmed or in-house booking, and nothing is released on a
+clock.
 
 Intervals are half-open, [start, end). A guest checking out at 10:00 and another
 checking in at 10:00 on the same day do not conflict.
@@ -17,9 +21,9 @@ double-booking. Use `sync_bed_status` to keep it tidy.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Iterable
 
 from core.db import Database
 from core.errors import NotFound, ValidationError
@@ -41,11 +45,10 @@ class BedAvailability:
     bed_type: str
     status: str
     booked: bool
-    held: bool
 
     @property
     def available(self) -> bool:
-        return not self.booked and not self.held and self.status not in HARD_BLOCK_STATUSES
+        return not self.booked and self.status not in HARD_BLOCK_STATUSES
 
 
 def _check_window(start: datetime, end: datetime) -> None:
@@ -59,21 +62,22 @@ def _fetch_beds(db: Database, start: datetime, end: datetime,
                 room_type: str | None = None, bed_type: str | None = None) -> list[BedAvailability]:
     sql = f"""
         SELECT b.bed_id, b.room_id, r.room_type, b.bed_type, b.status,
-               EXISTS (
-                   SELECT 1 FROM bookings bk
-                   WHERE bk.bed_id = b.bed_id
-                     AND bk.status = ANY(%(occupying)s)
-                     AND tstzrange(bk.check_in_at, bk.check_out_at, '[)')
-                         && {_WINDOW}
-               ) AS booked,
-               EXISTS (
-                   SELECT 1 FROM bed_holds h
-                   WHERE h.bed_id = b.bed_id
-                     AND h.status = 'ACTIVE'
-                     AND h.expires_at > now()
-                     AND tstzrange(h.start_at, h.end_at, '[)')
-                         && {_WINDOW}
-               ) AS held
+               (
+                   EXISTS (
+                       SELECT 1 FROM booking_beds bb
+                       WHERE bb.bed_id = b.bed_id
+                         AND bb.status = ANY(%(occupying)s)
+                         AND tstzrange(bb.check_in_at, bb.check_out_at, '[)')
+                             && {_WINDOW}
+                   )
+                   OR EXISTS (
+                       SELECT 1 FROM bookings bk
+                       WHERE bk.bed_id = b.bed_id
+                         AND bk.status = ANY(%(occupying)s)
+                         AND tstzrange(bk.check_in_at, bk.check_out_at, '[)')
+                             && {_WINDOW}
+                   )
+               ) AS booked
         FROM beds b
         JOIN rooms r ON r.room_id = b.room_id
         WHERE b.active AND r.active
@@ -121,6 +125,11 @@ def bed_is_available(db: Database, bed_id: str, start: datetime, end: datetime) 
         return False
     conflict = db.query_one(
         f"""
+        SELECT 1 AS hit FROM booking_beds bb
+        WHERE bb.bed_id = %(bed_id)s
+          AND bb.status = ANY(%(occupying)s)
+          AND tstzrange(bb.check_in_at, bb.check_out_at, '[)') && {_WINDOW}
+        UNION ALL
         SELECT 1 AS hit FROM bookings
         WHERE bed_id = %(bed_id)s
           AND status = ANY(%(occupying)s)
@@ -132,16 +141,7 @@ def bed_is_available(db: Database, bed_id: str, start: datetime, end: datetime) 
     )
     if conflict:
         return False
-    held = db.query_one(
-        f"""
-        SELECT 1 AS hit FROM bed_holds
-        WHERE bed_id = %(bed_id)s AND status = 'ACTIVE' AND expires_at > now()
-          AND tstzrange(start_at, end_at, '[)') && {_WINDOW}
-        LIMIT 1
-        """,
-        {"bed_id": bed_id, "start": start, "end": end},
-    )
-    return held is None
+    return True
 
 
 def find_bed(db: Database, start: datetime, end: datetime,
@@ -192,20 +192,11 @@ def availability_summary(db: Database, start: datetime, end: datetime) -> dict:
         "total_beds": len(beds),
         "available_beds": sum(1 for b in beds if b.available),
         "occupied_beds": sum(1 for b in beds if b.booked),
-        "held_beds": sum(1 for b in beds if b.held and not b.booked),
         "blocked_beds": sum(1 for b in beds if b.status in HARD_BLOCK_STATUSES),
         "full_rooms": full_rooms,
         "rooms": sorted(by_room.values(), key=lambda r: r["room_id"]),
         "by_room_type": by_type,
     }
-
-
-def expire_stale_holds(db: Database) -> int:
-    """Mark elapsed holds EXPIRED so beds are never blocked forever."""
-    return db.execute(
-        "UPDATE bed_holds SET status = 'EXPIRED' "
-        "WHERE status = 'ACTIVE' AND expires_at <= now()"
-    )
 
 
 def sync_bed_status(db: Database) -> int:

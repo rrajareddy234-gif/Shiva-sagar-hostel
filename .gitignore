@@ -20,6 +20,10 @@ venv/
 *.sql.gz
 *.dump
 backups/
+*.tar.gz
+
+# Guests' payment screenshots (financial records). Runtime state, never source.
+payment_proofs/
 
 # Deployment
 deploy/.env
@@ -31,3 +35,4 @@ deploy/.env
 
 # Local push token; never commit
 .github-push-token
+.agent_tmp/

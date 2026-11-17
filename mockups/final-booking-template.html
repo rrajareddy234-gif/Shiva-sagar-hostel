@@ -1,0 +1,638 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sagar PG — Final WhatsApp Booking Template</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,800&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --wa-bg:#0b141a; --wa-bubble-in:#202c33; --wa-bubble-out:#005c4b;
+    --wa-text:#e9edef; --wa-muted:#8696a0; --wa-green:#00a884; --wa-green-dark:#008069;
+    --wa-tick:#53bdeb; --saffron:#f2a33c; --terracotta:#c65d3b; --paper:#f5efe6;
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{
+    font-family:"DM Sans",system-ui,sans-serif;
+    background:
+      radial-gradient(1100px 520px at 12% -8%,rgba(242,163,60,.13),transparent 60%),
+      radial-gradient(900px 480px at 88% 6%,rgba(198,93,59,.11),transparent 62%),
+      #14100d;
+    color:var(--paper);min-height:100vh;padding:56px 22px 110px;-webkit-font-smoothing:antialiased;
+  }
+  body::after{
+    content:"";position:fixed;inset:0;pointer-events:none;z-index:0;opacity:.035;
+    background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  header{max-width:1180px;margin:0 auto 14px;position:relative;z-index:1}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.22em;text-transform:uppercase;color:var(--saffron);display:flex;align-items:center;gap:11px;margin-bottom:20px}
+  .eyebrow::before{content:"";width:34px;height:1px;background:var(--saffron);opacity:.65}
+  h1{font-family:"Bricolage Grotesque",serif;font-weight:800;font-size:clamp(2.3rem,6.2vw,4.3rem);line-height:.96;letter-spacing:-.03em;margin-bottom:18px}
+  h1 em{font-style:normal;color:var(--saffron)}
+  .lede{font-size:clamp(1rem,2.1vw,1.16rem);color:#cbbfb2;max-width:62ch;line-height:1.62}
+  .lede strong{color:var(--paper);font-weight:500}
+  .banner{max-width:1180px;margin:30px auto 0;position:relative;z-index:1;border:1px solid rgba(242,163,60,.34);border-left:3px solid var(--saffron);background:linear-gradient(100deg,rgba(242,163,60,.10),rgba(242,163,60,.02));border-radius:12px;padding:17px 21px;display:flex;gap:15px;align-items:flex-start}
+  .banner .dot{flex:0 0 auto;width:9px;height:9px;border-radius:50%;background:var(--saffron);margin-top:7px;box-shadow:0 0 0 4px rgba(242,163,60,.16)}
+  .banner p{font-size:.93rem;line-height:1.58;color:#e3d6c6}
+  .banner b{color:var(--saffron)}
+  /* confirmed facts */
+  .facts{max-width:1180px;margin:34px auto 0;position:relative;z-index:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:1px;background:rgba(245,239,230,.10);border-radius:14px;overflow:hidden}
+  .fact{background:#171310;padding:19px 20px}
+  .fact .k{font-family:var(--mono);font-size:10.5px;letter-spacing:.15em;text-transform:uppercase;color:var(--wa-muted);margin-bottom:9px}
+  .fact .v{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:1.5rem;line-height:1;letter-spacing:-.01em}
+  .fact .v small{font-size:.72rem;font-weight:400;color:var(--wa-muted);letter-spacing:0;display:block;margin-top:7px;font-family:"DM Sans",sans-serif}
+  .fact.ok .v{color:#5fe0b8}
+  /* rules strip */
+  .rules{max-width:1180px;margin:22px auto 0;position:relative;z-index:1;display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:13px}
+  .rule{background:rgba(0,168,132,.06);border:1px solid rgba(0,168,132,.26);border-radius:13px;padding:17px 19px}
+  .rule .rk{font-family:var(--mono);font-size:.63rem;letter-spacing:.13em;text-transform:uppercase;color:var(--wa-green);margin-bottom:8px}
+  .rule .rv{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:1.28rem;line-height:1.1;letter-spacing:-.01em}
+  .rule .rd{font-size:.79rem;color:var(--wa-muted);margin-top:7px;line-height:1.5}
+  .stages{max-width:1180px;margin:74px auto 0;position:relative;z-index:1}
+  .stage-head{display:flex;align-items:baseline;gap:16px;margin:0 0 26px;flex-wrap:wrap}
+  .stage-no{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:2.1rem;color:transparent;-webkit-text-stroke:1.3px var(--saffron);line-height:1;letter-spacing:-.02em}
+  .stage-title{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:1.42rem;letter-spacing:-.015em}
+  .stage-note{font-size:.87rem;color:var(--wa-muted);margin-left:auto;font-family:var(--mono);letter-spacing:.03em}
+  .row{display:flex;gap:34px;flex-wrap:wrap;align-items:flex-start}
+  .phone{flex:0 0 auto;width:328px;background:#0d0f10;border-radius:38px;padding:9px;box-shadow:0 30px 64px -18px rgba(0,0,0,.85),0 0 0 1px rgba(245,239,230,.09),inset 0 1px 0 rgba(255,255,255,.05);position:relative}
+  .phone::before{content:"";position:absolute;top:9px;left:50%;transform:translateX(-50%);width:104px;height:21px;background:#0d0f10;border-radius:0 0 13px 13px;z-index:3}
+  .screen{background:var(--wa-bg);border-radius:30px;overflow:hidden;position:relative;min-height:560px;display:flex;flex-direction:column}
+  .sb{display:flex;justify-content:space-between;align-items:center;padding:9px 19px 3px;font-size:11px;color:var(--wa-text);font-family:var(--mono);letter-spacing:.04em}
+  .sb .r{display:flex;gap:5px;align-items:center;opacity:.9}
+  .bar{background:#1f2c33;padding:9px 13px;display:flex;align-items:center;gap:11px;border-bottom:1px solid rgba(0,0,0,.28)}
+  .bar .back{color:var(--wa-green);font-size:19px;line-height:1;opacity:.85}
+  .avatar{width:35px;height:35px;border-radius:50%;flex:0 0 auto;background:linear-gradient(140deg,var(--saffron),var(--terracotta));display:grid;place-items:center;font-weight:700;font-size:.9rem;color:#231a10;font-family:"Bricolage Grotesque",sans-serif}
+  .bar .who{line-height:1.25;min-width:0}
+  .bar .who b{font-size:.9rem;font-weight:500;display:block}
+  .bar .who span{font-size:.7rem;color:var(--wa-muted)}
+  .bar .acts{margin-left:auto;color:var(--wa-muted);font-size:15px;letter-spacing:3px}
+  .chat{flex:1;padding:15px 13px 19px;display:flex;flex-direction:column;gap:9px;overflow:hidden;
+    background-image:radial-gradient(rgba(245,239,230,.021) 1px,transparent 1px),radial-gradient(rgba(245,239,230,.021) 1px,transparent 1px);
+    background-size:22px 22px;background-position:0 0,11px 11px}
+  .day{align-self:center;font-size:.63rem;color:var(--wa-muted);background:#182229;padding:4px 11px;border-radius:7px;letter-spacing:.05em;text-transform:uppercase;font-family:var(--mono)}
+  .msg{max-width:86%;padding:8px 11px 7px;border-radius:11px;font-size:.83rem;line-height:1.47;position:relative;word-wrap:break-word;animation:pop .42s cubic-bezier(.2,.9,.3,1.2) backwards}
+  .msg.in{background:var(--wa-bubble-in);align-self:flex-start;border-top-left-radius:3px}
+  .msg.out{background:var(--wa-bubble-out);align-self:flex-end;border-top-right-radius:3px}
+  .msg .t{display:block;font-size:.6rem;color:rgba(233,237,239,.55);text-align:right;margin-top:3px;font-family:var(--mono)}
+  .msg.out .t::after{content:" ✓✓";color:var(--wa-tick)}
+  @keyframes pop{from{opacity:0;transform:translateY(9px) scale(.97)}to{opacity:1;transform:none}}
+  .chat > *:nth-child(1){animation-delay:.05s}.chat > *:nth-child(2){animation-delay:.13s}
+  .chat > *:nth-child(3){animation-delay:.21s}.chat > *:nth-child(4){animation-delay:.29s}
+  .chat > *:nth-child(5){animation-delay:.37s}.chat > *:nth-child(6){animation-delay:.45s}
+  .chat > *:nth-child(7){animation-delay:.53s}.chat > *:nth-child(8){animation-delay:.61s}
+  .msg b{font-weight:600}
+  .msg .lbl{color:var(--wa-muted);font-size:.72rem;letter-spacing:.03em}
+  .list{border-top:1px solid rgba(245,239,230,.10);margin:9px -11px -7px;border-radius:0 0 11px 11px;overflow:hidden}
+  .list .hdr{font-size:.66rem;color:var(--wa-muted);padding:8px 11px 6px;letter-spacing:.07em;text-transform:uppercase;font-family:var(--mono)}
+  .list .it{padding:9px 11px;border-top:1px solid rgba(245,239,230,.07);display:flex;gap:10px;align-items:center}
+  .list .it .n{font-family:var(--mono);font-size:.68rem;color:var(--wa-muted);width:13px;flex:0 0 auto}
+  .list .it .tx{font-size:.8rem;line-height:1.3}
+  .list .it .tx small{display:block;color:var(--wa-muted);font-size:.68rem;margin-top:2px}
+  .btns{display:flex;gap:1px;margin:9px -11px -7px;border-top:1px solid rgba(245,239,230,.10);border-radius:0 0 11px 11px;overflow:hidden}
+  .btns button{flex:1;background:transparent;border:0;color:var(--wa-green);font:inherit;font-size:.78rem;padding:10px 6px;cursor:default;font-family:"DM Sans",sans-serif;font-weight:500}
+  .btns button + button{border-left:1px solid rgba(245,239,230,.10)}
+  .btns button.ok{color:#7ee2a8}.btns button.no{color:#ff8a7a}.btns button.more{color:var(--wa-muted)}
+  .typebar{padding:7px 11px 12px;background:var(--wa-bg);display:flex;gap:9px;align-items:center}
+  .typebar .f{flex:1;background:#1f2c33;border-radius:19px;padding:9px 14px;font-size:.78rem;color:var(--wa-muted)}
+  .typebar .send{width:35px;height:35px;border-radius:50%;background:var(--wa-green-dark);display:grid;place-items:center;color:#fff;font-size:15px}
+  /* bill */
+  .bill{margin-top:9px;background:rgba(0,0,0,.20);border-radius:9px;padding:10px 11px;font-size:.78rem}
+  .bill .l{display:flex;justify-content:space-between;gap:12px;padding:3px 0;color:#d5e5df}
+  .bill .l.hd{color:var(--wa-muted);font-size:.68rem;letter-spacing:.08em;text-transform:uppercase;font-family:var(--mono);padding-bottom:6px}
+  .bill .l.sub{color:#9fb5ad;font-size:.73rem;padding-left:9px}
+  .bill .l.tt{border-top:1px solid rgba(245,239,230,.16);margin-top:6px;padding-top:7px;font-weight:700;color:#fff}
+  .bill .l.adv{color:var(--saffron);font-weight:600}
+  .bill .l.bal{color:#8fd6ff}
+  .qr{margin:11px auto 4px;width:126px;height:126px;background:#fff;border-radius:9px;padding:9px;display:grid;grid-template-columns:repeat(11,1fr);grid-template-rows:repeat(11,1fr);gap:2px}
+  .qr i{background:#111;border-radius:1px}.qr i.w{background:#fff}
+  .qrwrap{text-align:center}
+  .qrwrap .cap{font-size:.68rem;color:var(--wa-muted);margin-top:7px}
+  /* payment option cards */
+  .opt{margin-top:9px;border:1px solid rgba(245,239,230,.14);border-radius:10px;padding:11px 12px;background:rgba(0,0,0,.22)}
+  .opt.pick{border-color:rgba(0,168,132,.55);background:rgba(0,168,132,.10)}
+  .opt .oh{display:flex;justify-content:space-between;align-items:baseline;gap:10px}
+  .opt .ot{font-weight:700;font-size:.85rem;color:#fff}
+  .opt .oa{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:1.02rem;color:var(--saffron)}
+  .opt .od{font-size:.72rem;color:var(--wa-muted);margin-top:5px;line-height:1.45}
+  .say{flex:1 1 300px;min-width:280px;background:rgba(245,239,230,.035);border:1px solid rgba(245,239,230,.09);border-radius:15px;padding:23px 25px}
+  .say h3{font-family:"Bricolage Grotesque",sans-serif;font-weight:600;font-size:1.08rem;margin-bottom:13px;letter-spacing:-.01em}
+  .say ul{list-style:none;display:flex;flex-direction:column;gap:11px}
+  .say li{font-size:.875rem;line-height:1.55;color:#cfc2b4;padding-left:21px;position:relative}
+  .say li::before{content:"";position:absolute;left:0;top:7px;width:7px;height:7px;border-radius:2px;background:var(--saffron);opacity:.8}
+  .say li b{color:var(--paper);font-weight:600}
+  .say .why{margin-top:17px;padding-top:15px;border-top:1px dashed rgba(245,239,230,.14);font-size:.82rem;color:var(--wa-muted);line-height:1.55}
+  .say .why b{color:var(--saffron);font-weight:600}
+  .tag{display:inline-block;font-family:var(--mono);font-size:.63rem;letter-spacing:.11em;text-transform:uppercase;padding:3px 9px;border-radius:99px;margin-bottom:13px}
+  .tag.built{background:rgba(0,168,132,.15);color:#5fe0b8;border:1px solid rgba(0,168,132,.34)}
+  .tag.new{background:rgba(242,163,60,.14);color:var(--saffron);border:1px solid rgba(242,163,60,.34)}
+  /* math callout */
+  .math{max-width:1180px;margin:64px auto 0;position:relative;z-index:1;background:linear-gradient(160deg,rgba(0,168,132,.09),rgba(0,168,132,.02));border:1px solid rgba(0,168,132,.30);border-radius:17px;padding:31px 33px}
+  .math h2{font-family:"Bricolage Grotesque",sans-serif;font-weight:800;font-size:1.62rem;letter-spacing:-.02em;margin-bottom:8px}
+  .math h2 span{color:#5fe0b8}
+  .math > p{font-size:.94rem;color:#c3d6ce;line-height:1.6;max-width:76ch;margin-bottom:22px}
+  .work{display:grid;grid-template-columns:repeat(auto-fit,minmax(232px,1fr));gap:13px}
+  .wk{background:rgba(0,0,0,.26);border-radius:12px;padding:16px 18px;border:1px solid rgba(245,239,230,.08)}
+  .wk .wn{font-family:var(--mono);font-size:.63rem;color:var(--wa-green);letter-spacing:.13em;text-transform:uppercase;margin-bottom:9px}
+  .wk .wf{font-family:var(--mono);font-size:.82rem;color:#d5e5df;line-height:1.75}
+  .wk .wv{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:1.24rem;margin-top:10px;color:var(--saffron)}
+  .wk .wv.blue{color:#8fd6ff}
+  table{width:100%;border-collapse:collapse;font-size:.875rem}
+  th,td{text-align:left;padding:12px 13px;border-bottom:1px solid rgba(245,239,230,.10)}
+  th{font-family:var(--mono);font-size:.66rem;letter-spacing:.13em;text-transform:uppercase;color:var(--wa-muted);font-weight:400}
+  td:first-child{color:var(--paper);font-weight:500}
+  .db{color:#5fe0b8;font-family:var(--mono);font-size:.82rem}
+  tr.hi{background:rgba(198,93,59,.09)}
+  .confirm{max-width:1180px;margin:70px auto 0;position:relative;z-index:1;border:1px solid rgba(242,163,60,.28);background:rgba(242,163,60,.05);border-radius:17px;padding:31px 33px}
+  .confirm h2{font-family:"Bricolage Grotesque",sans-serif;font-weight:700;font-size:1.42rem;letter-spacing:-.02em;margin-bottom:7px}
+  .confirm > p{font-size:.9rem;color:#dccdba;line-height:1.6;margin-bottom:21px}
+  .qlist{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:13px}
+  .q{background:rgba(0,0,0,.24);border-radius:12px;padding:16px 18px;border:1px solid rgba(245,239,230,.07)}
+  .q .qn{font-family:var(--mono);font-size:.66rem;color:var(--saffron);letter-spacing:.13em;text-transform:uppercase;margin-bottom:8px}
+  .q .qt{font-size:.92rem;line-height:1.5;color:var(--paper)}
+  .q .qo{margin-top:9px;font-size:.79rem;color:var(--wa-muted)}
+  .q .qo code{font-family:var(--mono);color:var(--saffron);font-size:.78rem}
+  footer{max-width:1180px;margin:64px auto 0;position:relative;z-index:1;text-align:center;color:var(--wa-muted);font-size:.83rem;line-height:1.7}
+  footer b{color:var(--paper);font-weight:500}
+  @media(max-width:760px){
+    body{padding:34px 15px 74px}
+    .phone{width:100%;max-width:328px}
+    .row{gap:22px}.stage-note{margin-left:0;width:100%}
+    .math,.confirm{padding:23px 19px}
+    th,td{padding:10px 8px;font-size:.8rem}.tblwrap{overflow-x:auto}
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="eyebrow">Sagar PG · Macherla · final template</div>
+  <h1>Two guests, three nights,<br><em>one clear bill</em>.</h1>
+  <p class="lede">
+    This is the final flow with your three new rules built in:
+    <strong>multiple guests</strong>, <strong>multiple days</strong>, and a choice between
+    a <strong>₹100-per-guest reservation</strong> or <strong>paying in full</strong>.
+    Every figure is computed by your own pricing engine. Nothing is invented.
+  </p>
+</header>
+
+<div class="banner">
+  <span class="dot"></span>
+  <p>
+    <b>Mockup, not a screenshot.</b> Static HTML drawn to look like WhatsApp so you can
+    judge the flow before it is built. The real version uses genuine WhatsApp interactive
+    lists, buttons and Flows. Buttons here send nothing.
+  </p>
+</div>
+
+<div class="facts">
+  <div class="fact ok"><div class="k">Rooms</div><div class="v">8<small>1NA 2AC 3AC 4NA 5NA 6NA 7NA DORM</small></div></div>
+  <div class="fact ok"><div class="k">Beds</div><div class="v">68<small>confirmed final</small></div></div>
+  <div class="fact ok"><div class="k">AC rooms</div><div class="v">2<small>2AC · 7 beds · 3AC · 10 beds</small></div></div>
+  <div class="fact ok"><div class="k">Dormitory</div><div class="v">20<small>confirmed final</small></div></div>
+  <div class="fact ok"><div class="k">Room 7NA</div><div class="v">4<small>confirmed final</small></div></div>
+</div>
+
+<div class="rules">
+  <div class="rule">
+    <div class="rk">Rule 1 · per guest</div>
+    <div class="rv">₹100 × each guest</div>
+    <div class="rd">2 guests → ₹200 to reserve. Read from your settings, not typed by the AI.</div>
+  </div>
+  <div class="rule">
+    <div class="rk">Rule 2 · per night</div>
+    <div class="rv">Rate × nights × guests</div>
+    <div class="rd">Every night is charged, for every guest. The bill shows the working, not just a total.</div>
+  </div>
+  <div class="rule">
+    <div class="rk">Rule 3 · two ways to pay</div>
+    <div class="rv">Reserve, or pay in full</div>
+    <div class="rd">The guest chooses. Either way, you still approve before the bed is confirmed.</div>
+  </div>
+</div>
+
+<!-- 01 WELCOME -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">01</span><span class="stage-title">Welcome &amp; the one menu</span><span class="stage-note">guest sends “Hi”</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:41</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <span class="day">Today</span>
+        <div class="msg in">Welcome to <b>Sagar PG Hostel!</b> 🏠<span class="t">9:41</span></div>
+        <div class="msg in">Comfortable stay in Macherla with food, Wi-Fi, hot water and 24/7 security.<span class="t">9:41</span></div>
+        <div class="msg in">How can we help you today?
+          <div class="list">
+            <div class="hdr">Choose an option</div>
+            <div class="it"><span class="n">1</span><span class="tx">🏠 Rooms &amp; Prices<small>AC, non-AC, dorm</small></span></div>
+            <div class="it"><span class="n">2</span><span class="tx">🛏️ Check Availability<small>beds free right now</small></span></div>
+            <div class="it"><span class="n">3</span><span class="tx">📍 Location &amp; Directions</span></div>
+            <div class="it"><span class="n">4</span><span class="tx">🍽️ Food &amp; Amenities</span></div>
+            <div class="it"><span class="n">5</span><span class="tx">⭐ Guest Reviews</span></div>
+            <div class="it"><span class="n">6</span><span class="tx">📅 Book a Room<small>about a minute</small></span></div>
+            <div class="it"><span class="n">7</span><span class="tx">🧾 My Bookings<small>your status</small></span></div>
+            <div class="it"><span class="n">8</span><span class="tx">👨‍💼 Talk to Staff</span></div>
+          </div><span class="t">9:41</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">your final menu</span>
+      <h3>One list, eight choices</h3>
+      <ul>
+        <li>Exactly the seven you approved, in your order, plus <b>My Bookings</b> so a guest can check their own status — nothing renamed, nothing dropped.</li>
+        <li>WhatsApp allows <b>10 rows</b> in one list, so all eight fit in a single message — no burst of eight messages.</li>
+        <li><b>Guest Reviews is in</b>, as you asked. It shows the real reviews you have; if you have none yet it says so honestly instead of showing a blank card.</li>
+        <li><b>My Bookings</b> shows a guest only their own bookings, never anyone else's. With none yet, it says so plainly.</li>
+        <li>Labels are your words: <b>Rooms &amp; Prices</b>, <b>Check Availability</b>, <b>Location &amp; Directions</b>, <b>Food &amp; Amenities</b>, <b>Guest Reviews</b>, <b>Book a Room</b>, <b>Talk to Staff</b>.</li>
+      </ul>
+      <div class="why"><b>Why a list:</b> one card, one tap. Eight separate messages bury the menu and buzz the phone eight times.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 02 ROOMS & PRICES -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">02</span><span class="stage-title">Rooms &amp; prices, from the rate card</span><span class="stage-note">guest taps “Rooms &amp; Prices”</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:42</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg out">Rooms &amp; Prices<span class="t">9:42</span></div>
+        <div class="msg in">Our rates, <b>per bed per night</b>:
+          <div class="bill">
+            <div class="l hd"><span>Room</span><span>No food · With food</span></div>
+            <div class="l"><span>AC</span><span>₹300 · ₹350</span></div>
+            <div class="l"><span>Non-AC</span><span>₹200 · ₹250</span></div>
+            <div class="l"><span>Dormitory</span><span>₹150 · ₹200</span></div>
+          </div><span class="t">9:42</span></div>
+        <div class="msg in">Staying a month? AC from <b>₹5,000</b>, Non-AC from <b>₹4,000</b>, Dorm from <b>₹3,500</b>.
+          <div class="btns"><button class="ok">🛏️ Check beds</button><button class="more">📅 Book</button></div><span class="t">9:42</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">already built</span>
+      <h3>Prices from the rate card, never from the AI</h3>
+      <ul>
+        <li>Every figure comes from <b>your database</b> and is computed by <b>core/pricing.py</b>.</li>
+        <li>Your rule holds: the bot <b>never guesses an amount</b>.</li>
+        <li>Change a rate once and <b>every answer updates</b>.</li>
+        <li>Confirmed final rooms: <b>8 rooms, 68 beds</b>, dorm is <b>20</b>, and <b>7NA</b> exists.</li>
+      </ul>
+      <div class="why"><b>The most important safety property in the system.</b> A booking bot that invents a price is worse than no bot.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 03 AVAILABILITY -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">03</span><span class="stage-title">Availability, bed by bed</span><span class="stage-note">guest taps “Check Availability”</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:43</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg out">Check Availability<span class="t">9:43</span></div>
+        <div class="msg in">Right now <b>61 of 68 beds</b> are free.
+          <div class="bill">
+            <div class="l hd"><span>Type</span><span>Free</span></div>
+            <div class="l"><span>AC rooms</span><span>17</span></div>
+            <div class="l"><span>Non-AC rooms</span><span>31</span></div>
+            <div class="l"><span>Dormitory</span><span>13</span></div>
+          </div><span class="t">9:43</span></div>
+        <div class="msg in">Tell me your <b>check-in date</b>, <b>check-out date</b> and <b>how many guests</b>, and I will hold beds while you decide.
+          <div class="btns"><button class="ok">📅 Book beds</button></div><span class="t">9:43</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">already built</span>
+      <h3>Real beds, real dates</h3>
+      <ul>
+        <li>Availability is <b>per individual bed</b> against real dates, with a no-overlap rule the database enforces.</li>
+        <li>Two guests cannot be sold the same bed — the database <b>physically refuses it</b>.</li>
+        <li>Beds can be <b>held temporarily</b> while the guest decides, then released automatically.</li>
+        <li>Counts shown are illustrative; the live bot reports the true number at that second.</li>
+      </ul>
+      <div class="why"><b>“Do you have a bed?” is the question that loses money when answered wrong.</b></div>
+    </div>
+  </div>
+</section>
+
+<!-- 04 BOOK: ROOM -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">04</span><span class="stage-title">Booking — room, by tapping</span><span class="stage-note">guest taps “Book a Room”</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:44</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg out">Book a Room<span class="t">9:44</span></div>
+        <div class="msg in">Happy to help. <b>Which room would you like?</b>
+          <div class="btns"><button>AC</button><button>Non-AC</button><button>Dorm</button></div><span class="t">9:44</span></div>
+        <div class="msg out">AC<span class="t">9:44</span></div>
+        <div class="msg in"><b>With food, or without?</b>
+          <div class="btns"><button>With food</button><button>No food</button></div><span class="t">9:44</span></div>
+        <div class="msg out">With food<span class="t">9:44</span></div>
+        <div class="msg in">AC with food is <b>₹350</b> a night, per bed.<span class="t">9:44</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">already built</span>
+      <h3>Two taps and the room is chosen</h3>
+      <ul>
+        <li>Room and food are chosen by <b>tapping</b>. The guest types only dates.</li>
+        <li>The bot will <b>not</b> price a booking that omits food — both options are offered, so it can never be assumed.</li>
+        <li><b>Sharing type is dropped.</b> The bed you assign already belongs to a room, so a separate “5 sharing?” step can only contradict it.</li>
+      </ul>
+      <div class="why"><b>Deliberate change from your plan:</b> the sharing question is redundant and creates mismatches.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 05 GUESTS + DATES -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">05</span><span class="stage-title">How many guests, which dates</span><span class="stage-note">your new requirement</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:45</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg in">How many guests will be staying?
+          <div class="btns"><button>1</button><button>2</button><button>3+</button></div><span class="t">9:45</span></div>
+        <div class="msg out">2<span class="t">9:45</span></div>
+        <div class="msg in">Two guests. <b>Check-in date?</b><span class="t">9:45</span></div>
+        <div class="msg out">12 Nov<span class="t">9:45</span></div>
+        <div class="msg in"><b>When would you like to check out?</b>
+          <div class="btns"><button>1 night</button><button>2 nights</button><button>3 nights</button><button>1 week</button></div><span class="t">9:45</span></div>
+        <div class="msg out">3 nights<span class="t">9:45</span></div>
+        <div class="msg in">Got it — <b>2 guests, 12 to 15 Nov</b>. Let me work out the bill.<span class="t">9:45</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">already built</span>
+      <h3>Guests and dates are counted, not assumed</h3>
+      <ul>
+        <li>The bot collects <b>guests</b>, <b>check-in</b> and <b>check-out</b> — the dates the bill needs.</li>
+        <li>Dates accept free text: <b>“12 Nov”</b>, <b>“tomorrow”</b>, <b>“12/11”</b>. The check-out buttons are shortcuts for a date, not a separate question.</li>
+        <li>Nights and guests are offered as <b>quick buttons</b> first, so most guests never type a number.</li>
+        <li>The bot repeats the three values back <b>before</b> pricing, so a mistyped date is caught early.</li>
+      </ul>
+      <div class="why"><b>This is where multiple guests and multiple days enter the bill.</b> Both drive the arithmetic in the next screen.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 06 BILL -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">06</span><span class="stage-title">The bill, with the working shown</span><span class="stage-note">nights × guests</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:46</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg in">Here is your bill:
+          <div class="bill">
+            <div class="l hd"><span>Item</span><span>Amount</span></div>
+            <div class="l"><span>AC with food · ₹350/night</span><span></span></div>
+            <div class="l sub"><span>3 nights × 2 guests</span><span>₹2,100</span></div>
+            <div class="l tt"><span>Total</span><span>₹2,100</span></div>
+          </div>
+          <span class="lbl">12 Nov → 15 Nov · 3 nights · 2 guests</span>
+          <span class="t">9:46</span></div>
+        <div class="msg in">You have two ways to pay:
+          <div class="opt pick">
+            <div class="oh"><span class="ot">Reserve now</span><span class="oa">₹200</span></div>
+            <div class="od">₹100 per guest. Locks your beds. Pay the rest at check-in.</div>
+          </div>
+          <div class="opt">
+            <div class="oh"><span class="ot">Pay in full</span><span class="oa">₹2,100</span></div>
+            <div class="od">Nothing to pay on arrival. Refundable per our cancellation policy.</div>
+          </div>
+          <div class="btns"><button class="ok">₹200 reserve</button><button>₹2,100 full</button></div>
+          <span class="t">9:46</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag new">your new rules</span>
+      <h3>Three numbers, computed and shown</h3>
+      <ul>
+        <li><b>Multiple days:</b> 3 nights are charged, not one. The bill shows <b>“3 nights × 2 guests”</b> so the total is never a mystery.</li>
+        <li><b>Multiple guests:</b> the nightly rate is charged <b>per guest</b>. Two guests means two beds and two lots of ₹350.</li>
+        <li><b>Reservation = ₹100 × guests.</b> Two guests → <b>₹200</b>. The bot multiplies; it does not guess.</li>
+        <li><b>Full payment</b> is offered beside it, so a guest who wants to settle everything can.</li>
+      </ul>
+      <div class="why"><b>Both paths still need your approval.</b> Paying — either way — does not confirm the booking. That is your rule.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 07 PAY -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">07</span><span class="stage-title">Pay — and the QR adjusts to the choice</span><span class="stage-note">₹200 or ₹2,100</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:47</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg out">₹200 reserve<span class="t">9:47</span></div>
+        <div class="msg in">Reservation of <b>₹200</b> (₹100 × 2 guests).
+          <div class="qrwrap">
+            <div class="qr">
+              <i></i><i></i><i></i><i></i><i class="w"></i><i></i><i></i><i></i><i></i><i class="w"></i><i></i>
+              <i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i>
+              <i></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i></i>
+              <i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i>
+              <i></i><i></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i></i><i></i>
+              <i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i>
+              <i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i>
+              <i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i></i><i></i>
+              <i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i><i></i>
+              <i class="w"></i><i></i><i></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i class="w"></i><i></i>
+              <i></i><i></i><i class="w"></i><i></i><i></i><i class="w"></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <div class="cap">Sample QR · your real UPI code here</div>
+          </div>
+          <span class="t">9:47</span></div>
+        <div class="msg in">After paying, send the <b>transaction reference</b> or a screenshot.
+          <div class="btns"><button class="ok">✅ I have paid ₹200</button><button class="more">❓ Help</button></div><span class="t">9:47</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag new">your new rules</span>
+      <h3>One QR, two amounts — driven by the choice</h3>
+      <ul>
+        <li>Chose <b>reserve</b> → the QR and the button ask for <b>₹200</b>.</li>
+        <li>Chose <b>full</b> → the same QR asks for <b>₹2,100</b>, and the balance becomes <b>₹0</b>.</li>
+        <li>The amount is always <b>computed</b>, never typed into the message by hand.</li>
+        <li>The guest confirms with a tap and sends the reference; you verify the money actually landed.</li>
+      </ul>
+      <div class="why"><b>A screenshot is not proof.</b> The request says “₹200 claimed”. It becomes verified only when you see it in your account.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 08 OWNER -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">08</span><span class="stage-title">You approve, on your phone</span><span class="stage-note">your screen</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:48</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar" style="background:linear-gradient(140deg,#c65d3b,#8a3d24)">SP</span><span class="who"><b>Sagar PG — Owner</b><span>you</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg in"><b>🔔 NEW BOOKING REQUEST</b>
+          <div class="bill">
+            <div class="l"><span>Booking ID</span><span>SGP-001</span></div>
+            <div class="l"><span>Guest</span><span>Ravi Kumar</span></div>
+            <div class="l"><span>Phone</span><span>+91 98765 43210</span></div>
+            <div class="l"><span>Room</span><span>AC · with food</span></div>
+            <div class="l"><span>Guests</span><span>2</span></div>
+            <div class="l"><span>Dates</span><span>12–15 Nov · 3 nights</span></div>
+            <div class="l tt"><span>Total</span><span>₹2,100</span></div>
+            <div class="l adv"><span>Reservation claimed</span><span>₹200</span></div>
+            <div class="l bal"><span>Balance at check-in</span><span>₹1,900</span></div>
+            <div class="l"><span>Payment</span><span>Awaiting verification</span></div>
+            <div class="l"><span>Beds free</span><span>17 AC</span></div>
+          </div>
+          <div class="btns"><button class="ok">✅ Approve</button><button class="no">✖ Reject</button><button class="more">⋯ Details</button></div>
+          <span class="t">9:48</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag new">to build — medium</span>
+      <h3>Approve/Reject moves into WhatsApp</h3>
+      <ul>
+        <li>The <b>decision logic already exists</b>: approving assigns beds, records the payment and locks the dates.</li>
+        <li>What is missing is doing it from a <b>WhatsApp button</b>. The guest button plumbing exists; this extends it to you.</li>
+        <li><b>Approve</b> → beds assigned, booking confirmed, guest notified. <b>Reject</b> → guest told, with a reason.</li>
+        <li>The request shows <b>both figures</b>: what was claimed, and what will still be owed at check-in.</li>
+      </ul>
+      <div class="why"><b>You keep final authority.</b> Nothing confirms without your tap — payment alone never books a bed.</div>
+    </div>
+  </div>
+</section>
+
+<!-- 09 CONFIRMED -->
+<section class="stages">
+  <div class="stage-head"><span class="stage-no">09</span><span class="stage-title">Confirmed — only after you approve</span><span class="stage-note">guest's screen</span></div>
+  <div class="row">
+    <div class="phone"><div class="screen">
+      <div class="sb"><span>9:49</span><span class="r">▮▮▮ ᯤ ▰</span></div>
+      <div class="bar"><span class="back">‹</span><span class="avatar">SP</span><span class="who"><b>Sagar PG Hostel</b><span>online</span></span><span class="acts">⋮</span></div>
+      <div class="chat">
+        <div class="msg in"><b>Booking Confirmed! 🎉</b><br><span class="lbl">SAGAR PG HOSTEL · Macherla</span>
+          <div class="bill">
+            <div class="l hd"><span>SGP-001</span><span>Confirmed</span></div>
+            <div class="l"><span>Guest</span><span>Ravi Kumar</span></div>
+            <div class="l"><span>Room</span><span>AC · with food</span></div>
+            <div class="l"><span>Beds</span><span>2AC-B3, 2AC-B4</span></div>
+            <div class="l"><span>Guests</span><span>2</span></div>
+            <div class="l"><span>Check-in</span><span>12 Nov, 12:00</span></div>
+            <div class="l"><span>Check-out</span><span>15 Nov, 11:00</span></div>
+            <div class="l tt"><span>Total</span><span>₹2,100</span></div>
+            <div class="l"><span>Reservation paid</span><span>₹200</span></div>
+            <div class="l adv"><span>Balance</span><span>₹1,900</span></div>
+          </div><span class="t">9:49</span></div>
+        <div class="msg in">Approved by the owner, payment verified. <b>Keep this booking ID for check-in.</b><br><br>📍 Main Road, above Sagar Tea Stall, opposite Kodanda Ramalayam Temple, Macherla 522426.
+          <div class="btns"><button class="ok">🗺️ Directions</button><button class="more">📄 Receipt</button></div><span class="t">9:49</span></div>
+      </div>
+      <div class="typebar"><span class="f">Message</span><span class="send">➤</span></div>
+    </div></div>
+    <div class="say">
+      <span class="tag built">mostly built</span>
+      <h3>A real record, not just a nice message</h3>
+      <ul>
+        <li>Booking ID, room, <b>both beds</b>, dates, guests, total, paid and balance all come from the database.</li>
+        <li>A <b>PDF receipt</b> can ride along in the same message.</li>
+        <li>The guest can ask <b>“show my booking”</b> any time and get this again.</li>
+        <li>Check-in and check-out are tracked, so the same record serves the whole stay.</li>
+      </ul>
+      <div class="why"><b>The address is the new part.</b> Stored as a fact, so “where are you?” is answered instantly and free.</div>
+    </div>
+  </div>
+</section>
+
+<!-- THE WORKING -->
+<div class="math">
+  <h2>Your two payment paths, <span>worked out</span></h2>
+  <p>
+    The same booking — 2 guests, 3 nights, AC with food at ₹350 — costs the same either
+    way. Only <em>when</em> the money is paid changes. This is the arithmetic the bot does
+    on every request, and the exact arithmetic that will appear in the bill.
+  </p>
+  <div class="work">
+    <div class="wk">
+      <div class="wn">Step 1 · nightly</div>
+      <div class="wf">₹350<br>× 3 nights<br>× 2 guests</div>
+      <div class="wv">₹2,100</div>
+    </div>
+    <div class="wk">
+      <div class="wn">Step 2 · reservation</div>
+      <div class="wf">₹100<br>× 2 guests</div>
+      <div class="wv">₹200</div>
+    </div>
+    <div class="wk">
+      <div class="wn">Path A · reserve now</div>
+      <div class="wf">Pay now ₹200<br>At check-in ₹1,900</div>
+      <div class="wv blue">₹200 today</div>
+    </div>
+    <div class="wk">
+      <div class="wn">Path B · pay in full</div>
+      <div class="wf">Pay now ₹2,100<br>At check-in ₹0</div>
+      <div class="wv">₹2,100 today</div>
+    </div>
+  </div>
+</div>
+
+<!-- TABLE -->
+<div class="math" style="border-color:rgba(245,239,230,.14);background:rgba(245,239,230,.03)">
+  <h2>What is built, and what is <span>new</span></h2>
+  <p>Your plan is largely already working. These are the four additions, and nothing else.</p>
+  <div class="tblwrap">
+  <table>
+    <thead><tr><th>Part</th><th>State</th><th>What it needs</th></tr></thead>
+    <tbody>
+      <tr><td>Menu, prices, availability, bill</td><td class="db">built</td><td>Extend the menu from 3 options to your 7</td></tr>
+      <tr class="hi"><td>Multiple guests &amp; multiple nights</td><td class="db">partly built</td><td>Charge per guest × nights; show the working</td></tr>
+      <tr class="hi"><td>Reserve (₹100 × guests) or pay in full</td><td class="db">new</td><td>Two payment paths, two computed amounts</td></tr>
+      <tr class="hi"><td>Approve / Reject in WhatsApp</td><td class="db">new</td><td>Owner buttons; logic already exists</td></tr>
+      <tr class="hi"><td>WhatsApp profile name</td><td class="db">new, small</td><td>Read the name Meta already sends</td></tr>
+      <tr><td>Address &amp; amenities in memory</td><td class="db">new, small</td><td>Store your confirmed facts</td></tr>
+    </tbody>
+  </table>
+  </div>
+</div>
+
+<div class="confirm">
+  <h2>Ready to build on your word</h2>
+  <p>
+    You confirmed the database is final, and gave three new rules. All three are now in
+    this template. Nothing has been built yet — this is the picture to approve.
+  </p>
+  <div class="qlist">
+    <div class="q"><div class="qn">Confirmed · rooms</div><div class="qt">8 rooms, <b>68 beds</b>, dorm <b>20</b>, 7NA exists, 6NA is 12 beds</div><div class="qo">Locked as final</div></div>
+    <div class="q"><div class="qn">Rule 1 · guests</div><div class="qt">Bill is <b>per guest</b>, and multiple guests are booked together</div><div class="qo">Rate × nights × guests</div></div>
+    <div class="q"><div class="qn">Rule 2 · days</div><div class="qt">Every <b>night is charged</b>, and the bill shows the multiplication</div><div class="qo">3 nights × 2 guests</div></div>
+    <div class="q"><div class="qn">Rule 3 · payment</div><div class="qt"><b>Reserve ₹100/guest</b> or <b>pay in full</b> — guest chooses</div><div class="qo">2 guests → ₹200 reserve</div></div>
+  </div>
+</div>
+
+<footer>
+  <p>
+    <b>Nothing built. No code changed.</b> This is the final template for your approval.<br>
+    Say <b>“go”</b> and I build in this order: facts → guest name → multi-guest bill → two payment paths → owner buttons.
+  </p>
+</footer>
+
+</body>
+</html>

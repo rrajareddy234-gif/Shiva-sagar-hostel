@@ -37,12 +37,13 @@ _OPENAI_STYLE = {"openai", "openrouter", "groq", "together", "ollama", "local"}
 
 
 def build_ai_client(provider: str, *, model: str, api_key: str | None = None,
-                    base_url: str | None = None) -> AIClient:
+                    base_url: str | None = None, timeout: int = 90) -> AIClient:
     if provider == "gemini":
-        return GeminiClient(api_key=api_key or "", model=model)
+        return GeminiClient(api_key=api_key or "", model=model, timeout=timeout)
     if provider in _OPENAI_STYLE:
         return OpenAICompatibleClient(api_key=api_key or "", model=model,
-                                      base_url=base_url, provider_name=provider)
+                                      base_url=base_url, provider_name=provider,
+                                      timeout=timeout)
     raise ValueError(
         f"unknown AI_PROVIDER {provider!r}; add it to ai/registry.py "
         f"(known: gemini, {', '.join(sorted(_OPENAI_STYLE))})"

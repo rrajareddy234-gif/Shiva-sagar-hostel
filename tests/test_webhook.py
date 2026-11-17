@@ -14,8 +14,14 @@ import json
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import APP_SECRET, VERIFY_TOKEN  # noqa: F401
-from tests.conftest import FakeChannel, channel, client  # noqa: F401
+from tests.conftest import (
+    APP_SECRET,
+    VERIFY_TOKEN,
+    FakeChannel,
+    channel,
+    client,
+    flush_outbox,  # noqa: F401
+)
 
 
 def _payload(message_id="wamid.HOOK1", text="hello", sender="919000001000") -> bytes:
@@ -41,6 +47,11 @@ def test_health_reports_ok(client):
     response = client.get("/health")
     assert response.status_code == 200
     assert response.json()["database"] == "ok"
+
+
+def test_health_says_whether_the_owner_is_emailed(client):
+    """The owner's first question when no email arrives: is it even switched on?"""
+    assert client.get("/health").json()["owner_email"] == "off"
 
 
 # --- GET verification handshake --------------------------------------------
@@ -110,6 +121,21 @@ def test_duplicate_delivery_is_stored_once(client, db):
     assert inbound["n"] == 1
 
 
+def test_duplicate_webhook_delivery_does_not_duplicate_guest_reply(client, db, channel):
+    body = _payload(message_id="wamid.DUPLICATE-REPLY", text="what are your prices?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
+
+    assert len(channel.sent) == 1
+    assert len(channel.prompts) == 1
+    assert db.query_one("SELECT count(*) AS n FROM inbound_processing")["n"] == 1
+    # One inbound message, one interactive reply: the interactive message *is*
+    # the reply, so it is recorded once in the transcript, not twice.
+    assert db.query_one(
+        "SELECT count(*) AS n FROM messages WHERE direction = 'OUT'")["n"] == 1
+
+
 def test_several_rapid_messages_are_all_stored(client, db):
     for i in range(5):
         body = _payload(message_id=f"wamid.HOOK{i}", text=f"msg {i}")
@@ -119,15 +145,32 @@ def test_several_rapid_messages_are_all_stored(client, db):
     assert inbound["n"] == 5
 
 
-def test_status_callback_is_accepted_and_ignored(client, db):
+def test_status_callback_is_saved_without_creating_guest_message(client, db):
     body = json.dumps({
         "object": "whatsapp_business_account",
         "entry": [{"changes": [{"field": "messages", "value": {
-            "statuses": [{"id": "wamid.X", "status": "delivered"}]}}]}],
+            "statuses": [{
+                "id": "wamid.X",
+                "status": "delivered",
+                "timestamp": "1735689600",
+                "recipient_id": "919000001000",
+            }]
+        }}]}],
     }).encode()
+
     response = client.post("/webhook", content=body, headers=_signed(body))
+
     assert response.status_code == 200
     assert db.query_one("SELECT count(*) AS n FROM messages")["n"] == 0
+
+    row = db.query_one(
+        "SELECT wa_message_id, status, recipient_id "
+        "FROM message_status_events WHERE wa_message_id = %s",
+        ("wamid.X",),
+    )
+    assert row["wa_message_id"] == "wamid.X"
+    assert row["status"] == "delivered"
+    assert row["recipient_id"] == "919000001000"
 
 
 def test_malformed_json_with_a_valid_signature_is_ignored(client, db):
@@ -168,37 +211,90 @@ def test_a_new_enquiry_is_recorded(client, db):
 
 # --- end to end: a message in, a reply out --------------------------------
 
-def test_a_price_question_gets_a_reply(client, db, channel):
+def test_a_price_question_gets_tappable_answers(client, db, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
-    assert "350" in channel.sent[0][1]
+    flush_outbox(client)
+    assert len(channel.prompts) == 1, "the price question is answered with buttons"
+    prompt = channel.prompts[0][1]
+    assert [b.id for b in prompt.buttons] == [
+        "price:room:AC", "price:room:NON_AC", "price:room:DORM"]
+    assert [b.title for b in prompt.buttons] == ["AC", "Non-AC", "Dormitory"]
 
 
 def test_the_reply_is_recorded_as_outbound(client, db, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
-    row = db.query_one("SELECT body, direction FROM messages WHERE direction = 'OUT'")
-    assert row["direction"] == "OUT"
-    assert "350" in row["body"]
+    flush_outbox(client)
+    rows = db.query_all(
+        "SELECT body FROM messages WHERE direction = 'OUT' ORDER BY received_at")
+    # Interactive-only: the rate card and the question travel in ONE interactive
+    # message, so the transcript holds one outbound row, not two.
+    assert len(rows) == 1, "the answer and the question are one interactive reply"
+    bodies = rows[0]["body"] or ""
+    assert "rs 300" in bodies.lower(), "the rate card reached the guest"
+    assert "which room type" in bodies.lower(), "the question reached the guest"
 
 
 def test_a_greeting_gets_a_reply(client, channel):
     body = _payload(text="hello")
     client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
+    # The greeting sends the help text, then offers the menu as a list.
     assert len(channel.sent) == 1
+    assert len(channel.prompts) == 1
 
 
 def test_a_duplicate_does_not_produce_a_second_reply(client, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
     client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
+    # One reply, and at most one prompt alongside it: Meta retries deliveries,
+    # and the guest must not be answered twice.
     assert len(channel.sent) == 1
+    assert len(channel.prompts) <= 1
+
+
+def test_a_rejected_interactive_is_never_resent_as_text(db, seeded, tmp_path):
+    """Interactive-only: a rejected interactive must not fall back to text.
+
+    Meta counts every message to the pair against the same limit, so a text
+    fallback after a refusal would send a second message while the guest is
+    already blocked. The interactive payload is the guest's one reply.
+    """
+    from fastapi.testclient import TestClient
+
+    from api.webhook import create_app
+    from core.config import Settings
+    from tests.conftest import TEST_DSN, FakeChannel
+
+    settings = Settings(
+        database_url=TEST_DSN, channel_provider="meta_cloud",
+        owner_phone="+919999999999", timezone="Asia/Kolkata",
+        meta_app_secret=APP_SECRET, meta_access_token="t",
+        meta_phone_number_id="123456789", meta_verify_token=VERIFY_TOKEN,
+        ai_provider="gemini", ai_model="gemini-flash-lite-latest",
+        ai_api_key=None, ai_base_url=None,
+        payment_proof_dir=str(tmp_path / "proofs"), send_enabled=True)
+    failing = FakeChannel(fail_interactive=True)
+    client = TestClient(create_app(settings, channel=failing, ai=None))
+
+    body = _payload(text="what is the price?")
+    client.post("/webhook", content=body, headers=_signed(body))
+    from core.outbound_worker import run_batch
+    run_batch(client.app.state.db, failing, settings)
+
+    assert failing.prompts == [], "the prompt could not be sent"
+    guest_sends = [t for phone, t in failing.sent if phone == "+919000001000"]
+    assert guest_sends == [], "a rejected interactive is never resent as text"
+    assert failing.attempts.count("interactive") == 1, "exactly one interactive attempt"
 
 
 def test_a_verified_customer_is_marked_answered(client, db, channel):
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
     row = db.query_one("SELECT responded FROM enquiries")
     assert row["responded"] is True
 
@@ -206,26 +302,32 @@ def test_a_verified_customer_is_marked_answered(client, db, channel):
 def test_the_owner_is_answered_from_the_database(client, db, channel):
     body = _payload(text="how many vacancies today?", sender="919999999999")
     client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
     assert len(channel.sent) == 1
     assert "beds are free" in channel.sent[0][1]
 
 
-def test_a_failed_send_leaves_the_message_unprocessed(client, db, channel):
-    """If the reply cannot be sent, the message must not be marked done."""
+def test_a_failed_send_does_not_replay_inbound_business_processing(client, db, channel):
+    """Outbound failure does not make committed inbound handling run twice."""
     channel.fail = True
     body = _payload(text="what is the price?")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert db.query_one("SELECT processed_at FROM messages")["processed_at"] is None
+    assert db.query_one("SELECT processed_at FROM messages")["processed_at"] is not None
+    assert db.query_one("SELECT state FROM inbound_processing")["state"] == "processed"
 
 
 def test_a_customer_cannot_reach_owner_information(client, db, channel):
     body = _payload(text="show this month's revenue", sender="919000001555")
     client.post("/webhook", content=body, headers=_signed(body))
-    assert len(channel.sent) == 1
-    assert "Rs" not in channel.sent[0][1]
+    flush_outbox(client)
+    guest_replies = [t for phone, t in channel.sent if phone == "+919000001555"]
+    assert len(guest_replies) == 1
+    assert "Rs" not in guest_replies[0]
 
 
-def test_non_text_message_gets_a_polite_reply(client, db, channel):
+def test_an_image_without_a_waiting_booking_gets_a_polite_reply(client, db, channel):
+    """A screenshot is treated as payment proof; with no booking to attach it
+    to, the guest is told so rather than left in silence."""
     body = json.dumps({
         "object": "whatsapp_business_account",
         "entry": [{"changes": [{"field": "messages", "value": {
@@ -235,12 +337,75 @@ def test_non_text_message_gets_a_polite_reply(client, db, channel):
         }}]}],
     }).encode()
     client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
     assert len(channel.sent) == 1
-    assert "text" in channel.sent[0][1].lower()
+    reply = channel.sent[0][1].lower()
+    assert "screenshot" in reply
+    assert "could not find a booking" in reply
+
+
+def test_a_payment_screenshot_reaches_the_owner_and_is_acknowledged(client, db, channel):
+    """The guest pays and sends the image; the owner is asked to check it."""
+    from datetime import datetime, timedelta
+
+    from core import booking as booking_mod
+    from tests.conftest import IST
+
+    start = datetime(2027, 2, 1, 12, tzinfo=IST)
+    request = booking_mod.create_request(
+        db, phone="+919000001666", full_name="Proof Guest", gender="MALE",
+        bed_id="1NA-B1", check_in_at=start,
+        check_out_at=start + timedelta(days=2), food_included=False)
+    booking_mod.accept(db, request.booking_id, actor="owner")
+
+    body = json.dumps({
+        "object": "whatsapp_business_account",
+        "entry": [{"changes": [{"field": "messages", "value": {
+            "messages": [{"from": "919000001666", "id": "wamid.PROOF",
+                          "type": "image",
+                          "image": {"id": "media-9", "mime_type": "image/jpeg"}}],
+        }}]}],
+    }).encode()
+    client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
+
+    assert db.query_one("SELECT status FROM bookings WHERE reference = %s",
+                        (request.reference,))["status"] == "PROOF_SENT"
+    guest_replies = [t for phone, t in channel.sent if phone == "+919000001666"]
+    assert any("received your payment screenshot" in t.lower() for t in guest_replies)
+    # The owner was asked to check the money, with a one-tap confirm.
+    owner_prompts = [p for phone, p in channel.prompts if phone == "+919999999999"]
+    assert owner_prompts, "the owner must be asked to confirm after the screenshot"
 
 
 def test_several_rapid_messages_each_get_one_reply(client, db, channel):
     for i in range(4):
         body = _payload(message_id=f"wamid.RAPID{i}", text="what is the price?")
         client.post("/webhook", content=body, headers=_signed(body))
+    flush_outbox(client)
+    # One reply per message, and one prompt alongside each. A prompt is no
+    # longer a substitute for the reply, so counting the two together would
+    # hide a duplicate.
     assert len(channel.sent) == 4
+    assert len(channel.prompts) == 4
+
+
+# --- transport hardening ---------------------------------------------------
+
+def test_responses_carry_security_headers(client):
+    r = client.get("/health")
+    assert r.headers["X-Content-Type-Options"] == "nosniff"
+    assert r.headers["X-Frame-Options"] == "DENY"
+    assert r.headers["Referrer-Policy"] == "no-referrer"
+    assert "frame-ancestors 'none'" in r.headers["Content-Security-Policy"]
+
+
+def test_the_dashboard_also_carries_security_headers(client):
+    r = client.get("/dashboard")
+    assert r.headers["X-Frame-Options"] == "DENY"
+
+
+def test_an_oversized_body_is_refused_early(client):
+    r = client.post("/webhook", content=b"x" * 2_000_000,
+                    headers={"Content-Length": "2000000"})
+    assert r.status_code == 413
